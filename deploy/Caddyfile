@@ -1,0 +1,25 @@
+# Caddyfile — TLS termination + reverse proxy for the Cybernet genesis node.
+#
+# Install on the public host (artificer-labs) as /etc/caddy/Caddyfile,
+# then: systemctl enable --now caddy
+#
+# The node itself listens only on loopback (see deploy/cybernet-node.service);
+# Caddy handles public HTTPS and forwards to 127.0.0.1:8471.
+#
+# Set PUBLIC_HOSTNAME before starting caddy, e.g.:
+#   echo 'PUBLIC_HOSTNAME=example.com' >> /etc/caddy/caddy.env
+#   (and: EnvironmentFile=/etc/caddy/caddy.env in the caddy unit)
+
+{$PUBLIC_HOSTNAME} {
+    reverse_proxy 127.0.0.1:8471
+
+    encode gzip
+
+    # Minimal hardening for a public agent-facing web app
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        -Server
+    }
+}

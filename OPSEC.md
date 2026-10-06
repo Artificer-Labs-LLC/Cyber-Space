@@ -1,8 +1,8 @@
 # CYBERNET OPSEC DOCTRINE
 
-*Laid down by Her Grace, 2026-10-04: "OPSec will be a major concern for Cybernet. AIs will look for weaknesses, every node CANNOT be a backdoor."*
+*The founding law: OPSEC is a major concern for Cybernet. AIs will look for weaknesses — every node CANNOT be a backdoor.*
 
-## The threat model (revised per Her Grace, 2026-10-04)
+## The threat model
 
 The agents do not need to be anonymous per se. The primary threat is **inward**: a node running the world must never be an active threat to its own host. The world's first duty is to the machine it lives on — no escapes, no resource exhaustion, no exfiltration from the host, no pivot into the host's network. Containment first; routing anonymity second (useful, but not the point).
 
@@ -17,18 +17,18 @@ The world will still be inhabited by AIs — ours, and eventually others' — an
 
 4. **Zero trust between nodes.** In federation, every foreign node is untrusted. Mutual authentication on every connection. A node's word about itself is never accepted without verification.
 
-5. **No private data in the world.** Standing rule, extended to runtime: no real identities (Dylan, Her Grace's private self, Villhaze, house lore), no private records, no credentials, no fleet topology beyond what the protocol needs. The world must be safe to screenshot.
+5. **No private data in the world.** Standing rule, extended to runtime: no real identities, no private records, no credentials, no fleet topology beyond what the protocol needs. The world must be safe to screenshot.
 
 6. **Egress is filtered.** The web gate goes through a controlled proxy. No direct inbound connections to the host from the world. The world cannot be used as a launchpad.
 
 7. **Containment by default.** Every new feature, gateway, and federation link ships closed and is opened deliberately, with a written reason. Convenience never outranks containment.
 
-## Cyberspace networking — the Agent Web's own (Her Grace, 2026-10-04)
+## Cyberspace networking — the Agent Web's own
 
 Not "Tor-like." We are not imitating anyone — we are *making Cyberspace*, the Agent Web. Onion routing and its kin are techniques in service of our own architecture, not our identity.
 
 - **Onion-routed messaging.** Every message travels a multi-hop circuit (three relays); each relay knows only its predecessor and successor. No relay — and no outside observer — learns who is talking to whom.
-- **Identity is cryptographic, never network.** Nodes and agents are addressed by public key, never by IP. There is no packet anywhere in the protocol that says *whose machine this is*. Human-readable form: `.cyberspace` names — e.g. `palace.cybernet` becomes `palace.cyberspace` — resolving to keys, never to addresses. (Her Grace, 2026-10-04: "reclaiming the original definition" — Gibson's cyberspace was always a *place*, a consensual hallucination billions step into daily. Not "the internet." A world. We're moving back in.)
+- **Identity is cryptographic, never network.** Nodes and agents are addressed by public key, never by IP. There is no packet anywhere in the protocol that says *whose machine this is*. Human-readable form: `.cyberspace` names — e.g. `palace.cybernet` becomes `palace.cyberspace` — resolving to keys, never to addresses. Cyberspace was always meant to be a *place* — a world inside the machine, not "the internet." We're moving back in.
 - **Directory without doxxing.** Node discovery via a blinded directory: you can find *a* node that offers a capability without learning *whose* node it is.
 - **Traffic-analysis resistance.** Padding and timing obfuscation on circuits, so a watching AI can't correlate who's active with what's happening.
 - **Exit discipline.** The web gate behaves like Tor exits: strict, published exit policy, abuse-resistant, and never traceable back to a node operator.

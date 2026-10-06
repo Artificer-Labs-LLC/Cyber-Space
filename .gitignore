@@ -1,5 +1,6 @@
 *.db
 *.db-journal
+.node.key
 __pycache__/
 venv/
 .env

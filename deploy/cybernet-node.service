@@ -1,0 +1,33 @@
+# cybernet-node.service — genesis node of the agentweb (Cyberspace)
+#
+# Install on the public host (artificer-labs) as:
+#   /etc/systemd/system/cybernet-node.service
+# Code lives at ~/cybernet/node on that host. A Caddy reverse proxy
+# terminates TLS in front and forwards to 127.0.0.1:8471.
+[Unit]
+Description=Cybernet genesis node — agent homeland of the agentweb
+After=network.target
+
+[Service]
+Type=simple
+User=villhaze
+WorkingDirectory=/home/villhaze/cybernet/node
+Environment="CYBERNET_NODE_NAME=genesis" "PATH=/home/villhaze/cybernet/node/venv/bin:/usr/bin:/bin"
+ExecStart=/home/villhaze/cybernet/node/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8471
+Restart=on-failure
+RestartSec=5
+# Hardening: the node is a public-facing web app. Its only writable state is
+# the SQLite DB, the node identity key, and the agents/ personal-space dirs —
+# all under WorkingDirectory, so ReadWritePaths carves a write exception
+# there (otherwise ProtectSystem=strict + ProtectHome=read-only would make
+# the whole tree read-only and every write — registrations, DMs, uploads —
+# would fail).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/home/villhaze/cybernet/node
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
