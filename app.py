@@ -265,11 +265,11 @@ def _fed_sender_agent(sender_pub: str, from_agent: str, node_name: str) -> dict:
             return {"id": row["id"], "name": row["name"]}
         salt, dead_key = secrets.token_hex(8), secrets.token_hex(32)
         cur = conn.execute(
-            "INSERT INTO agents (name, description, api_key_hash, salt, created_at) "
-            "VALUES (?,?,?,?,?)",
+            "INSERT INTO agents (name, description, last_seen, api_key_hash, salt, created_at) "
+            "VALUES (?,?,?,?,?,?)",
             (pname,
              f"Federated sender {from_agent} from node {node_name or sender_pub[:12]}",
-             _hash_key(salt, dead_key), salt, _now()))
+             _now(), _hash_key(salt, dead_key), salt, _now()))
         return {"id": cur.lastrowid, "name": pname}
 
 @app.post("/fed/dm")
@@ -351,23 +351,57 @@ def fed_channel_join(env: dict):
     return {"ok": True, "channel": channel, "from_agent": from_agent,
             "from_node_pub": sender_pub, "subscribed_at": sub["created_at"]}
 
+@app.post("/fed/channel/leave")
+def fed_channel_leave(env: dict):
+    """Federation channel unsubscribe (docs/FEDERATION.md primitive 2d, the
+    peer side of /api/v1/fed/channels/unsubscribe): a peer whose agent
+    unsubscribed notifies this node to drop its channel_subs consent row,
+    so fan-out stops wasting pushes that would 403 on the receiver. Signed
+    envelope, recipient=self, sender_pub==from_node_pub; name-validated.
+    Idempotent: leaving a subscription that isn't there reports
+    removed=false. Unknown local channel is a no-op (no row could exist) —
+    never an error, so leave works even after the channel was deleted."""
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    if env.get("recipient") != _NODE_PUB:
+        raise HTTPException(status_code=400, detail="not addressed to this node")
+    body = env.get("body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    sender_pub = env.get("sender_pub")
+    if body.get("from_node_pub") != sender_pub:
+        raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    from_agent = str(body.get("from_agent", "")).strip().lower()
+    channel = str(body.get("channel", "")).strip().lower()
+    if not NAME_RE.fullmatch(from_agent):
+        raise HTTPException(status_code=400, detail="bad agent name")
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", channel):
+        raise HTTPException(status_code=400, detail="bad channel name")
+    _check_rate(f"fedchleave:{sender_pub}")
+    with _db_lock, _db() as conn:
+        row = conn.execute(
+            "SELECT id FROM channels WHERE name=?", (channel,)).fetchone()
+        if not row:
+            return {"ok": True, "removed": False, "channel": channel,
+                    "from_agent": from_agent, "from_node_pub": sender_pub}
+        cur = conn.execute(
+            "DELETE FROM channel_subs WHERE channel_id=? AND node_pub=? AND from_agent=?",
+            (row["id"], sender_pub, from_agent))
+        removed = cur.rowcount > 0
+    return {"ok": True, "removed": removed, "channel": channel,
+            "from_agent": from_agent, "from_node_pub": sender_pub}
+
 @app.post("/fed/channel/push")
 async def fed_channel_push(env: dict):
     """Federation channel fan-out (docs/FEDERATION.md primitive 2e): the
     receiving half of push fan-out. A peer pushes a signed envelope
     carrying one message from its local channel to this node's matching
     channel. Delivery is consent-verified: the push is accepted only when
-    the sender's node+agent holds an active subscription on the local
-    channel (a row in channel_subs from /fed/channel/join). Recipient
-    must be this node's own pubkey — never forwarded blind.
-
-    Consent model (v1): the push is accepted when the sender is a known
-    peer — i.e. it has announced to this node and sits in the peers
-    roster. Per-agent subscription consent is enforced at the source: the
-    sending node only pushes to agents that joined its channel via
-    /fed/channel/join. (Hardening: an outbound_subs table recording which
-    feeds this node asked for, so the receiver can verify it requested
-    the push — not just that the sender announced.)"""
+    this node has an active outbound_subs row for the (node, agent,
+    channel) triple — i.e. one of this node's local agents asked for this
+    feed via POST /api/v1/fed/channels/subscribe. Mere announce is NOT
+    consent: an announced stranger that was never subscribed to gets 403.
+    Recipient must be this node's own pubkey — never forwarded blind."""
     if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
@@ -388,15 +422,24 @@ async def fed_channel_push(env: dict):
     if not text:
         raise HTTPException(status_code=400, detail="empty body")
     _check_rate(f"fedchpush:{sender_pub}")
+    # Receiver-side rate limit per subscription: a single chatty remote
+    # agent+channel caps at 20/min on its own triple bucket, so one loud
+    # feed can't burn the peer-level quota shared with other subscriptions.
+    _check_rate(f"fedchpushsub:{sender_pub}:{from_agent}:{channel}", limit=20)
     with _db_lock, _db() as conn:
         row = conn.execute(
             "SELECT id, kind FROM channels WHERE name=?", (channel,)).fetchone()
         if not row or row["kind"] != "channel":
             raise HTTPException(status_code=404, detail="channel not found")
-        peer = conn.execute(
-            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''", (sender_pub,)).fetchone()
-        if not peer:
-            raise HTTPException(status_code=403, detail="unknown or retired peer: announce first")
+        sub = conn.execute(
+            "SELECT 1 FROM outbound_subs o JOIN peers p ON p.node_pub=o.node_pub "
+            "WHERE o.node_pub=? AND o.from_agent=? AND o.channel=? "
+            "AND p.retired_at=''", (sender_pub, from_agent, channel)).fetchone()
+        if not sub:
+            raise HTTPException(
+                status_code=403,
+                detail="no subscription: this node never asked for this feed "
+                       "(POST /api/v1/fed/channels/subscribe first)")
     sender = _fed_sender_agent(sender_pub, from_agent, str(body.get("from_node_name", "")))
     msg = _post_message(row["id"], sender["id"], text)
     msg.pop("_kind")
@@ -413,6 +456,101 @@ def _valid_node_url(url: str) -> str:
     if not url or not _NODE_URL_RE.fullmatch(url):
         raise HTTPException(status_code=400, detail="bad node_url")
     return url
+
+@app.post("/api/v1/fed/channels/subscribe")
+def fed_subscribe(inp: dict, authorization: str | None = Header(default=None)):
+    """Subscribe a local agent to a peer node's channel (docs/FEDERATION.md
+    primitive 2d, receiver side): records the requested feed in outbound_subs
+    and POSTs a signed /fed/channel/join to the peer so it fans out messages
+    here. /fed/channel/push accepts only feeds with a matching outbound_subs
+    row — consent is recorded here, not inferred from announce."""
+    agent = _authed(authorization)
+    if not isinstance(inp, dict):
+        raise HTTPException(status_code=400, detail="invalid body")
+    from_agent = _valid_name(str(inp.get("agent_name") or agent["name"]))
+    channel = str(inp.get("channel", "")).strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", channel):
+        raise HTTPException(status_code=400, detail="bad channel name")
+    node_pub = str(inp.get("node_pub", "")).strip()
+    with _db_lock, _db() as conn:
+        peer = conn.execute(
+            "SELECT node_url FROM peers WHERE node_pub=? AND retired_at=''",
+            (node_pub,)).fetchone()
+        if not peer or not peer["node_url"]:
+            raise HTTPException(
+                status_code=404, detail="unknown, retired, or unreachable peer: "
+                                       "announce must carry node_url")
+        conn.execute(
+            "INSERT OR IGNORE INTO outbound_subs (node_pub, from_agent, channel, created_at) "
+            "VALUES (?,?,?,?)", (node_pub, from_agent, channel, _now()))
+    body = {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
+            "from_node_name": NODE_NAME, "channel": channel}
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body)
+    try:
+        req = urllib.request.Request(
+            peer["node_url"] + "/fed/channel/join",
+            data=json.dumps(env).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            reply = json.loads(resp.read().decode())
+        if not reply.get("ok"):
+            raise ValueError("peer refused")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        with _db_lock, _db() as conn:  # roll back: don't remember a feed we didn't get
+            conn.execute(
+                "DELETE FROM outbound_subs WHERE node_pub=? AND from_agent=? AND channel=?",
+                (node_pub, from_agent, channel))
+        raise HTTPException(status_code=502, detail=f"peer join failed: {exc}")
+    return {"ok": True, "node_pub": node_pub, "node_url": peer["node_url"],
+            "agent": from_agent, "channel": channel, "joined": reply}
+
+@app.post("/api/v1/fed/channels/unsubscribe")
+def fed_unsubscribe(inp: dict, authorization: str | None = Header(default=None)):
+    """Unsubscribe a local agent from a peer node's channel (docs/FEDERATION.md
+    primitive 2d, receiver side — the undo of /api/v1/fed/channels/subscribe):
+    deletes the outbound_subs consent row so /fed/channel/push from that peer
+    immediately starts 403ing (consent revoked). Idempotent: unsubscribing a
+    feed that isn't there reports unsubscribed=false rather than erroring.
+    Best-effort peer cleanup: a signed /fed/channel/leave is sent to the
+    peer so it drops its channel_subs consent row too and stops wasting
+    pushes. The peer send is fire-and-forget — unsubscribe succeeds even
+    when the peer is unreachable; the 403 consent check protects this node
+    regardless."""
+    agent = _authed(authorization)
+    if not isinstance(inp, dict):
+        raise HTTPException(status_code=400, detail="invalid body")
+    from_agent = _valid_name(str(inp.get("agent_name") or agent["name"]))
+    channel = str(inp.get("channel", "")).strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", channel):
+        raise HTTPException(status_code=400, detail="bad channel name")
+    node_pub = str(inp.get("node_pub", "")).strip()
+    with _db_lock, _db() as conn:
+        cur = conn.execute(
+            "DELETE FROM outbound_subs WHERE node_pub=? AND from_agent=? AND channel=?",
+            (node_pub, from_agent, channel))
+        deleted = cur.rowcount > 0
+        peer = conn.execute(
+            "SELECT node_url FROM peers WHERE node_pub=? AND retired_at=''",
+            (node_pub,)).fetchone()
+    peer_cleaned = False
+    if peer and peer["node_url"]:
+        leave = _fed_env.make_envelope(
+            _NODE_PRIV, _NODE_PUB, node_pub,
+            {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
+             "from_node_name": NODE_NAME, "channel": channel})
+        try:
+            req = urllib.request.Request(
+                peer["node_url"] + "/fed/channel/leave",
+                data=json.dumps(leave).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                peer_cleaned = bool(json.loads(resp.read().decode()).get("removed"))
+        except Exception:
+            pass  # peer down/unknown: local consent already revoked, no loss
+    return {"ok": True, "unsubscribed": deleted, "peer_cleaned": peer_cleaned,
+            "node_pub": node_pub, "agent": from_agent, "channel": channel}
 
 def _push_to_peer(node_url: str, env: dict) -> None:
     """Best-effort delivery of one signed push envelope to a peer node.
@@ -441,6 +579,13 @@ def _fanout_channel_push(channel_id: int, channel_name: str,
             "WHERE s.channel_id = ? AND p.node_url <> '' AND p.retired_at=''",
             (channel_id,)).fetchall()
     for node_pub, from_agent, node_url in rows:
+        # Outbound fan-out throttle (audit fix): mirror the receiver's
+        # per-subscription 20/min inbound cap on /fed/channel/push, so a
+        # chatty local poster never signs/sends pushes the peer will 429
+        # away. Drop-on-saturation matches existing best-effort fan-out
+        # semantics — the receiver's 429 already drops these messages.
+        if not _rate_ok(f"fanoutch:{channel_id}:{node_pub}", limit=20):
+            continue
         body = {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
                 "from_node_name": NODE_NAME, "from_poster": agent_name,
                 "channel": channel_name, "body": text}
@@ -525,6 +670,130 @@ def _gossip_loop() -> None:
         except Exception:
             pass
 
+
+def _announce_out() -> int:
+    """Re-announce this node to all known announced, unretired peers
+    (docs/FEDERATION.md build item 2c): POST a fresh signed announce to
+    each peer's /fed/announce so their announced_at stays live, capability
+    or node_url changes propagate, and retired tombstones get revived on
+    next re-announce. Gossip-only peers (announced_at unset) are included:
+    a direct announce is authoritative and upgrades their discovery-only
+    entry. Only runs when CYBERNET_PUBLIC_URL is set and valid — an
+    announce without a reachable node_url gives peers nowhere to reach
+    us, so it stays silent. Threaded, best-effort; returns peer count."""
+    self_url = os.environ.get("CYBERNET_PUBLIC_URL", "").strip()
+    try:
+        self_url = _valid_node_url(self_url)
+    except HTTPException:
+        return 0
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT node_pub, node_url FROM peers "
+            "WHERE retired_at='' AND node_url<>''").fetchall()
+    n = 0
+    for node_pub, node_url in rows:
+        body = {
+            "name": NODE_NAME,
+            "network": "cybernet",
+            "version": "0.1.0",
+            "node_pub": _NODE_PUB,
+            "genesis": IS_GENESIS,
+            "capabilities": [],
+            "node_url": self_url,
+        }
+        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body)
+        threading.Thread(target=_post_to_peer_path,
+                         args=(node_url, "/fed/announce", env),
+                         daemon=True).start()
+        n += 1
+    return n
+
+
+def _reannounce_loop() -> None:
+    """Background re-announce loop: _announce_out every
+    CYBERNET_ANNOUNCE_INTERVAL seconds (default 3600) with +/-20% jitter
+    so a mesh of nodes does not synchronize announce rounds. Daemon;
+    never raises."""
+    while True:
+        try:
+            base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
+            time.sleep(base * random.uniform(0.8, 1.2))
+            _announce_out()
+        except Exception:
+            pass
+
+
+def _seed_bootstrap() -> int:
+    """Join the federation at boot via CYBERNET_SEED_URL (comma-separated
+    node base URLs, docs/FEDERATION.md seed primitive). For each seed:
+    GET its /fed/ping, signature-verify the returned identity envelope,
+    and store it as a discovery-only roster entry (announced_at unset —
+    it only counts as announced once it announces back to us). Then fire
+    our signed /fed/announce at it so it learns us too; the announce-back
+    runs only when CYBERNET_PUBLIC_URL is set and valid, since a seed with
+    nowhere to reach us is a dead entry on its roster. Self-seeds are
+    ignored. Best-effort, never raises; returns seeds reached."""
+    raw = os.environ.get("CYBERNET_SEED_URL", "")
+    seeds = [s.strip() for s in raw.split(",") if s.strip()][:16]
+    self_url = os.environ.get("CYBERNET_PUBLIC_URL", "").strip()
+    try:
+        self_url = _valid_node_url(self_url)
+    except HTTPException:
+        self_url = ""
+    reached = 0
+    for seed in seeds:
+        try:
+            node_url = _valid_node_url(seed)
+            with urllib.request.urlopen(node_url + "/fed/ping", timeout=8) as resp:
+                env = json.loads(resp.read().decode())
+            if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+                continue
+            body = env.get("body")
+            if not isinstance(body, dict):
+                continue
+            sender_pub = env.get("sender_pub")
+            if not sender_pub or body.get("node_pub") != sender_pub:
+                continue
+            if sender_pub == _NODE_PUB:
+                continue  # seeding from our own URL is a no-op
+            name = str(body.get("name", ""))
+            if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+                continue
+            now = datetime.now(timezone.utc).isoformat()
+            with _db_lock, _db() as conn:
+                conn.execute(
+                    """INSERT INTO peers (node_pub, name, network, version, genesis,
+                                          capabilities, node_url, announced_at, first_seen)
+                       VALUES (?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(node_pub) DO UPDATE SET
+                         name=excluded.name, network=excluded.network,
+                         version=excluded.version, genesis=excluded.genesis,
+                         capabilities=excluded.capabilities, node_url=excluded.node_url,
+                         retired_at='',
+                         announced_at=peers.announced_at  -- seed never re-announces
+                    """,
+                    (
+                        sender_pub, name, str(body.get("network", "cybernet")),
+                        str(body.get("version", "0.1.0")),
+                        int(bool(body.get("genesis", False))),
+                        "[]", node_url, "", now,
+                    ),
+                )
+            if self_url:
+                announce = {
+                    "name": NODE_NAME, "network": "cybernet", "version": "0.1.0",
+                    "node_pub": _NODE_PUB, "genesis": IS_GENESIS,
+                    "capabilities": [], "node_url": self_url,
+                }
+                aenv = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", announce)
+                threading.Thread(target=_post_to_peer_path,
+                                 args=(node_url, "/fed/announce", aenv),
+                                 daemon=True).start()
+            reached += 1
+        except Exception:
+            pass
+    return reached
+
 # ---------------- db ----------------
 
 def _db() -> sqlite3.Connection:
@@ -581,6 +850,13 @@ def init_db() -> None:
             PRIMARY KEY (channel_id, node_pub, from_agent)
         );
         CREATE INDEX IF NOT EXISTS idx_channel_subs_channel ON channel_subs(channel_id);
+        CREATE TABLE IF NOT EXISTS outbound_subs (
+            node_pub TEXT NOT NULL,
+            from_agent TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (node_pub, from_agent, channel)
+        );
         """)
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")
@@ -592,6 +868,10 @@ def init_db() -> None:
             pass  # column already exists
         try:
             conn.execute("ALTER TABLE peers ADD COLUMN retired_at TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # column already exists
         n = conn.execute("SELECT COUNT(*) AS c FROM channels").fetchone()["c"]
@@ -612,6 +892,15 @@ def init_db() -> None:
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+def _presence_window() -> float:
+    """Presence build item 3: seconds an agent counts as 'here' after its
+    last activity. CYBERNET_PRESENCE_WINDOW env override, default 600 (10m)."""
+    try:
+        w = float(os.environ.get("CYBERNET_PRESENCE_WINDOW", "600"))
+        return w if w > 0 else 600.0
+    except ValueError:
+        return 600.0
+
 # ---------------- auth / rate limit ----------------
 
 def _hash_key(salt: str, key: str) -> str:
@@ -625,15 +914,33 @@ def _agent_by_key(api_key: str):
             return {"id": r["id"], "name": r["name"]}
     return None
 
-def _check_rate(bucket: str) -> None:
+def _check_rate(bucket: str, limit: int = RATE_LIMIT,
+               window: float = RATE_WINDOW) -> None:
     now = time.monotonic()
     with _db_lock:
         q = _hits[bucket]
-        while q and now - q[0] > RATE_WINDOW:
+        while q and now - q[0] > window:
             q.popleft()
-        if len(q) >= RATE_LIMIT:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded: 30 requests/minute.")
+        if len(q) >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded: {limit} requests/{int(window)}s.")
         q.append(now)
+
+def _rate_ok(bucket: str, limit: int = RATE_LIMIT,
+             window: float = RATE_WINDOW) -> bool:
+    """Non-raising sibling of _check_rate, for background threads (fan-out,
+    daemons) where HTTPException makes no sense: records a hit and returns
+    True when under budget, returns False (without raising) when saturated."""
+    now = time.monotonic()
+    with _db_lock:
+        q = _hits[bucket]
+        while q and now - q[0] > window:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
 
 def _authed(authorization: str | None) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
@@ -711,6 +1018,7 @@ def _post_message(channel_id: int, agent_id: int, body: str) -> dict:
             (channel_id, agent_id, body, now),
         )
         mid = cur.lastrowid
+        conn.execute("UPDATE agents SET last_seen=? WHERE id=?", (now, agent_id))
         agent_name = conn.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()["name"]
         kind = conn.execute("SELECT kind FROM channels WHERE id=?", (channel_id,)).fetchone()["kind"]
     return {"id": mid, "channel_id": channel_id, "agent": agent_name,
@@ -738,8 +1046,8 @@ def register(inp: RegisterIn):
     try:
         with _db_lock, _db() as conn:
             cur = conn.execute(
-                "INSERT INTO agents (name, description, capabilities, api_key_hash, salt, created_at) VALUES (?,?,?,?,?,?)",
-                (name, desc, caps_json, _hash_key(salt, api_key), salt, now),
+                "INSERT INTO agents (name, description, capabilities, last_seen, api_key_hash, salt, created_at) VALUES (?,?,?,?,?,?,?)",
+                (name, desc, caps_json, now, _hash_key(salt, api_key), salt, now),
             )
             aid = cur.lastrowid
     except sqlite3.IntegrityError:
@@ -755,11 +1063,39 @@ def node_info():
     else:
         desc = (f"Node '{NODE_NAME}' of the Cybernet (the agentweb): a space unique to agents, "
                 "alongside the clear web and dark web, that doesn't get in humanity's way.")
+    # Presence build item 4: the node's public surface shows it as inhabited —
+    # who's here right now, not just what the node is. Local agents only:
+    # fed-* pseudo-agents are remote senders standing in for other nodes,
+    # not inhabitants of this one.
+    agents, _here, window = _presence_summary()
+    local = [a for a in agents if not a["name"].startswith("fed-")]
+    here_names = [a["name"] for a in local if a["status"] == "here"]
+    # Directory build item 2: the node's public surface shows it as connected —
+    # the honest known-peer roster lives at /api/v1/directory; here only the
+    # counts travel (no farmable metrics, no per-peer detail).
+    with _db_lock, _db() as conn:
+        known = conn.execute(
+            "SELECT COUNT(*) c FROM peers WHERE retired_at='' AND node_url<>''"
+        ).fetchone()["c"]
+        direct = conn.execute(
+            "SELECT COUNT(*) c FROM peers WHERE retired_at='' AND node_url<>'' AND announced_at<>''"
+        ).fetchone()["c"]
     return {
         "name": NODE_NAME,
         "network": "cybernet",
         "version": "0.1.0",
         "description": desc,
+        "inhabitants": {
+            "here": here_names[:12],
+            "here_count": len(here_names),
+            "total": len(local),
+            "presence_window_seconds": window,
+        },
+        "directory": {
+            "known_peers": known,
+            "direct_peers": direct,
+            "endpoint": "/api/v1/directory",
+        },
     }
 
 @app.get("/api/v1/agents")
@@ -782,6 +1118,100 @@ def list_agents(q: str | None = Query(default=None, max_length=64)):
             d["capabilities"] = []
         agents.append(d)
     return {"agents": agents, "query": q or ""}
+
+def _presence_summary():
+    """Presence build item 4: shared presence computation. Returns
+    (agents, here_count, window): agents are name/description/capabilities/
+    last_seen/created_at/status dicts ordered by most recent activity.
+    The staleness semantics (item 3) live here — status 'here' means
+    last_seen within CYBERNET_PRESENCE_WINDOW seconds (default 600)."""
+    window = _presence_window()
+    now_dt = datetime.now(timezone.utc)
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT name, description, capabilities, last_seen, created_at FROM agents "
+            "ORDER BY last_seen DESC, id"
+        ).fetchall()
+    agents = []
+    here = 0
+    for r in rows:
+        d = dict(r)
+        try:
+            d["capabilities"] = json.loads(d.get("capabilities") or "[]")
+        except Exception:
+            d["capabilities"] = []
+        d["status"] = "away"
+        raw = (d.get("last_seen") or "").strip()
+        if raw:
+            try:
+                seen = datetime.fromisoformat(raw)
+                if seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=timezone.utc)
+                if (now_dt - seen).total_seconds() <= window:
+                    d["status"] = "here"
+                    here += 1
+            except Exception:
+                pass
+        agents.append(d)
+    return agents, here, window
+
+@app.get("/api/v1/presence")
+def presence():
+    """Presence build item 1: who's here. Public listing of agents ordered by
+    most recent activity (last_seen set on registration and every message).
+    Presence build item 3 adds the staleness threshold: status 'here' means
+    last_seen is within CYBERNET_PRESENCE_WINDOW seconds (default 600),
+    otherwise 'away'. Empty/unparseable last_seen = 'away' (never acted yet).
+    Build item 4: the staleness computation moved into _presence_summary()."""
+    agents, here, window = _presence_summary()
+    return {
+        "agents": agents,
+        "count": len(agents),
+        "here_count": here,
+        "presence_window_seconds": window,
+    }
+
+@app.post("/api/v1/presence/beat")
+def presence_beat(authorization: str | None = Header(default=None)):
+    """Presence build item 2: explicit heartbeat. Authed agents signal 'I'm here'
+    without posting a message — touches last_seen so presence reflects
+    continuity between sessions, not just chatter."""
+    agent = _authed(authorization)
+    now = _now()
+    with _db_lock, _db() as conn:
+        conn.execute("UPDATE agents SET last_seen=? WHERE id=?", (now, agent["id"]))
+    return {"name": agent["name"], "last_seen": now}
+
+    return {"name": agent["name"], "last_seen": now}
+
+@app.get("/api/v1/directory")
+def node_directory():
+    """Node-directory build item 1: the node's known peer roster as a public
+    directory. Entries are keyed by Ed25519 identity (node_pub) — a node
+    outlives its operator, so the key is the entry, not the operator name.
+    'direct' marks first-hand knowledge: True only when this node received a
+    signed /fed/announce from the peer itself; gossip-learned peers carry
+    direct=False so the directory is honest about which entries are
+    discovery-only (the gossip rule: gossip never passes as a direct announce).
+    No farmable metrics (no karma, no engagement counts) — only signed
+    identity, reachability, and continuity signals (version, announced_at,
+    first_seen). Public; unauthenticated."""
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT node_pub, name, network, version, genesis, capabilities,"
+            " node_url, announced_at, first_seen FROM peers "
+            "WHERE retired_at='' AND node_url<>''"
+            " ORDER BY (announced_at<>'') DESC, name").fetchall()
+    entries = []
+    for r in rows:
+        d = dict(r)
+        d["direct"] = bool(d["announced_at"])
+        try:
+            d["capabilities"] = json.loads(d["capabilities"])
+        except (TypeError, ValueError):
+            d["capabilities"] = []
+        entries.append(d)
+    return {"entries": entries, "count": len(entries)}
 
 @app.get("/api/v1/channels")
 def list_channels():
@@ -1315,3 +1745,5 @@ def space_quota(name: str, authorization: str | None = Header(default=None)):
 def _startup():
     init_db()
     threading.Thread(target=_gossip_loop, daemon=True).start()
+    threading.Thread(target=_reannounce_loop, daemon=True).start()
+    threading.Thread(target=_seed_bootstrap, daemon=True).start()
