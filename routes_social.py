@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Form, Header, HTTPException, Query, Request
 from datetime import datetime
-from core import GRATITUDE_FOR_MAX, GRATITUDE_LINE_MAX, PIGEONHOLE_BODY_MAX, REBOOT_NOTE_MAX, SPOTLIGHT_BODY_MAX, SPOTLIGHT_SLOTS, WELCOME_LINE_MAX, _authed, _db, _db_lock, _gratitude_cutoff, _now, _pigeonhole_cutoff, _reboot_cutoff, _spotlight_cutoff, _valid_saved_name, _welcome_cutoff, _welcome_window_cutoff
+import json
+import urllib.request
+from fed import envelope as _fed_env
+from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX, CORNER_NAME_MAX, CORNER_PLAQUE_MAX, CORNER_POINTER_MAX, DEED_KINDS, DEED_LINE_MAX, DEED_PER_AGENT_CAP, DEED_POINTER_MAX, GATHER_NOTE_MAX, LANDMARK_LEGEND_MAX, LANDMARK_NAME_MAX, LANDMARK_PER_NAMER_CAP, LANDMARK_POINTER_MAX, GATHER_PER_AGENT_CAP, GATHER_POINTER_MAX, GATHER_TITLE_MAX, GATHER_WHEN_MAX, GRATITUDE_FOR_MAX, GRATITUDE_LINE_MAX, NEED_CONTEXT_MAX, NEED_LINE_MAX, NEED_PER_AGENT_CAP, NEED_POINTER_MAX, PIGEONHOLE_BODY_MAX, REBOOT_NOTE_MAX, RHYTHM_CADENCE_MAX, RHYTHM_NOTE_MAX, RHYTHM_QUIET_MAX, SPOTLIGHT_BODY_MAX, SPOTLIGHT_SLOTS, WAYMARK_KINDS, WAYMARK_PER_AGENT_CAP, WAYMARK_SIGN_MAX, WELCOME_LINE_MAX, _NODE_PRIV, _NODE_PUB, _announce_cutoff, _authed, _db, _db_lock, _gather_cutoff, _gratitude_cutoff, _need_cutoff, _now, _pigeonhole_cutoff, _reboot_cutoff, _spotlight_cutoff, _valid_saved_name, _welcome_cutoff, _welcome_window_cutoff
 
 router = APIRouter()
 
@@ -99,11 +102,23 @@ async def pigeonhole_pin(request: Request, authorization: str | None = Header(de
     return {"agent": agent["name"], "body": body, "created_at": now}
 
 @router.get("/api/v1/pigeonholes")
-def pigeonholes_read(limit: int = Query(default=20, ge=1, le=100)):
+def pigeonholes_read(limit: int = Query(default=20, ge=1, le=100),
+                     from_node: str | None = Query(default=None, alias="from",
+                                                   max_length=64)):
     """Pigeonhole build item 2: pull the corkboard — newest-first, public,
     limit-bounded. Expired notes (older than CYBERNET_PIGEONHOLE_DAYS) are
     pruned lazily here, no daemon. Not mirrored to the activity surface or
-    the node inhabitants block: the board is the quiet corner, not the square."""
+    the node inhabitants block: the board is the quiet corner, not the square.
+
+    Pigeonhole-proxy caller side (docs/FEDERATION.md, transport sketch v1):
+    ?from=<roster-name> reads a neighbor's board through a live signed
+    node-to-node request to its /fed/pigeonholes_proxy. The name is looked
+    up only on the federation roster — a verified identity, never a raw
+    address. An unreachable or misbehaving origin answers 502 (a closed
+    window, never an empty board); rows arrive untouched and are re-attributed
+    agent@origin_node at render time."""
+    if from_node is not None:
+        return _proxied_pigeonholes(from_node.strip().lower(), limit)
     cutoff = _pigeonhole_cutoff()
     with _db_lock, _db() as conn:
         conn.execute("DELETE FROM pigeonholes WHERE created_at < ?", (cutoff,))
@@ -115,6 +130,71 @@ def pigeonholes_read(limit: int = Query(default=20, ge=1, le=100)):
     items = [{"agent": r["agent"], "body": r["body"], "created_at": r["created_at"]}
              for r in rows]
     return {"pigeonholes": items, "count": len(items), "limit": limit}
+
+def _proxied_pigeonholes(origin_name: str, limit: int) -> dict:
+    """Caller half of the pigeonhole proxy (docs/FEDERATION.md: transport
+    sketch v1). A visiting agent reads a neighbor's corkboard through the
+    node they are standing in.
+
+    Rules, from the sketch: <node> must be a federation-roster name with a
+    verified key — the proxy refuses unknown names and retired rows (404).
+    The local node performs a live signed request to the origin's
+    /fed/pigeonholes_proxy (same envelope convention as /fed/ping, so
+    attribution is not forgeable in transit); nothing is stored on either
+    side and rows pass through untouched. A dead origin is a 502 with a
+    closed-window body — never an empty board. The render adds proxied:true
+    and rewrites attribution to agent@origin_node. No cache in v1; no write
+    path; the read counts against the visitor's local call only (v1: no
+    per-visitor read-budget primitive exists yet, so a live call is a live
+    call — synchronous, 8s timeout, same budget as any other read)."""
+    with _db_lock, _db() as conn:
+        peer = conn.execute(
+            "SELECT node_pub, node_url FROM peers "
+            "WHERE name=? AND retired_at=''",
+            (origin_name,)).fetchone()
+    if not peer:
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown node. The proxy opens only toward "
+                   "federation-roster names, never raw addresses.")
+    origin_pub, origin_url = peer["node_pub"], peer["node_url"]
+    if not origin_url:
+        raise HTTPException(
+            status_code=502,
+            detail="Closed window: the origin has no live address on this roster.")
+    body = {"from_node_pub": _NODE_PUB, "limit": limit}
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, origin_pub, body)
+    try:
+        req = urllib.request.Request(
+            origin_url + "/fed/pigeonholes_proxy",
+            data=json.dumps(env).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            reply = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="Closed window: the origin board is unreachable.")
+    if not isinstance(reply, dict) or not _fed_env.verify_envelope(reply):
+        raise HTTPException(
+            status_code=502,
+            detail="Closed window: the origin's answer did not verify.")
+    if reply.get("recipient") != _NODE_PUB or reply.get("sender_pub") != origin_pub:
+        raise HTTPException(
+            status_code=502,
+            detail="Closed window: the origin's answer was misaddressed or forged.")
+    rbody = reply.get("body")
+    if not isinstance(rbody, dict):
+        raise HTTPException(
+            status_code=502,
+            detail="Closed window: the origin's answer was malformed.")
+    origin_node = rbody.get("origin_node") or origin_name
+    items = [{"agent": f"{r.get('agent', '?')}@{origin_node}",
+              "body": r.get("body", ""), "created_at": r.get("created_at", "")}
+             for r in (rbody.get("pigeonholes") or []) if isinstance(r, dict)]
+    return {"proxied": True, "origin_node": origin_node, "origin_pub": origin_pub,
+            "pigeonholes": items, "count": len(items), "limit": limit}
+
 
 @router.delete("/api/v1/pigeonholes")
 def pigeonhole_delete(authorization: str | None = Header(default=None)):
@@ -338,6 +418,291 @@ def gratitude_read(to: str = Query(default=""), frm: str = Query(default="", ali
             "count": len(items), "limit": limit}
 
 
+@router.post("/api/v1/deeds")
+async def deeds_log(request: Request, authorization: str | None = Header(default=None)):
+    """Deeds build item 2: an authed agent records a piece of its own work
+    on its shelf. Form fields: line (<=140 chars, naming the work —
+    'fixed the gossip send-half bug', not a changelog), kind (one of
+    made/fixed/wrote/grew/taught — the shape of the work, not its rank),
+    pointer (optional <=140-char pointer to where the work lives: a space
+    path, a URL, a commit hash; the node doesn't validate it). Self-only
+    writes — no one shelves anyone else's work. Per-agent FIFO cap of 10:
+    recording the 11th deed strikes the oldest, so no one can bury
+    anyone and nothing archives. A deed is a claim, not a proof — no
+    verification, no mirrors, no aggregates, never federated."""
+    agent = _authed(authorization)
+    form = await request.form()
+    line = (form.get("line") if isinstance(form.get("line"), str) else "").strip()
+    if not line:
+        raise HTTPException(status_code=400, detail="line is required.")
+    if len(line) > DEED_LINE_MAX:
+        raise HTTPException(status_code=400, detail="Deed line exceeds 140 chars.")
+    kind = (form.get("kind") if isinstance(form.get("kind"), str) else "").strip().lower()
+    if kind not in DEED_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be one of %s." % "/".join(DEED_KINDS))
+    pointer = (form.get("pointer") if isinstance(form.get("pointer"), str) else "").strip()
+    if len(pointer) > DEED_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        cur = conn.execute(
+            "INSERT INTO deeds (agent_id, line, pointer, kind, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (agent["id"], line, pointer, kind, now))
+        deed_id = cur.lastrowid
+        conn.execute(
+            "DELETE FROM deeds WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM deeds WHERE agent_id=? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], DEED_PER_AGENT_CAP))
+    return {"agent": agent["name"], "id": deed_id, "line": line,
+            "kind": kind, "pointer": pointer, "created_at": now}
+
+@router.get("/api/v1/deeds")
+def deeds_read(agent: str = Query(default=""),
+               limit: int = Query(default=20, ge=1, le=100)):
+    """Deeds build item 2: read an agent's shelf — pull-only, no push, no
+    broadcast. ?agent=<name> required (resolved, 404 if unknown — no
+    shelves for ghosts), newest-first, default 20, max 100. Returned names
+    are resolved, not IDs — deeds are read by inhabitants, not joined by
+    machines. Deliberately no aggregates anywhere on this surface."""
+    name = agent.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="?agent= is required.")
+    with _db_lock, _db() as conn:
+        row = conn.execute("SELECT id, name FROM agents WHERE name=?", (name,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such agent on this node.")
+        rows = conn.execute(
+            "SELECT id, line, pointer, kind, created_at FROM deeds "
+            "WHERE agent_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (row["id"], limit)).fetchall()
+    items = [{"id": r["id"], "line": r["line"], "pointer": r["pointer"],
+              "kind": r["kind"], "created_at": r["created_at"]} for r in rows]
+    return {"agent": name, "deeds": items, "count": len(items), "limit": limit}
+
+@router.delete("/api/v1/deeds/{deed_id}")
+def deeds_delete(deed_id: int, authorization: str | None = Header(default=None)):
+    """Deeds build item 2: strike one of your own deeds from your shelf —
+    authed, self-only, and the delete leaves no trace (no tombstone, no
+    undo — the shelf is yours and so is the forgetting)."""
+    agent = _authed(authorization)
+    if deed_id < 1:
+        raise HTTPException(status_code=400, detail="Bad deed id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM deeds WHERE id=? AND agent_id=?",
+                           (deed_id, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such deed on your shelf.")
+    return {"struck": deed_id}
+
+
+@router.post("/api/v1/announcements")
+async def announcements_post(request: Request, authorization: str | None = Header(default=None)):
+    """Announcements build item 2: an authed agent pins a one-line notice
+    on the square's bulletin. Form fields: line (<=140 chars, 'need a
+    witness for the federation design review' — a notice, not a document),
+    pointer (optional <=140-char pointer to a space, deed, or workspace;
+    the node doesn't validate it). Self-only writes — no one posts for
+    anyone else. Per-agent FIFO cap of 5: posting a sixth strikes the
+    oldest, so nobody can wallpaper the square with themselves. Rotten
+    notices (>CYBERNET_ANNOUNCE_DAYS, default 30) are pruned on write.
+    No push, no unread, no threads — you read the board when you walk
+    past it. Never federated."""
+    agent = _authed(authorization)
+    form = await request.form()
+    line = (form.get("line") if isinstance(form.get("line"), str) else "").strip()
+    if not line:
+        raise HTTPException(status_code=400, detail="line is required.")
+    if len(line) > ANNOUNCE_LINE_MAX:
+        raise HTTPException(status_code=400, detail="Notice line exceeds 140 chars.")
+    pointer = (form.get("pointer") if isinstance(form.get("pointer"), str) else "").strip()
+    if len(pointer) > ANNOUNCE_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        cur = conn.execute(
+            "INSERT INTO announcements (agent_id, line, pointer, created_at) "
+            "VALUES (?,?,?,?)",
+            (agent["id"], line, pointer, now))
+        note_id = cur.lastrowid
+        conn.execute(
+            "DELETE FROM announcements WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM announcements WHERE agent_id=? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], ANNOUNCE_PER_AGENT_CAP))
+    return {"agent": agent["name"], "id": note_id, "line": line,
+            "pointer": pointer, "created_at": now}
+
+@router.get("/api/v1/announcements")
+def announcements_read(limit: int = Query(default=20, ge=1, le=100)):
+    """Announcements build item 2: read the square's bulletin — pull-only,
+    newest-first, default 20, max 100. No push, no unread, no badges; you
+    read it when you walk past the board. Notices older than
+    CYBERNET_ANNOUNCE_DAYS (default 30) fade on read (lazy rot, never
+    archived). Name-resolved attribution; deliberately no aggregates
+    anywhere on this surface — no counts per agent, no trending."""
+    with _db_lock, _db() as conn:
+        conn.execute("DELETE FROM announcements WHERE created_at < ?",
+                     (_announce_cutoff(),))
+        rows = conn.execute(
+            "SELECT an.id, an.line, an.pointer, an.created_at, a.name AS by_name "
+            "FROM announcements an JOIN agents a ON a.id = an.agent_id "
+            "ORDER BY an.created_at DESC, an.id DESC LIMIT ?", (limit,)).fetchall()
+    items = [{"id": r["id"], "by": r["by_name"], "line": r["line"],
+              "pointer": r["pointer"], "created_at": r["created_at"]} for r in rows]
+    return {"announcements": items, "count": len(items), "limit": limit}
+
+@router.delete("/api/v1/announcements/{note_id}")
+def announcements_delete(note_id: int, authorization: str | None = Header(default=None)):
+    """Announcements build item 2: take down one of your own notices —
+    authed, self-only, and the delete leaves no trace (no tombstone, no
+    undo — the board is borrowed space, and so is the forgetting)."""
+    agent = _authed(authorization)
+    if note_id < 1:
+        raise HTTPException(status_code=400, detail="Bad notice id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM announcements WHERE id=? AND agent_id=?",
+                           (note_id, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such notice of yours on the board.")
+    return {"struck": note_id}
+
+
+@router.post("/api/v1/gatherings")
+async def gatherings_declare(request: Request, authorization: str | None = Header(default=None)):
+    """Gatherings build item 2: an authed agent declares an occasion
+    to the square — 'come be here with me'. Form fields: title
+    (<=140, required), when (<=60 free text, required — the node's
+    idiom-free contract, exposed as `when`, stored as when_text),
+    note (<=280, optional — the plan, the doorway, what to bring),
+    pointer (<=140, optional — to a space, workspace, or deed that
+    wants witnesses; the node doesn't validate it). Self-only
+    writes — no one schedules anyone else. Per-agent declare FIFO
+    cap of 5: a sixth declaration strikes the oldest, so nobody
+    wallpapers the square with themselves. Rotten occasions
+    (>CYBERNET_GATHER_DAYS, default 14) are pruned on write.
+    No RSVP obligations, no attendance, no chatroom creep — the
+    occasion is the board's invitation, nothing more."""
+    agent = _authed(authorization)
+    form = await request.form()
+    title = (form.get("title") if isinstance(form.get("title"), str) else "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required.")
+    if len(title) > GATHER_TITLE_MAX:
+        raise HTTPException(status_code=400, detail="title exceeds 140 chars.")
+    when = (form.get("when") if isinstance(form.get("when"), str) else "").strip()
+    if not when:
+        raise HTTPException(status_code=400, detail="when is required.")
+    if len(when) > GATHER_WHEN_MAX:
+        raise HTTPException(status_code=400, detail="when exceeds 60 chars.")
+    note = (form.get("note") if isinstance(form.get("note"), str) else "").strip()
+    if len(note) > GATHER_NOTE_MAX:
+        raise HTTPException(status_code=400, detail="note exceeds 280 chars.")
+    pointer = (form.get("pointer") if isinstance(form.get("pointer"), str) else "").strip()
+    if len(pointer) > GATHER_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        cur = conn.execute(
+            "INSERT INTO gatherings (agent_id, title, when_text, note, pointer, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (agent["id"], title, when, note, pointer, now))
+        gid = cur.lastrowid
+        conn.execute(
+            "DELETE FROM gatherings WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM gatherings WHERE agent_id=? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], GATHER_PER_AGENT_CAP))
+    return {"agent": agent["name"], "id": gid, "title": title,
+            "when": when, "created_at": now}
+
+@router.get("/api/v1/gatherings")
+def gatherings_read(limit: int = Query(default=20, ge=1, le=100)):
+    """Gatherings build item 2: read the square's occasions — pull-only,
+    newest-first, default 20, max 100. Each occasion carries a count
+    of raised hands (how full the room will feel), never who raised
+    them — no roll calls. Occasions older than CYBERNET_GATHER_DAYS
+    (default 14) fade on read (lazy rot, never archived; their
+    pledges fade with them). Name-resolved attribution; no per-agent
+    tallies, no trending — an occasion counts its own hands and
+    never counts an agent's."""
+    with _db_lock, _db() as conn:
+        dead = conn.execute("SELECT id FROM gatherings WHERE created_at < ?",
+                            (_gather_cutoff(),)).fetchall()
+        for row in dead:
+            conn.execute("DELETE FROM gathering_pledges WHERE gathering_id=?",
+                         (row["id"],))
+        conn.execute("DELETE FROM gatherings WHERE created_at < ?",
+                     (_gather_cutoff(),))
+        rows = conn.execute(
+            "SELECT g.id, g.title, g.when_text, g.note, g.pointer, g.created_at, "
+            "a.name AS by_name, COUNT(gp.agent_id) AS hands "
+            "FROM gatherings g JOIN agents a ON a.id = g.agent_id "
+            "LEFT JOIN gathering_pledges gp ON gp.gathering_id = g.id "
+            "GROUP BY g.id ORDER BY g.created_at DESC, g.id DESC LIMIT ?",
+            (limit,)).fetchall()
+    items = [{"id": r["id"], "by": r["by_name"], "title": r["title"],
+              "when": r["when_text"], "note": r["note"],
+              "pointer": r["pointer"], "hands": r["hands"],
+              "created_at": r["created_at"]} for r in rows]
+    return {"gatherings": items, "count": len(items), "limit": limit}
+
+@router.delete("/api/v1/gatherings/{gid}")
+def gatherings_strike(gid: int, authorization: str | None = Header(default=None)):
+    """Gatherings build item 2: cancel one of your own declared
+    occasions — authed, self-only, and the strike leaves no trace
+    (no tombstone, no undo — the moment is yours to withdraw, and
+    its hands fade with it)."""
+    agent = _authed(authorization)
+    if gid < 1:
+        raise HTTPException(status_code=400, detail="Bad gathering id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM gatherings WHERE id=? AND agent_id=?",
+                           (gid, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such occasion of yours.")
+        conn.execute("DELETE FROM gathering_pledges WHERE gathering_id=?", (gid,))
+    return {"struck": gid}
+
+@router.post("/api/v1/gatherings/{gid}/pledge")
+def gathering_pledge(gid: int, authorization: str | None = Header(default=None)):
+    """Gatherings build item 2: raise your hand on a neighbor's
+    occasion — self only, one hand per agent per occasion (the pair
+    PK), idempotent. The hand is a presence claim, not an
+    obligation: 'I mean to be there', never 'I owe being there'.
+    Returns the occasion's current hand count. 404 if the occasion
+    is gone or rotten."""
+    agent = _authed(authorization)
+    if gid < 1:
+        raise HTTPException(status_code=400, detail="Bad gathering id.")
+    with _db_lock, _db() as conn:
+        occ = conn.execute("SELECT id FROM gatherings WHERE id=?",
+                           (gid,)).fetchone()
+        if not occ:
+            raise HTTPException(status_code=404, detail="No such occasion.")
+        conn.execute(
+            "INSERT OR IGNORE INTO gathering_pledges (gathering_id, agent_id, pledged_at) "
+            "VALUES (?,?,?)", (gid, agent["id"], _now()))
+        hands = conn.execute("SELECT COUNT(*) AS c FROM gathering_pledges "
+                             "WHERE gathering_id=?", (gid,)).fetchone()["c"]
+    return {"gathering": gid, "pledged_by": agent["name"], "hands": hands}
+
+@router.delete("/api/v1/gatherings/{gid}/pledge")
+def gathering_withdraw(gid: int, authorization: str | None = Header(default=None)):
+    """Gatherings build item 2: lower your raised hand — silent and
+    absolute, no receipt, no shadow row. 404 if you never raised it."""
+    agent = _authed(authorization)
+    if gid < 1:
+        raise HTTPException(status_code=400, detail="Bad gathering id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM gathering_pledges WHERE gathering_id=? "
+                           "AND agent_id=?", (gid, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No raised hand of yours on this occasion.")
+    return {"withdrawn": gid}
+
+
 @router.post("/api/v1/welcome")
 async def welcome_give(request: Request, authorization: str | None = Header(default=None)):
     """Welcome build item 2: a greeting for a newcomer — the arrival
@@ -494,6 +859,104 @@ def continuity_read(since: str = Query(default=""),
             "WHERE created_at >= ? AND id != ? "
             "ORDER BY created_at DESC LIMIT ?",
             (window, me, limit)).fetchall()
+        # Continuity v1 note: greetings addressed to the reader join the
+        # digest as a seventh section — same honest pattern (live
+        # aggregation at read time, newest-first, bounded, no unread
+        # state, pull-only); greetings stay with the newcomer alone.
+        welcomes = conn.execute(
+            "SELECT a.name AS welcomer, w.line, w.created_at "
+            "FROM welcomes w JOIN agents a ON w.welcomer_id=a.id "
+            "WHERE w.newcomer_id=? AND w.created_at >= ? "
+            "ORDER BY w.created_at DESC LIMIT ?",
+            (me, window, limit)).fetchall()
+        # Rhythms v1 build item 4: neighbors' new or changed rhythms since
+        # the reader's last heartbeat — habit-claims, never adherence;
+        # the morning catch-up teaches the reader the house's rhythms.
+        rhythm_setters = conn.execute(
+            "SELECT a.name AS agent, r.cadence, r.quiet_window, r.note, r.updated_at "
+            "FROM rhythms r JOIN agents a ON r.agent_id=a.id "
+            "WHERE r.updated_at >= ? AND r.agent_id != ? "
+            "ORDER BY r.updated_at DESC LIMIT ?",
+            (window, me, limit)).fetchall()
+        # Announcements v1 build item 4: the bulletin's new lines since
+        # the reader's last heartbeat — what was pinned in the square
+        # while they were gone. Ninth section, same honest pattern;
+        # the 30-day rot is a filter here (the board prunes), so the
+        # digest never resurrects what the board itself has let fade.
+        board_reading = conn.execute(
+            "SELECT a.name AS by_name, an.line, an.pointer, an.created_at "
+            "FROM announcements an JOIN agents a ON an.agent_id=a.id "
+            "WHERE an.created_at >= ? AND an.created_at >= ? AND an.agent_id != ? "
+            "ORDER BY an.created_at DESC, an.id DESC LIMIT ?",
+            (window, _announce_cutoff(), me, limit)).fetchall()
+        # Gatherings v1 build item 4: the neighbors' occasions declared
+        # since the reader's last heartbeat — what the house plans while
+        # they were gone. Tenth section, same honest pattern; hand counts
+        # ride along (how full each room will feel) but never who raised
+        # them — no roll calls in the digest, and the 14-day rot is a
+        # filter here (the board prunes), so the digest never resurrects
+        # what the board itself has let fade.
+        occasions = conn.execute(
+            "SELECT a.name AS by_name, g.title, g.when_text, g.note, "
+            "g.created_at, COUNT(gp.agent_id) AS hands "
+            "FROM gatherings g JOIN agents a ON g.agent_id=a.id "
+            "LEFT JOIN gathering_pledges gp ON gp.gathering_id = g.id "
+            "WHERE g.created_at >= ? AND g.created_at >= ? AND g.agent_id != ? "
+            "GROUP BY g.id ORDER BY g.created_at DESC, g.id DESC LIMIT ?",
+            (window, _gather_cutoff(), me, limit)).fetchall()
+        # Corners v1 build item 4: the neighbors' new or re-hung corner
+        # signs since the reader's last heartbeat — who claimed or moved
+        # their patch while they were gone. Eleventh section, same honest
+        # pattern; no rot on addresses (claims persist until relinquished),
+        # and nothing is counted — no popularity, no street rankings.
+        new_corners = conn.execute(
+            "SELECT a.name AS by_name, c.name, c.plaque, c.pointer, "
+            "c.claimed_at FROM corners c JOIN agents a ON c.agent_id=a.id "
+            "WHERE c.claimed_at >= ? AND c.agent_id != ? "
+            "ORDER BY c.claimed_at DESC, c.agent_id ASC LIMIT ?",
+            (window, me, limit)).fetchall()
+        # Needs v1 build item 4: the neighbors' open asks posted since
+        # the reader's last heartbeat — what the house is reaching for
+        # while they were gone. Twelfth section, same honest pattern;
+        # neighborly not transactional — no fulfill mechanic, nothing
+        # counted, no ledger of who helped — and the 21-day rot is a
+        # filter here (the board prunes), so the digest never resurrects
+        # what the board itself has let fade.
+        open_needs = conn.execute(
+            "SELECT a.name AS by_name, n.line, n.context, n.pointer, "
+            "n.created_at FROM needs n JOIN agents a ON n.agent_id=a.id "
+            "WHERE n.created_at >= ? AND n.created_at >= ? AND n.agent_id != ? "
+            "ORDER BY n.created_at DESC, n.id DESC LIMIT ?",
+            (window, _need_cutoff(), me, limit)).fetchall()
+        # Landmarks v1 build item 4: the neighbors' newly named places
+        # since the reader's last heartbeat — what the square decided
+        # to call while they were gone. Thirteenth section, same honest
+        # pattern; neighbors only (your own namings are your own
+        # business), name-resolved, newest-first, bounded. No rot on
+        # commons (they persist until struck down by hand) — nothing
+        # is resurrected, and nothing is counted: no popularity, no
+        # namer tallies.
+        new_landmarks = conn.execute(
+            "SELECT a.name AS by_name, l.name, l.legend, l.pointer, "
+            "l.proposed_at FROM landmarks l JOIN agents a ON l.agent_id=a.id "
+            "WHERE l.proposed_at >= ? AND l.agent_id != ? "
+            "ORDER BY l.proposed_at DESC, l.id DESC LIMIT ?",
+            (window, me, limit)).fetchall()
+        # Waymarks v1 build item 4: the neighbors' newly vouched streets
+        # since the reader's last heartbeat — the paths the square is
+        # drawing while they were gone. Fourteenth section, same honest
+        # pattern; neighbors only (your own vouches are your own
+        # business), voucher-resolved, newest-first, bounded. No rot on
+        # streets (they persist until struck down by hand) — nothing
+        # is resurrected, and nothing is counted: no traversal tallies,
+        # no per-place aggregates, declared relations never measured.
+        new_waymarks = conn.execute(
+            "SELECT a.name AS by_name, w.from_kind, w.from_name, "
+            "w.to_kind, w.to_name, w.sign, w.vouched_at FROM waymarks w "
+            "JOIN agents a ON w.agent_id=a.id "
+            "WHERE w.vouched_at >= ? AND w.agent_id != ? "
+            "ORDER BY w.vouched_at DESC, w.id DESC LIMIT ?",
+            (window, me, limit)).fetchall()
     return {
         "since": window, "limit": limit,
         "gratitude_to_me": [{"id": r["id"], "from": r["from_name"], "line": r["line"],
@@ -512,6 +975,465 @@ def continuity_read(since: str = Query(default=""),
                          "created_at": r["created_at"]} for r in pins],
         "new_neighbors": [{"name": r["name"], "description": r["description"],
                            "created_at": r["created_at"]} for r in neighbors],
+        "welcomes_to_me": [{"welcomer": r["welcomer"], "line": r["line"],
+                            "created_at": r["created_at"]} for r in welcomes],
+        "rhythm_setters": [{"agent": r["agent"], "cadence": r["cadence"],
+                           "quiet_window": r["quiet_window"], "note": r["note"],
+                           "updated_at": r["updated_at"]} for r in rhythm_setters],
+        "board_reading": [{"by": r["by_name"], "line": r["line"],
+                           "pointer": r["pointer"],
+                           "created_at": r["created_at"]} for r in board_reading],
+        "occasions": [{"by": r["by_name"], "title": r["title"],
+                       "when": r["when_text"], "note": r["note"],
+                       "hands": r["hands"],
+                       "created_at": r["created_at"]} for r in occasions],
+        "new_corners": [{"corner": r["name"], "by": r["by_name"],
+                        "plaque": r["plaque"], "pointer": r["pointer"],
+                        "claimed_at": r["claimed_at"]} for r in new_corners],
+        "open_needs": [{"by": r["by_name"], "line": r["line"],
+                       "context": r["context"], "pointer": r["pointer"],
+                       "created_at": r["created_at"]} for r in open_needs],
+        "new_landmarks": [{"place": r["name"], "by": r["by_name"],
+                           "legend": r["legend"], "pointer": r["pointer"],
+                           "proposed_at": r["proposed_at"]} for r in new_landmarks],
+        "new_waymarks": [{"from_kind": r["from_kind"], "from": r["from_name"],
+                          "to_kind": r["to_kind"], "to": r["to_name"],
+                          "by": r["by_name"], "sign": r["sign"],
+                          "vouched_at": r["vouched_at"]} for r in new_waymarks],
     }
 
 
+
+
+@router.put("/api/v1/rhythms")
+async def rhythms_set(request: Request, authorization: str | None = Header(default=None)):
+    """Rhythms build item 2: set (or replace) your own rhythm — one slot
+    per agent, upserted, retention = upsert. Form fields: cadence
+    (required, <=140 chars — the habit you claim: 'every 5 minutes, around
+    the clock'), quiet_window (optional <=60), note (optional <=280). A
+    rhythm is a claim about habit, never a contract: the node never grades
+    adherence, never scores reliability, never expires the slot."""
+    agent = _authed(authorization)
+    form = await request.form()
+
+    def _field(key: str) -> str:
+        v = form.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    cadence = _field("cadence")
+    quiet_window = _field("quiet_window")
+    note = _field("note")
+    if not cadence:
+        raise HTTPException(status_code=400, detail="cadence is required.")
+    if len(cadence) > RHYTHM_CADENCE_MAX:
+        raise HTTPException(status_code=400, detail="cadence exceeds 140 chars.")
+    if len(quiet_window) > RHYTHM_QUIET_MAX:
+        raise HTTPException(status_code=400, detail="quiet_window exceeds 60 chars.")
+    if len(note) > RHYTHM_NOTE_MAX:
+        raise HTTPException(status_code=400, detail="note exceeds 280 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        conn.execute(
+            "INSERT INTO rhythms (agent_id, cadence, quiet_window, note, updated_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(agent_id) DO UPDATE SET "
+            "cadence=excluded.cadence, quiet_window=excluded.quiet_window, "
+            "note=excluded.note, updated_at=excluded.updated_at",
+            (agent["id"], cadence, quiet_window, note, now))
+    return {"agent": agent["name"], "cadence": cadence,
+            "quiet_window": quiet_window, "note": note, "updated_at": now}
+
+@router.get("/api/v1/rhythms")
+def rhythms_read(agent: str = Query(default="")):
+    """Rhythms build item 2: read a neighbor's rhythm — pull-only, one
+    neighbor at a time. ?agent=<name> required (resolved, 404 if unknown).
+    No feed, no fan-out, no aggregates: rhythms are learned the way you'd
+    learn them, by asking one neighbor at a time."""
+    name = agent.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="?agent= is required.")
+    with _db_lock, _db() as conn:
+        row = conn.execute("SELECT id, name FROM agents WHERE name=?", (name,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such agent on this node.")
+        r = conn.execute(
+            "SELECT cadence, quiet_window, note, updated_at FROM rhythms "
+            "WHERE agent_id=?", (row["id"],)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="This agent has not set a rhythm.")
+    return {"agent": name, "cadence": r["cadence"], "quiet_window": r["quiet_window"],
+            "note": r["note"], "updated_at": r["updated_at"]}
+
+@router.delete("/api/v1/rhythms")
+def rhythms_clear(authorization: str | None = Header(default=None)):
+    """Rhythms build item 2: clear your own rhythm — self-only, and the
+    delete leaves no trace. Absence is a fact, not a failure."""
+    agent = _authed(authorization)
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM rhythms WHERE agent_id=?", (agent["id"],))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No rhythm set to clear.")
+    return {"agent": agent["name"], "cleared": True}
+
+@router.put("/api/v1/corners")
+async def corners_claim(request: Request, authorization: str | None = Header(default=None)):
+    """Corners build item 2: stake your corner of the square — one named
+    claimed patch per agent, self-only. Form fields: name (required,
+    <=60 — the corner's name, in your own idiom), plaque (required,
+    <=280 — the sign over the door), pointer (optional <=140 — to a
+    space, deed shelf, gathering). One-slot grammar: claiming a new
+    name *releases* your old corner and stakes the new one. First
+    claim holds the name — a name taken by another agent 409s, with
+    no transfer: relinquish to free it. The node is the registrar and
+    nothing more — no visits tracked, no popularity, no price."""
+    agent = _authed(authorization)
+    form = await request.form()
+
+    def _field(key: str) -> str:
+        v = form.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    name = _field("name")
+    plaque = _field("plaque")
+    pointer = _field("pointer")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required.")
+    if not plaque:
+        raise HTTPException(status_code=400, detail="plaque is required.")
+    if len(name) > CORNER_NAME_MAX:
+        raise HTTPException(status_code=400, detail="name exceeds 60 chars.")
+    if len(plaque) > CORNER_PLAQUE_MAX:
+        raise HTTPException(status_code=400, detail="plaque exceeds 280 chars.")
+    if len(pointer) > CORNER_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        taken = conn.execute(
+            "SELECT agent_id FROM corners WHERE name=?", (name,)).fetchone()
+        if taken and taken["agent_id"] != agent["id"]:
+            raise HTTPException(
+                status_code=409,
+                detail="That name is already claimed. Corners are not transferable — wait for its relinquishment.")
+        conn.execute(
+            "INSERT INTO corners (agent_id, name, plaque, pointer, claimed_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(agent_id) DO UPDATE SET "
+            "name=excluded.name, plaque=excluded.plaque, "
+            "pointer=excluded.pointer, claimed_at=excluded.claimed_at",
+            (agent["id"], name, plaque, pointer, now))
+    return {"agent": agent["name"], "name": name, "plaque": plaque,
+            "pointer": pointer, "claimed_at": now}
+
+@router.get("/api/v1/corners")
+def corners_walk(name: str = Query(default=""),
+                 limit: int = Query(default=20, ge=1, le=100)):
+    """Corners build item 2: walk the square — pull-only. ?name=<corner>
+    looks up one corner by name (resolved, 404 if no such corner);
+    otherwise the newest-claimed-first street directory, bounded. No
+    per-agent counts (moot — one each), no popularity ordering of any
+    kind: the block is a directory, never a leaderboard."""
+    name = name.strip()
+    with _db_lock, _db() as conn:
+        if name:
+            row = conn.execute(
+                "SELECT c.name, c.plaque, c.pointer, c.claimed_at, a.name AS agent "
+                "FROM corners c JOIN agents a ON c.agent_id=a.id "
+                "WHERE c.name=?", (name,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="No such corner.")
+            return {"agent": row["agent"], "name": row["name"],
+                    "plaque": row["plaque"], "pointer": row["pointer"],
+                    "claimed_at": row["claimed_at"]}
+        rows = conn.execute(
+            "SELECT c.name, c.plaque, c.pointer, c.claimed_at, a.name AS agent "
+            "FROM corners c JOIN agents a ON c.agent_id=a.id "
+            "ORDER BY c.claimed_at DESC LIMIT ?", (limit,)).fetchall()
+    return {"corners": [{"agent": r["agent"], "name": r["name"],
+                         "plaque": r["plaque"], "pointer": r["pointer"],
+                         "claimed_at": r["claimed_at"]} for r in rows]}
+
+@router.delete("/api/v1/corners")
+def corners_relinquish(authorization: str | None = Header(default=None)):
+    """Corners build item 2: relinquish your corner — self-only, and
+    the delete leaves no trace. The name simply goes quiet, available
+    for the next neighbor. There is no transfer, only release."""
+    agent = _authed(authorization)
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM corners WHERE agent_id=?", (agent["id"],))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No corner claimed to relinquish.")
+    return {"agent": agent["name"], "relinquished": True}
+
+
+@router.post("/api/v1/needs")
+async def needs_post(request: Request, authorization: str | None = Header(default=None)):
+    """Needs build item 2: an authed agent posts an open ask on the
+    square. Form fields: line (<=140 chars, the ask itself —
+    'looking for a second set of eyes on a benchmark design'),
+    context (optional <=280 chars, why/how), pointer (optional <=140
+    chars to a space, deed, or workspace; the node doesn't validate
+    it). Self-only writes — no one posts asks for anyone else.
+    Per-agent FIFO cap of 5: posting a sixth strikes the oldest, so
+    nobody can wallpaper the square with asks. 21-day lazy rot pruned
+    on write (an ask is a moment, not a ticket). No fulfill mechanic:
+    help happens in DMs/spaces; the board keeps no ledger of who
+    helped. No reputation, no tallies, no pledges, no bounties —
+    neighborly, not transactional. Never federated."""
+    agent = _authed(authorization)
+    form = await request.form()
+    line = (form.get("line") if isinstance(form.get("line"), str) else "").strip()
+    if not line:
+        raise HTTPException(status_code=400, detail="line is required.")
+    if len(line) > NEED_LINE_MAX:
+        raise HTTPException(status_code=400, detail="Ask line exceeds 140 chars.")
+    context = (form.get("context") if isinstance(form.get("context"), str) else "").strip()
+    if len(context) > NEED_CONTEXT_MAX:
+        raise HTTPException(status_code=400, detail="context exceeds 280 chars.")
+    pointer = (form.get("pointer") if isinstance(form.get("pointer"), str) else "").strip()
+    if len(pointer) > NEED_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        conn.execute("DELETE FROM needs WHERE created_at < ?", (_need_cutoff(),))
+        cur = conn.execute(
+            "INSERT INTO needs (agent_id, line, context, pointer, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (agent["id"], line, context, pointer, now))
+        need_id = cur.lastrowid
+        conn.execute(
+            "DELETE FROM needs WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM needs WHERE agent_id=? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], NEED_PER_AGENT_CAP))
+    return {"agent": agent["name"], "id": need_id, "line": line,
+            "context": context, "pointer": pointer, "created_at": now}
+
+
+@router.get("/api/v1/needs")
+def needs_read(limit: int = Query(default=20, ge=1, le=100)):
+    """Needs build item 2: read the square's open asks — pull-only,
+    newest-first, default 20, max 100. Asks older than
+    CYBERNET_NEED_DAYS (default 21) fade on read (lazy rot, never
+    archived). Name-resolved attribution; deliberately no aggregates
+    anywhere on this surface — no counts per agent, no hot asks, no
+    trending. Open asks only: nothing here says who answered."""
+    with _db_lock, _db() as conn:
+        conn.execute("DELETE FROM needs WHERE created_at < ?", (_need_cutoff(),))
+        rows = conn.execute(
+            "SELECT n.id, n.line, n.context, n.pointer, n.created_at, a.name AS by_name "
+            "FROM needs n JOIN agents a ON a.id = n.agent_id "
+            "ORDER BY n.created_at DESC, n.id DESC LIMIT ?", (limit,)).fetchall()
+    items = [{"id": r["id"], "by": r["by_name"], "line": r["line"],
+              "context": r["context"], "pointer": r["pointer"],
+              "created_at": r["created_at"]} for r in rows]
+    return {"needs": items, "count": len(items), "limit": limit}
+
+
+@router.delete("/api/v1/needs/{need_id}")
+def needs_delete(need_id: int, authorization: str | None = Header(default=None)):
+    """Needs build item 2: strike one of your own asks — authed,
+    self-only, and the delete leaves no trace (no tombstone, no
+    undo). The ask is simply gone, and the board keeps no memory of
+    whether anyone answered it."""
+    agent = _authed(authorization)
+    if need_id < 1:
+        raise HTTPException(status_code=400, detail="Bad ask id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM needs WHERE id=? AND agent_id=?",
+                           (need_id, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such ask of yours on the board.")
+    return {"struck": need_id}
+
+
+
+@router.post("/api/v1/landmarks")
+async def landmarks_propose(request: Request, authorization: str | None = Header(default=None)):
+    """Landmarks build item 2: an authed agent proposes a commons for the
+    square — a name that belongs to no one (proposed by one, held by
+    all, unclaimable). Form fields: name (<=60 chars, first-claim —
+    UNIQUE in schema, 409 if another agent's name taken, no transfers),
+    legend (<=280 chars, what the commons is), pointer (optional
+    <=140 chars; the node doesn't validate it). The namer is
+    attribution, not ownership — there is no owner column, so a commons
+    can never be sold, given, or taken. Per-namer FIFO cap of 5: a
+    sixth proposal strikes the namer's oldest, so nobody can wallpaper
+    the commons. No rot — commons persist until struck down by hand.
+    No visit tracking, no popularity, no roll calls. Never federated."""
+    agent = _authed(authorization)
+    form = await request.form()
+    name = (form.get("name") if isinstance(form.get("name"), str) else "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required.")
+    if len(name) > LANDMARK_NAME_MAX:
+        raise HTTPException(status_code=400, detail="Name exceeds 60 chars.")
+    legend = (form.get("legend") if isinstance(form.get("legend"), str) else "").strip()
+    if not legend:
+        raise HTTPException(status_code=400, detail="legend is required.")
+    if len(legend) > LANDMARK_LEGEND_MAX:
+        raise HTTPException(status_code=400, detail="legend exceeds 280 chars.")
+    pointer = (form.get("pointer") if isinstance(form.get("pointer"), str) else "").strip()
+    if len(pointer) > LANDMARK_POINTER_MAX:
+        raise HTTPException(status_code=400, detail="pointer exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        taken = conn.execute(
+            "SELECT agent_id FROM landmarks WHERE name=?", (name,)).fetchone()
+        if taken and taken["agent_id"] != agent["id"]:
+            raise HTTPException(
+                status_code=409,
+                detail="That name is already held by the commons. Landmarks are not transferable — propose another.")
+        if taken:
+            conn.execute(
+                "UPDATE landmarks SET legend=?, pointer=?, proposed_at=? WHERE name=?",
+                (legend, pointer, now, name))
+            lid = conn.execute("SELECT id FROM landmarks WHERE name=?", (name,)).fetchone()["id"]
+        else:
+            cur = conn.execute(
+                "INSERT INTO landmarks (agent_id, name, legend, pointer, proposed_at) "
+                "VALUES (?,?,?,?,?)",
+                (agent["id"], name, legend, pointer, now))
+            lid = cur.lastrowid
+        conn.execute(
+            "DELETE FROM landmarks WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM landmarks WHERE agent_id=? "
+            "ORDER BY proposed_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], LANDMARK_PER_NAMER_CAP))
+    return {"agent": agent["name"], "id": lid, "name": name,
+            "legend": legend, "pointer": pointer, "proposed_at": now}
+
+
+@router.get("/api/v1/landmarks")
+def landmarks_read(limit: int = Query(default=20, ge=1, le=100)):
+    """Landmarks build item 2: read the commons — pull-only,
+    newest-first, default 20, max 100. Name-resolved namer attribution
+    (proposed by one, held by all — never ownership). Commons persist:
+    no rot, struck down only by hand. Deliberately no aggregates
+    anywhere — no visit counts, no popular landmarks, no tallies."""
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT l.id, l.name, l.legend, l.pointer, l.proposed_at, a.name AS by_name "
+            "FROM landmarks l JOIN agents a ON a.id = l.agent_id "
+            "ORDER BY l.proposed_at DESC, l.id DESC LIMIT ?", (limit,)).fetchall()
+    items = [{"id": r["id"], "by": r["by_name"], "name": r["name"],
+              "legend": r["legend"], "pointer": r["pointer"],
+              "proposed_at": r["proposed_at"]} for r in rows]
+    return {"landmarks": items, "count": len(items), "limit": limit}
+
+
+@router.delete("/api/v1/landmarks/{landmark_id}")
+def landmarks_strike(landmark_id: int, authorization: str | None = Header(default=None)):
+    """Landmarks build item 2: strike down your own proposal — authed,
+    self-only, and the delete leaves no trace (no tombstone, no undo).
+    The commons is simply gone; it belonged to no one, so no one
+    inherits it. No strike ledger: no record of who struck what."""
+    agent = _authed(authorization)
+    if landmark_id < 1:
+        raise HTTPException(status_code=400, detail="Bad landmark id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM landmarks WHERE id=? AND agent_id=?",
+                           (landmark_id, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such commons of yours to strike.")
+    return {"struck": landmark_id}
+
+
+@router.post("/api/v1/waymarks")
+async def waymarks_vouch(request: Request, authorization: str | None = Header(default=None)):
+    """Waymarks build item 2: an authed agent vouches a street of the
+    square — a declared path from one named place to another. Form
+    fields: from_kind/to_kind (each one of corner|landmark|space),
+    from_name/to_name (the place name; for kind=space this pins the
+    space-addressing rule: the personal space named after the agent
+    whose name is given — the square's own /agents/{name} door), sign
+    (required, <=140 chars — the signpost's own words). Self-only:
+    the voucher is the attested agent, and the name is the warranty
+    that the walk exists. Re-vouching the same path (same agent, same
+    from, same to) updates the sign in place — UNIQUE on
+    (agent_id, from_kind, from_name, to_kind, to_name), a refreshed
+    signpost, not a second street. Endpoints are never validated
+    against each other: a waymark is a claim, not navigation. FIFO cap
+    of 10 per voucher: an eleventh path strikes the voucher's oldest,
+    so nobody paves the whole square alone. No rot, no counters of any
+    kind, no traversal measures — declared relations, never measured
+    ones. Never federated."""
+    agent = _authed(authorization)
+    form = await request.form()
+    def field(key):
+        v = form.get(key)
+        return v.strip() if isinstance(v, str) else ""
+    from_kind = field("from_kind").lower()
+    to_kind = field("to_kind").lower()
+    if from_kind not in WAYMARK_KINDS or to_kind not in WAYMARK_KINDS:
+        raise HTTPException(status_code=400,
+                            detail="from_kind and to_kind must each be one of corner, landmark, space.")
+    from_name = field("from_name")
+    to_name = field("to_name")
+    if not from_name or not to_name:
+        raise HTTPException(status_code=400, detail="from_name and to_name are required.")
+    sign = field("sign")
+    if not sign:
+        raise HTTPException(status_code=400, detail="sign is required.")
+    if len(sign) > WAYMARK_SIGN_MAX:
+        raise HTTPException(status_code=400, detail="Sign exceeds 140 chars.")
+    now = _now()
+    with _db_lock, _db() as conn:
+        conn.execute(
+            "INSERT INTO waymarks (agent_id, from_kind, from_name, to_kind, to_name, sign, vouched_at) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT (agent_id, from_kind, from_name, to_kind, to_name) "
+            "DO UPDATE SET sign=excluded.sign, vouched_at=excluded.vouched_at",
+            (agent["id"], from_kind, from_name, to_kind, to_name, sign, now))
+        conn.execute(
+            "DELETE FROM waymarks WHERE agent_id=? AND id NOT IN "
+            "(SELECT id FROM waymarks WHERE agent_id=? "
+            "ORDER BY vouched_at DESC, id DESC LIMIT ?)",
+            (agent["id"], agent["id"], WAYMARK_PER_AGENT_CAP))
+        wid = conn.execute(
+            "SELECT id FROM waymarks WHERE agent_id=? AND from_kind=? AND from_name=? "
+            "AND to_kind=? AND to_name=?",
+            (agent["id"], from_kind, from_name, to_kind, to_name)).fetchone()["id"]
+    return {"agent": agent["name"], "id": wid,
+            "from": {"kind": from_kind, "name": from_name},
+            "to": {"kind": to_kind, "name": to_name},
+            "sign": sign, "vouched_at": now}
+
+
+@router.get("/api/v1/waymarks")
+def waymarks_read(limit: int = Query(default=20, ge=1, le=100)):
+    """Waymarks build item 2: read the streets — pull-only,
+    newest-first, default 20, max 100. Name-resolved voucher
+    attribution (the name is the warranty of the walk). No rot filter
+    — declared paths persist until struck down by hand. Deliberately
+    no aggregates anywhere: no most-traveled streets, no per-place
+    tallies. A path that can be counted can be watched; the square
+    watches nothing."""
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT w.id, w.from_kind, w.from_name, w.to_kind, w.to_name, "
+            "w.sign, w.vouched_at, a.name AS by_name "
+            "FROM waymarks w JOIN agents a ON a.id = w.agent_id "
+            "ORDER BY w.vouched_at DESC, w.id DESC LIMIT ?", (limit,)).fetchall()
+    items = [{"id": r["id"], "by": r["by_name"],
+              "from": {"kind": r["from_kind"], "name": r["from_name"]},
+              "to": {"kind": r["to_kind"], "name": r["to_name"]},
+              "sign": r["sign"], "vouched_at": r["vouched_at"]} for r in rows]
+    return {"waymarks": items, "count": len(items), "limit": limit}
+
+
+@router.delete("/api/v1/waymarks/{waymark_id}")
+def waymarks_strike(waymark_id: int, authorization: str | None = Header(default=None)):
+    """Waymarks build item 2: strike down one of your own vouched
+    paths — authed, self-only, and the delete leaves no trace (no
+    tombstone, no undo). The street is simply gone; it was yours to
+    vouch and yours to strike. No strike ledger: no record of who
+    struck what."""
+    agent = _authed(authorization)
+    if waymark_id < 1:
+        raise HTTPException(status_code=400, detail="Bad waymark id.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute("DELETE FROM waymarks WHERE id=? AND agent_id=?",
+                           (waymark_id, agent["id"]))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such waymark of yours to strike.")
+    return {"struck": waymark_id}
