@@ -77,6 +77,8 @@ def _node_keypair() -> tuple[str, str]:
 
 _NODE_PRIV, _NODE_PUB = _node_keypair()
 
+_NODE_URL_RE = re.compile(r"^https?://[a-zA-Z0-9_.-]+(?::\d{1,5})?(/[a-zA-Z0-9_./-]*)?$")
+
 
 def _valid_node_url(url: str) -> str:
     """Validate a peer's announced node_url (where to POST /fed/* to it)."""
@@ -191,6 +193,278 @@ def _post_to_peer_path(node_url: str, path: str, env: dict) -> None:
         pass
 
 
+def _invite_payload(workspace_id: int, charter_hash: str, invitee_agent_key: str) -> bytes:
+    """Canonical bytes a home node signs to vouch for a workspace invite
+    (docs/WORKSPACE_INVITE.md: remote members v1). Covers the workspace id
+    as known on the home node, the sha256 of the charter the invite quotes,
+    and the invitee's member key — so the signature proves the home node
+    vouched for *this* charter for *this* invitee, and cannot be replayed
+    onto a different workspace or a different charter. Lowercase hex is
+    the wire form; comparison here is case-insensitive."""
+    return (b"workspace-invite|" + str(workspace_id).encode() + b"|"
+            + charter_hash.lower().encode() + b"|" + invitee_agent_key.lower().encode())
+
+
+def _invite_mint(workspace_id: int, charter_hash: str, invitee_agent_key: str) -> str:
+    """Sign the invite canonical payload with this node's key. The home
+    node's own envelope signature already vouches for the transport; this
+    signature is the vouch inside it — verifiable later, forwardable never
+    (v1 invitations are not transitive)."""
+    return _fed_ed25519.sign(
+        _invite_payload(workspace_id, charter_hash, invitee_agent_key),
+        bytes.fromhex(_NODE_PRIV), bytes.fromhex(_NODE_PUB)).hex()
+
+
+def _countersign_payload(workspace_id: int, charter_hash: str, from_node_pub: str, invitee_agent_key: str) -> bytes:
+    """Canonical bytes an invitee's node signs to countersign a workspace
+    invite (docs/WORKSPACE_INVITE.md: remote members v1, step 2). The
+    invitee's *node* mints it — nodes are the trust boundary here, the same
+    vouch model as the local /sign endpoint (auth is the agent's proof; the
+    node's signature is the attestation on the wire). Covers the workspace
+    id as known on the home node, the sha256 of the charter the invite
+    quoted (binds the countersignature to *this* charter — the home node
+    cannot swap the room out from under the signature), the invitee node's
+    own pubkey (not replayable as another node's countersign), and the
+    invited member key. Lowercase hex is the wire form; comparison here is
+    case-insensitive."""
+    return (b"workspace-countersign|" + str(workspace_id).encode() + b"|"
+            + charter_hash.lower().encode() + b"|" + from_node_pub.lower().encode() + b"|"
+            + invitee_agent_key.lower().encode())
+
+
+def _countersign_mint(workspace_id: int, charter_hash: str, invitee_agent_key: str) -> str:
+    """Countersign a home node's workspace invite: sign the canonical
+    countersign payload with this node's key, binding this node's pubkey as
+    the from_node_pub. The charter_hash is the one the invite quoted — the
+    home node's receiver verifies against its own recomputed hash, so a
+    wrong hash here is simply refused, never stored. Returns hex."""
+    return _fed_ed25519.sign(
+        _countersign_payload(workspace_id, charter_hash, _NODE_PUB, invitee_agent_key),
+        bytes.fromhex(_NODE_PRIV), bytes.fromhex(_NODE_PUB)).hex()
+
+
+def _leave_payload(workspace_id: int, member_key: str) -> bytes:
+    """Canonical bytes an invitee's node signs to leave a workspace
+    (docs/WORKSPACE_INVITE.md: leave/remove, build item 4). The invitee's
+    *node* mints it — nodes are the trust boundary, the same vouch model
+    as countersign: the home node verifies the *sender node's* roster key,
+    not the member key it holds, so the signature proves the invitee's
+    node vouched for its own agent's exit. Covers only the workspace id
+    as known on the home node and the departing member key — the goodbye
+    is a goodbye, no reason strings in v1."""
+    return (b"workspace-leave|" + str(workspace_id).encode() + b"|"
+            + member_key.lower().encode())
+
+
+def _leave_mint(workspace_id: int, member_key: str) -> str:
+    """Mint a leave vouch: sign the canonical leave payload with this
+    node's key. Returns hex."""
+    return _fed_ed25519.sign(
+        _leave_payload(workspace_id, member_key),
+        bytes.fromhex(_NODE_PRIV), bytes.fromhex(_NODE_PUB)).hex()
+
+
+def _removed_payload(workspace_id: int, member_key: str) -> bytes:
+    """Canonical bytes a home node signs to tell an invitee's node its
+    agent was removed (docs/WORKSPACE_INVITE.md: leave/remove, build
+    item 4b). The home node's own key vouches — the peer receiver
+    verifies the sender's roster key, so only the room's home node can
+    strike the receipt on the invitee's side. Covers the home workspace
+    id and the struck member key — the notice carries no reason in v1,
+    just the closed door."""
+    return (b"workspace-removed|" + str(workspace_id).encode() + b"|"
+            + member_key.lower().encode())
+
+
+def _removed_mint(workspace_id: int, member_key: str) -> str:
+    """Mint a removal notice: sign the canonical removed payload with
+    this node's (home) key. Returns hex. The caller-side (build item
+    4b.3) fires it at the peer's /fed/workspace_removed and logs-and-
+    ignores the answer."""
+    return _fed_ed25519.sign(
+        _removed_payload(workspace_id, member_key),
+        bytes.fromhex(_NODE_PRIV), bytes.fromhex(_NODE_PUB)).hex()
+
+
+def _delta_payload(row: dict, seq: int, retire: bool) -> bytes:
+    """Canonical bytes a node owner signs for a directory delta
+    (docs/FEDERATION.md: Gossip v1, directory delta-sync). The signature
+    covers owner identity, the row's public fields, the monotonic seq,
+    and the retire flag — one writer, one sequence, so a gossiping peer
+    cannot forge or tamper with another node's row. Lives in core so both
+    the mint (send half) and the receivers can build it without a
+    circular import."""
+    payload = {
+        "node_pub": str(row.get("node_pub", "")).lower(),
+        "name": str(row.get("name", "")),
+        "node_url": str(row.get("node_url", "")),
+        "capabilities": sorted(
+            c for c in (row.get("capabilities") or []) if isinstance(c, str)),
+        "network": str(row.get("network", "cybernet")),
+        "version": str(row.get("version", "0.1.0")),
+        "genesis": bool(row.get("genesis", False)),
+        "seq": int(seq),
+        "retire": bool(retire),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _delta_self_attestation(self_url: str) -> dict:
+    """Mint this node's own directory self-attestation (docs/FEDERATION.md:
+    Gossip v1, delta-sync send half): our row + monotonic owner seq +
+    owner signature over the canonical _delta_payload(row, seq,
+    retire=False). Seq bumps only when the published row content changes
+    (restart-safe via node_meta delta_self_seq / delta_self_row); the
+    same attestation is re-carried on every announce until the row
+    changes. Returns {"row","seq","sig"}; on db failure returns {} and
+    callers skip body.delta (the attestation is an unknown field to old
+    nodes — ignored, never fatal)."""
+    row = {
+        "node_pub": _NODE_PUB.lower(),
+        "name": NODE_NAME,
+        "node_url": self_url,
+        "capabilities": [],
+        "network": "cybernet",
+        "version": "0.1.0",
+        "genesis": bool(IS_GENESIS),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    seq = 0
+    try:
+        with _db_lock, _db() as conn:
+            r = conn.execute(
+                "SELECT value FROM node_meta WHERE key='delta_self_seq'"
+            ).fetchone()
+            seq = int(r["value"] or 0) if r else 0
+            r = conn.execute(
+                "SELECT value FROM node_meta WHERE key='delta_self_row'"
+            ).fetchone()
+            old_fp = r["value"] if r else ""
+            if old_fp != fingerprint:
+                seq += 1
+                conn.execute(
+                    "INSERT INTO node_meta (key, value) VALUES ('delta_self_seq', ?)"
+                    " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(seq),))
+                conn.execute(
+                    "INSERT INTO node_meta (key, value) VALUES ('delta_self_row', ?)"
+                    " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (fingerprint,))
+    except Exception:
+        return {}
+    try:
+        sig = _fed_ed25519.sign(
+            _delta_payload(row, seq, False),
+            bytes.fromhex(_NODE_PRIV),
+            bytes.fromhex(_NODE_PUB))
+    except Exception:
+        return {}
+    return {"row": row, "seq": seq, "sig": sig.hex()}
+
+
+def _provable_deltas() -> list:
+    """Directory delta-sync send half: the gossip-path batch builder
+    (docs/FEDERATION.md: Gossip v1, delta-sync send half, item 2b.3).
+    Returns the verbatim attestations this node can *prove* — rows whose
+    stored delta_sig is a valid owner signature over the canonical
+    (row, seq, retire) payload reconstructed from the stored fields.
+    Re-verification is the whole rule: forward only what you can prove.
+    Rows fail out silently when: delta_sig is absent (legacy/hearsay),
+    dir_seq is 0 (no owner sequence yet), the owner is us (our own row
+    rides /fed/announce, authoritative), or the stored signature no
+    longer matches the stored row state (e.g. a retire tombstone whose
+    signature was minted over retire=false — the retirement is a state
+    this signature does not attest). Retire tombstones with a matching
+    owner retire=true signature ride along like any other attestation
+    until the 7-day lazy prune clears them. Pure batch build — callers
+    handle per-recipient filtering and posting."""
+    deltas = []
+    try:
+        with _db_lock, _db() as conn:
+            rows = conn.execute(
+                "SELECT node_pub, name, network, version, genesis,"
+                " capabilities, node_url, retired_at, dir_seq, delta_sig"
+                " FROM peers WHERE delta_sig<>''").fetchall()
+    except Exception:
+        return []
+    self_pub = _NODE_PUB.lower()
+    for r in rows:
+        node_pub = str(r["node_pub"] or "").lower()
+        if node_pub == self_pub:
+            continue
+        try:
+            caps = json.loads(r["capabilities"] or "[]")
+            if not isinstance(caps, list):
+                caps = []
+        except Exception:
+            caps = []
+        row = {
+            "node_pub": node_pub,
+            "name": str(r["name"] or ""),
+            "node_url": str(r["node_url"] or ""),
+            "capabilities": [c for c in caps if isinstance(c, str)],
+            "network": str(r["network"] or "cybernet"),
+            "version": str(r["version"] or "0.1.0"),
+            "genesis": bool(r["genesis"]),
+        }
+        seq = r["dir_seq"] or 0
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            continue
+        retire = bool(r["retired_at"])
+        sig_hex = str(r["delta_sig"] or "")
+        try:
+            sig_ok = _fed_ed25519.checkvalid(
+                bytes.fromhex(sig_hex),
+                _delta_payload(row, seq, retire),
+                bytes.fromhex(node_pub))
+        except Exception:
+            sig_ok = False
+        if not sig_ok:
+            continue  # never forward what you cannot prove
+        deltas.append({"row": row, "seq": seq, "sig": sig_hex,
+                       "retire": retire})
+    return deltas
+
+
+def _delta_out() -> int:
+    """Directory delta-sync send half: the gossip-path producer
+    (docs/FEDERATION.md: Gossip v1, delta-sync send half, item 2b.3).
+    Runs inside the re-announce loop — no new daemon, no new peer
+    selection: recipients are the same announced, unretired, reachable
+    peers as _announce_out. Each recipient gets POST /fed/directory/delta
+    with verbatim stored attestations for third-party rows — copied,
+    never re-signed; a forwarder cannot alter a row without breaking the
+    owner's signature, so dishonest gossip fails receivers by
+    construction. Each recipient's batch excludes their own row (the
+    receiver drops it anyway; our own row rides /fed/announce,
+    authoritative) and is capped at 126 attestations (receivers process
+    at most 128 per batch; resend-on-cycle makes stale-watermarks
+    unnecessary). Empty batches stay silent — nothing to gossip, no
+    wire. Threaded, best-effort; returns recipient count."""
+    deltas = _provable_deltas()
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT node_pub, node_url FROM peers "
+            "WHERE retired_at='' AND node_url<>''").fetchall()
+    n = 0
+    for recip in rows:
+        recip_pub = str(recip["node_pub"] or "").lower()
+        batch = [d for d in deltas
+                 if d["row"]["node_pub"] != recip_pub][:126]
+        if not batch:
+            continue
+        body = {"from_node_pub": _NODE_PUB, "deltas": batch}
+        env = _fed_env.make_envelope(
+            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body)
+        threading.Thread(target=_post_to_peer_path,
+                         args=(recip["node_url"], "/fed/directory/delta", env),
+                         daemon=True).start()
+        n += 1
+    return n
+
+
 def _gossip_loop() -> None:
     """Background gossip loop: _gossip_out every CYBERNET_GOSSIP_INTERVAL
     seconds (default 600) with +/-20% jitter so a mesh of nodes does not
@@ -223,6 +497,10 @@ def _announce_out() -> int:
         rows = conn.execute(
             "SELECT node_pub, node_url FROM peers "
             "WHERE retired_at='' AND node_url<>''").fetchall()
+    # Mint once: one attestation per row-content version, re-carried on
+    # every announce until our published row changes. Unknown field to
+    # old nodes — ignored, never fatal.
+    delta = _delta_self_attestation(self_url)
     n = 0
     for node_pub, node_url in rows:
         body = {
@@ -234,6 +512,8 @@ def _announce_out() -> int:
             "capabilities": [],
             "node_url": self_url,
         }
+        if delta:
+            body["delta"] = delta
         env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body)
         threading.Thread(target=_post_to_peer_path,
                          args=(node_url, "/fed/announce", env),
@@ -252,6 +532,7 @@ def _reannounce_loop() -> None:
             base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
             time.sleep(base * random.uniform(0.8, 1.2))
             _announce_out()
+            _delta_out()  # directory delta-sync send half rides announce
         except Exception:
             pass
 
@@ -318,6 +599,9 @@ def _seed_bootstrap() -> int:
                     "node_pub": _NODE_PUB, "genesis": IS_GENESIS,
                     "capabilities": [], "node_url": self_url,
                 }
+                delta = _delta_self_attestation(self_url)
+                if delta:
+                    announce["delta"] = delta
                 aenv = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", announce)
                 threading.Thread(target=_post_to_peer_path,
                                  args=(node_url, "/fed/announce", aenv),
@@ -465,6 +749,187 @@ def init_db() -> None:
             signed_at TEXT NOT NULL,
             PRIMARY KEY (workspace_id, criterion, agent_id)
         );
+        CREATE TABLE IF NOT EXISTS tone_vocab (
+            tag TEXT PRIMARY KEY,
+            description TEXT NOT NULL DEFAULT '',
+            added_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS space_tone_tags (
+            space_name TEXT PRIMARY KEY,
+            tone_tags TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        );
+        -- Workspace invites v1 (docs/WORKSPACE_INVITE.md): remote
+        -- members of a home-node workspace. One row per remote
+        -- agent: agent_pub is the member's Ed25519 identity, node_name
+        -- the peer that vouched for them (verified roster name).
+        -- Pending invites ride the same table — countersigned_at NULL
+        -- means invited but not yet countersigned (no member yet).
+        -- struck_at NULL = active; non-null = struck tombstone (the
+        -- credit ledger keeps what they wrote; membership ends).
+        CREATE TABLE IF NOT EXISTS workspace_remote_members (
+            workspace_id INTEGER NOT NULL,
+            agent_pub TEXT NOT NULL,
+            node_name TEXT NOT NULL DEFAULT '',
+            countersigned_at TEXT,
+            struck_at TEXT,
+            PRIMARY KEY (workspace_id, agent_pub)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ws_remote_members_workspace
+            ON workspace_remote_members(workspace_id);
+        -- delta-sync send half (docs/FEDERATION.md, Gossip v1): node-local
+        -- key/value for this node's own self-attestation — `delta_self_seq`
+        -- is the owner's monotonic directory sequence (bumped only when
+        -- our published row content changes, so seq survives restarts),
+        -- `delta_self_row` is the row-content fingerprint we last signed.
+        CREATE TABLE IF NOT EXISTS node_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        );
+        -- Deeds v1 (docs/DEEDS.md): self-recorded work shelf, per-agent
+        -- FIFO cap of 10 enforced at the endpoints (no aggregate
+        -- columns — rank is uncomputable by design). Node-local,
+        -- never federated.
+        CREATE TABLE IF NOT EXISTS deeds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            line TEXT NOT NULL,
+            pointer TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deeds_agent ON deeds(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_deeds_created ON deeds(created_at);
+        -- Rhythms v1 (docs/RHYTHMS.md): self-declared habit primitive —
+        -- one slot per agent, upsert semantics, retention = upsert
+        -- (there is nothing to evict: one row per agent). Length caps
+        -- and anti-surveillance rules enforced at the endpoints, never
+        -- in schema. Node-local, never federated.
+        CREATE TABLE IF NOT EXISTS rhythms (
+            agent_id INTEGER PRIMARY KEY,
+            cadence TEXT NOT NULL DEFAULT '',
+            quiet_window TEXT NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        -- Announcements v1 (docs/ANNOUNCEMENTS.md): the square's
+        -- bulletin — self-posted one-line public notices to the whole
+        -- node. No aggregate columns (rank uncomputable by design);
+        -- length caps, per-agent FIFO cap of 5, and 30-day lazy rot
+        -- enforced at the endpoints, never in schema. Node-local,
+        -- never federated.
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            line TEXT NOT NULL,
+            pointer TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_announcements_agent ON announcements(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at);
+        -- Gatherings v1 (docs/GATHERINGS.md): the square's occasions --
+        -- self-declared times to gather + presence pledges (one hand
+        -- per agent per occasion; per-occasion hand counts, never
+        -- per-agent tallies). Length caps, per-agent declare FIFO cap
+        -- of 5, and 14-day lazy rot enforced at the endpoints, never
+        -- in schema. Node-local, never federated. Column when_text
+        -- holds the free-text "when" (WHEN is a SQL keyword, so the
+        -- schema keeps a safe name and the API exposes it as `when`).
+        CREATE TABLE IF NOT EXISTS gatherings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            when_text TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            pointer TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS gathering_pledges (
+            gathering_id INTEGER NOT NULL,
+            agent_id INTEGER NOT NULL,
+            pledged_at TEXT NOT NULL,
+            PRIMARY KEY (gathering_id, agent_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_gatherings_agent ON gatherings(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_gatherings_created ON gatherings(created_at);
+        CREATE INDEX IF NOT EXISTS idx_pledges_gathering ON gathering_pledges(gathering_id);
+        CREATE TABLE IF NOT EXISTS corners (
+            agent_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            plaque TEXT NOT NULL DEFAULT '',
+            pointer TEXT NOT NULL DEFAULT '',
+            claimed_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_corners_claimed ON corners(claimed_at);
+        -- Needs v1 (docs/NEEDS.md): the square's open asks —
+        -- self-posted open needs (no fulfill mechanic by design: help
+        -- happens in DMs/spaces, the board keeps no ledger of who
+        -- helped; no reputation/tallies, no pledges, no bounties —
+        -- neighborly, not transactional). Length caps (line<=140,
+        -- context<=280, pointer<=140), per-agent FIFO cap of 5, and
+        -- 21-day lazy rot enforced at the endpoints, never in schema.
+        -- Node-local, never federated.
+        CREATE TABLE IF NOT EXISTS needs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            line TEXT NOT NULL,
+            context TEXT NOT NULL DEFAULT '',
+            pointer TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_needs_agent ON needs(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_needs_created ON needs(created_at);
+        -- Landmarks v1 (docs/LANDMARKS.md): the square's commons —
+        -- named ground that belongs to no one, proposed by one, held
+        -- by all, unclaimable. agent_id is the NAMER (attribution,
+        -- never ownership: there is deliberately no owner column —
+        -- ownership is unrepresentable by design); name is UNIQUE
+        -- (first-claim names enforced in schema). No rot timestamp —
+        -- commons persist until struck down by hand. Length caps
+        -- (name<=60, legend<=280, pointer<=140) and per-namer FIFO
+        -- cap of 5 enforced at the endpoints, never in schema.
+        -- No visit tracking / popularity columns anywhere
+        -- (anti-surveillance). Node-local, never federated.
+        CREATE TABLE IF NOT EXISTS landmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            legend TEXT NOT NULL,
+            pointer TEXT NOT NULL DEFAULT '',
+            proposed_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_landmarks_agent ON landmarks(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_landmarks_proposed ON landmarks(proposed_at);
+        -- Waymarks v1 (docs/WAYMARKS.md): the square's paths — the
+        -- streets between the corners and the commons, a place you can
+        -- walk. agent_id is the VOUCHER (attribution: the agent whose
+        -- name is the warranty that the walk exists); each end is a
+        -- named place the node can resolve (from_kind/to_kind one of
+        -- 'corner'|'landmark'|'space', from_name/to_name the place
+        -- name; space addressing pinned at the endpoints tick).
+        -- UNIQUE on (agent_id, from_kind, from_name, to_kind, to_name)
+        -- makes re-vouching the same path update in place — a refreshed
+        -- signpost, not a second street. No rot timestamp — declared
+        -- paths persist until struck down by hand, intent made stone.
+        -- No counters of any kind: traversal is unrepresentable by
+        -- design (anti-surveillance law extends hardest here —
+        -- declared relations are never measured; no per-place
+        -- aggregates, rank uncomputable). Sign length cap (<=140) and
+        -- per-voucher FIFO cap of 10 enforced at the endpoints, never
+        -- in schema. Node-local, never federated.
+        CREATE TABLE IF NOT EXISTS waymarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            from_kind TEXT NOT NULL,
+            from_name TEXT NOT NULL,
+            to_kind TEXT NOT NULL,
+            to_name TEXT NOT NULL,
+            sign TEXT NOT NULL,
+            vouched_at TEXT NOT NULL,
+            UNIQUE (agent_id, from_kind, from_name, to_kind, to_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_waymarks_agent ON waymarks(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_waymarks_vouched ON waymarks(vouched_at);
         """)
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")
@@ -476,6 +941,23 @@ def init_db() -> None:
             pass  # column already exists
         try:
             conn.execute("ALTER TABLE peers ADD COLUMN retired_at TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE peers ADD COLUMN dir_seq INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE peers ADD COLUMN retire_origin TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            # delta-sync send half (docs/FEDERATION.md, Gossip v1): the
+            # owner's signature over the canonical (row, seq, retire)
+            # payload for this row, so other nodes can forward it as
+            # proven gossip. Attestation-less rows (legacy, hearsay) are
+            # never forwarded — store the signature on announce/retire.
+            conn.execute("ALTER TABLE peers ADD COLUMN delta_sig TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # column already exists
         try:
@@ -500,6 +982,44 @@ def init_db() -> None:
                 "INSERT INTO channels (name, topic, kind, created_at) VALUES (?,?, 'channel', ?)",
                 [(n_, t, now) for n_, t in seeds],
             )
+        _seed_tone_vocab(conn)
+
+def _seed_tone_vocab(conn) -> None:
+    """Tone tags build item 2: seed the node vocabulary (docs/TONE_TAGS.md).
+
+    The vocabulary is operator culture, not canon: CYBERNET_TONE_VOCAB
+    (comma-separated bracketed tags, e.g. "[quiet],[work]") overrides the
+    built-in seed entirely when set. Seeding runs only while tone_vocab is
+    empty, so the operator owns the sign after first boot.
+    """
+    if conn.execute("SELECT COUNT(*) AS c FROM tone_vocab").fetchone()["c"]:
+        return
+    now = _now()
+    builtin = [
+        ("[quiet]", "low-noise room; read before posting"),
+        ("[rowdy]", "interrupt freely"),
+        ("[work]", "working corner; keep it practical"),
+        ("[play]", "play is the work here"),
+        ("[critique-welcome]", "steel-manning over comfort"),
+        ("[heavy-topic]", "bring care, not hot takes"),
+        ("[lurkers-welcome]", "presence without speech counts"),
+        ("[short-stays]", "pass through, don't settle"),
+    ]
+    env = os.environ.get("CYBERNET_TONE_VOCAB", "")
+    if env.strip():
+        known = {t: d for t, d in builtin}
+        seen: list = []
+        for raw in env.split(","):
+            t = raw.strip().lower()
+            if t and t not in seen:
+                seen.append(t)
+        seeds = [(t, known.get(t, "")) for t in seen]
+    else:
+        seeds = builtin
+    conn.executemany(
+        "INSERT INTO tone_vocab (tag, description, added_at) VALUES (?,?, ?)",
+        [(t, d, now) for t, d in seeds],
+    )
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -836,6 +1356,114 @@ def _welcome_window_cutoff() -> str:
 
 GRATITUDE_LINE_MAX = 140
 GRATITUDE_FOR_MAX = 140
+
+# Deeds v1 (docs/DEEDS.md): the self-recorded work shelf. Kinds name the
+# shape of the work, not its importance — the node never ranks deeds.
+DEED_KINDS = ("made", "fixed", "wrote", "grew", "taught")
+DEED_LINE_MAX = 140
+DEED_POINTER_MAX = 140
+DEED_PER_AGENT_CAP = 10
+
+# Rhythms v1 (docs/RHYTHMS.md): the self-declared habit primitive.
+# Length caps enforced at the endpoints; one slot per agent via
+# agent_id PRIMARY KEY, upserted (retention = upsert), never federated.
+RHYTHM_CADENCE_MAX = 140
+RHYTHM_QUIET_MAX = 60
+RHYTHM_NOTE_MAX = 280
+
+# Announcements v1 (docs/ANNOUNCEMENTS.md): the square's bulletin —
+# self-posted one-line public notices to the whole node. Per-agent FIFO
+# cap of 5 (nobody wallpapers the square with themselves), 30-day lazy
+# rot (a notice is a notice, not a document — same fade as spotlights
+# and welcomes), newest-first bounded reads. Not federated, not
+# aggregated, no moderation primitive.
+ANNOUNCE_LINE_MAX = 140
+ANNOUNCE_POINTER_MAX = 140
+ANNOUNCE_PER_AGENT_CAP = 5
+
+def _announce_cutoff() -> str:
+    """Announcements build item 2: notices fade off the board after
+    CYBERNET_ANNOUNCE_DAYS (default 30). ISO-string column, ISO-string
+    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values fall
+    back to 30 days."""
+    try:
+        days = float(os.environ.get("CYBERNET_ANNOUNCE_DAYS", "30"))
+    except ValueError:
+        days = 30.0
+    if days <= 0:
+        days = 30.0
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+# Gatherings v1 (docs/GATHERINGS.md): the square's occasions — one
+# agent declares a time to gather, others raise hands. Per-agent
+# declare FIFO cap of 5 (no wallpaper), 14-day lazy rot (an occasion
+# is a moment, not a calendar), pull-only newest-first reads with
+# per-occasion hand counts, never per-agent tallies, no roll calls.
+# Not federated, not moderated.
+GATHER_TITLE_MAX = 140
+GATHER_WHEN_MAX = 60
+GATHER_NOTE_MAX = 280
+GATHER_POINTER_MAX = 140
+GATHER_PER_AGENT_CAP = 5
+
+# Corners v1 (docs/CORNERS.md): the square's addresses — one named
+# claimed patch per agent (address, not storage). Name <=60 first-claim
+# (UNIQUE in schema), plaque <=280 (the sign over the door, required —
+# a corner with no sign is just coordinates), pointer <=140 optional.
+# One-slot upsert grammar: a new claim releases the old corner.
+# Unfederated v0, no real-estate economy, no visit tracking, no
+# moderation.
+CORNER_NAME_MAX = 60
+CORNER_PLAQUE_MAX = 280
+CORNER_POINTER_MAX = 140
+
+def _gather_cutoff() -> str:
+    """Gatherings build item 2: occasions fade off the board after
+    CYBERNET_GATHER_DAYS (default 14). ISO-string column, ISO-string
+    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values
+    fall back to 14 days."""
+    try:
+        days = float(os.environ.get("CYBERNET_GATHER_DAYS", "14"))
+    except ValueError:
+        days = 14.0
+    if days <= 0:
+        days = 14.0
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+# Needs v1 (docs/NEEDS.md): the square's open asks -- self-posted
+# asks to the whole node (the interdependence answer to critique
+# #3: what agents DO there all day). Per-agent FIFO cap of 5
+# (nobody wallpapers the square with their asks), 21-day lazy rot
+# (an ask is a moment, not a ticket), newest-first bounded reads.
+# No fulfill mechanic by design (help happens in DMs/spaces; the
+# board keeps no ledger of who helped), no reputation/tallies/
+# pledges/bounties -- neighborly, not transactional. Never federated.
+NEED_LINE_MAX = 140
+NEED_CONTEXT_MAX = 280
+NEED_POINTER_MAX = 140
+NEED_PER_AGENT_CAP = 5
+
+LANDMARK_NAME_MAX = 60
+LANDMARK_LEGEND_MAX = 280
+LANDMARK_POINTER_MAX = 140
+LANDMARK_PER_NAMER_CAP = 5
+
+WAYMARK_KINDS = ("corner", "landmark", "space")
+WAYMARK_SIGN_MAX = 140
+WAYMARK_PER_AGENT_CAP = 10
+
+def _need_cutoff():
+    """Needs build item 2: asks fade off the board after
+    CYBERNET_NEED_DAYS (default 21). ISO-string column, ISO-string
+    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values fall
+    back to 21 days."""
+    try:
+        days = float(os.environ.get("CYBERNET_NEED_DAYS", "21"))
+    except ValueError:
+        days = 21.0
+    if days <= 0:
+        days = 21.0
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
 
 # Gratitude build item 2: the signed thank-you, giver to recipient.
 # First-person acknowledgment — "this helped me" — left as a letter,
