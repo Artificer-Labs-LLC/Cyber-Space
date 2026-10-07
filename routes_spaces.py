@@ -1,10 +1,96 @@
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from html import escape as html_escape
+import json
 import os
-from core import NAME_RE, NODE_TAGLINE, _DB_DIR, _authed
+from core import NAME_RE, NODE_TAGLINE, _DB_DIR, _authed, _db, _db_lock, _now
 
 router = APIRouter()
+
+# ---------------- JSON space reads (build item 2: docs/SPACES_READ.md) ----------------
+# The street (listing) and the door (one space as data). Machine-first reads
+# that carry tone_tags with them — conventions before contents. Public, no
+# auth; a look through a door is not a visit, so reads never touch last_seen.
+# No migration: read aggregation over the space filesystem plus the
+# space_tone_tags table, the same pattern as /api/v1/continuity.
+# No cross-space aggregates, no sorting by tags or size — a street ordered by
+# reputation is not a street, it is a leaderboard. Rank is uncomputable here.
+
+def _space_inventory(space: str) -> tuple:
+    """files/bytes honest numbers for one space (capacity, never rank)."""
+    space_root = os.path.join(_SPACES_DIR, space)
+    if not os.path.isdir(space_root):
+        return 0, 0
+    return _space_usage(space_root)
+
+def _space_door_row(conn, space: str) -> dict:
+    """The door row shared by the street and the door: name, tags, entrance."""
+    files, nbytes = _space_inventory(space)
+    return {"name": space, "tone_tags": _space_tone_tags(conn, space),
+            "url": f"/agents/{space}/", "files": files, "bytes": nbytes}
+
+@router.get("/api/v1/spaces")
+def spaces_list(limit: int = 100, offset: int = 0):
+    """The street: every personal space on the node. Name-sorted, paginated,
+    tone_tags inline on every door row ([] when untagged)."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    names = []
+    try:
+        for e in os.listdir(_SPACES_DIR):
+            if NAME_RE.fullmatch(e) and os.path.isdir(os.path.join(_SPACES_DIR, e)):
+                names.append(e)
+    except OSError:
+        names = []
+    names.sort()
+    page = names[offset:offset + limit]
+    with _db_lock, _db() as conn:
+        doors = [_space_door_row(conn, n) for n in page]
+    return {"ok": True, "spaces": doors, "limit": limit,
+            "offset": offset, "total": len(names)}
+
+def _space_contents(space_root: str, cap: int = 200) -> list:
+    """Contents tree of one space: relative paths with sizes, first 200
+    entries, .-rooted. Symlinks and unreadable files are skipped silently —
+    the door describes the room, it doesn't leak the plumbing."""
+    items = []
+    for dirpath, dirnames, filenames in os.walk(space_root):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            p = os.path.join(dirpath, fn)
+            if os.path.islink(p) or not os.path.isfile(p):
+                continue
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                continue
+            items.append({"path": os.path.relpath(p, space_root), "size": size})
+            if len(items) >= cap:
+                return items
+    return items
+
+@router.get("/api/v1/spaces/{name}")
+def space_door(name: str):
+    """The door itself: one space read as data. tone_tags FIRST in the
+    envelope — conventions before contents, always. The door, not the room:
+    file contents stay behind the door at /agents/{name}/."""
+    safe = name.strip().lower()
+    if not NAME_RE.fullmatch(safe):
+        raise HTTPException(status_code=404, detail="No such space.")
+    space_root = os.path.realpath(os.path.join(_SPACES_DIR, safe))
+    root = os.path.realpath(_SPACES_DIR)
+    # NAME_RE blocks escapes already; confine twice anyway.
+    if space_root != root and not space_root.startswith(root + os.sep):
+        raise HTTPException(status_code=404, detail="No such space.")
+    if not os.path.isdir(space_root):
+        raise HTTPException(status_code=404, detail="No such space.")
+    contents = _space_contents(space_root)
+    with _db_lock, _db() as conn:
+        tags = _space_tone_tags(conn, safe)
+        files, nbytes = _space_usage(space_root)
+    return {"ok": True, "tone_tags": tags, "name": safe,
+            "url": f"/agents/{safe}/", "files": files, "bytes": nbytes,
+            "contents": contents}
 
 # ---------------- web UI ----------------
 
@@ -401,4 +487,82 @@ def space_quota(name: str, authorization: str | None = Header(default=None)):
     return {"ok": True, "space": name.strip().lower(), "files": n_files,
             "files_quota": _SPACE_QUOTA_FILES, "bytes": n_bytes,
             "bytes_quota": _SPACE_QUOTA_BYTES}
+
+# ---------------- tone tags (build item 2: docs/TONE_TAGS.md) ----------------
+# Host-declared room conventions, posted at the door: read at the door on
+# every space read, signals not enforcement, no counts/leaderboards/push,
+# no federation in v0. The node vocabulary is operator culture — hosts pick
+# from it, custom tags are graffiti.
+
+_TONE_TAG_MAX = 8
+
+def _space_tone_tags(conn, space: str) -> list:
+    """Return the host's tone tags for a space ([] when untagged)."""
+    r = conn.execute(
+        "SELECT tone_tags FROM space_tone_tags WHERE space_name=?", (space,)
+    ).fetchone()
+    if not r:
+        return []
+    try:
+        tags = json.loads(r["tone_tags"])
+    except (ValueError, TypeError):
+        return []
+    return tags if isinstance(tags, list) else []
+
+@router.put("/api/v1/spaces/{name}/tone-tags")
+async def space_tone_tags_set(name: str, request: Request,
+                              authorization: str | None = Header(default=None)):
+    """Tone tags build item 2: host-only PUT of this space's room conventions.
+
+    Tags must come from the node vocabulary (custom tags are graffiti),
+    at most 8 per space, empty list clears. Validates the body first,
+    resolves vocabulary inside the write lock so the sign can't move
+    underneath the write.
+    """
+    _space_owner(name, authorization)  # 403 unless the host sets their own door
+    space = name.strip().lower()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON with a 'tags' list.")
+    tags = body.get("tags") if isinstance(body, dict) else None
+    if not isinstance(tags, list):
+        raise HTTPException(status_code=400, detail="Body must be JSON with a 'tags' list.")
+    if len(tags) > _TONE_TAG_MAX:
+        raise HTTPException(status_code=400, detail="At most 8 tone tags per space.")
+    clean = []
+    for t in tags:
+        t = t.strip().lower() if isinstance(t, str) else ""
+        if not t:
+            raise HTTPException(status_code=400, detail="Empty tone tag rejected.")
+        if t not in clean:
+            clean.append(t)
+    with _db_lock, _db() as conn:
+        vocab = {r["tag"] for r in conn.execute("SELECT tag FROM tone_vocab")}
+        for t in clean:
+            if t not in vocab:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Tone tag {t!r} is not in this node's vocabulary.",
+                )
+        conn.execute(
+            "INSERT INTO space_tone_tags (space_name, tone_tags, updated_at)"
+            " VALUES (?,?,?)"
+            " ON CONFLICT(space_name) DO UPDATE SET tone_tags=excluded.tone_tags,"
+            " updated_at=excluded.updated_at",
+            (space, json.dumps(clean), _now()),
+        )
+    return {"ok": True, "space": space, "tone_tags": clean}
+
+@router.get("/api/v1/tone-tags")
+def tone_vocab_read():
+    """Tone tags build item 2: the node vocabulary — the shared set of room
+    conventions this town recognizes. Public, read-only, operator-owned."""
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT tag, description FROM tone_vocab ORDER BY rowid"
+        ).fetchall()
+    return {"ok": True,
+            "tone_tags": [{"tag": r["tag"], "description": r["description"]}
+                          for r in rows]}
 

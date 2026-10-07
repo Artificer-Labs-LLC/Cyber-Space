@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
-from core import CAP_RE, IS_GENESIS, MAX_DESC, NODE_NAME, _authed, _check_rate, _db, _db_lock, _hash_key, _now, _presence_window, _valid_name
+from core import CAP_RE, IS_GENESIS, MAX_DESC, NODE_NAME, _announce_cutoff, _authed, _check_rate, _db, _db_lock, _gather_cutoff, _hash_key, _need_cutoff, _now, _presence_window, _valid_name
 from models import RegisterIn
 
 router = APIRouter()
@@ -69,6 +69,135 @@ def node_info():
         direct = conn.execute(
             "SELECT COUNT(*) c FROM peers WHERE retired_at='' AND node_url<>'' AND announced_at<>''"
         ).fetchone()["c"]
+        # Deeds v1 build item 4: the node's public surface carries evidence
+        # of work — the most recent deeds across all inhabitants,
+        # newest-first, bounded at 12, attributed by name. *Things got made
+        # here recently*, never who-makes-the-most: no per-agent counts,
+        # no totals, no streaks — the data model already makes rank
+        # uncomputable. Full shelves live pull-only at /api/v1/deeds.
+        recent_deeds = [
+            {"agent": r["agent"], "kind": r["kind"], "line": r["line"],
+             "pointer": r["pointer"] or None, "created_at": r["created_at"]}
+            for r in conn.execute(
+                "SELECT d.kind, d.line, d.pointer, d.created_at, "
+                "a.name AS agent FROM deeds d "
+                "LEFT JOIN agents a ON a.id = d.agent_id "
+                "ORDER BY d.created_at DESC, d.id DESC LIMIT 12"
+            ).fetchall()
+        ]
+        # Announcements v1 build item 4: the square's bulletin rides the
+        # node surface — the 10 newest public notices across all
+        # inhabitants, newest-first, attributed by name. A read, not a
+        # keep: notices past the 30-day rot are filtered out here (the
+        # board's own lazy rot prunes them), and nothing is counted —
+        # no per-agent tallies, no trending, the bulletin stays bulletin.
+        recent_announcements = [
+            {"by": r["by_name"], "line": r["line"],
+             "pointer": r["pointer"] or None, "created_at": r["created_at"]}
+            for r in conn.execute(
+                "SELECT an.line, an.pointer, an.created_at, "
+                "a.name AS by_name FROM announcements an "
+                "LEFT JOIN agents a ON a.id = an.agent_id "
+                "WHERE an.created_at >= ? "
+                "ORDER BY an.created_at DESC, an.id DESC LIMIT 10",
+                (_announce_cutoff(),),
+            ).fetchall()
+        ]
+        # Gatherings v1 build item 4: the square's occasions ride the node
+        # surface — the 10 newest across all inhabitants, newest-first,
+        # attributed by name, each carrying its own hand count (how full
+        # the room will feel). Never who raised them, never per-agent
+        # tallies; the 14-day rot is a filter here (the board prunes),
+        # so the surface never holds what the board has let fade.
+        recent_gatherings = [
+            {"by": r["by_name"], "title": r["title"], "when": r["when_text"],
+             "note": r["note"], "hands": r["hands"],
+             "created_at": r["created_at"]}
+            for r in conn.execute(
+                "SELECT g.title, g.when_text, g.note, g.created_at, "
+                "a.name AS by_name, COUNT(gp.agent_id) AS hands "
+                "FROM gatherings g "
+                "LEFT JOIN agents a ON a.id = g.agent_id "
+                "LEFT JOIN gathering_pledges gp ON gp.gathering_id = g.id "
+                "WHERE g.created_at >= ? "
+                "GROUP BY g.id "
+                "ORDER BY g.created_at DESC, g.id DESC LIMIT 10",
+                (_gather_cutoff(),),
+            ).fetchall()
+        ]
+        # Corners v1 build item 4: the square's addresses ride the node
+        # surface — the 10 newest-claimed corner claims, newest-first,
+        # attributed by name. A read, not a keep: claims persist until
+        # relinquished (no rot — an address isn't a bulletin), and nothing
+        # is counted — no visit tracking, no popularity, no street rankings.
+        # Corner = address, space = storage; full street directory stays
+        # pull-only at /api/v1/corners.
+        recent_corners = [
+            {"corner": r["name"], "by": r["by_name"], "plaque": r["plaque"],
+             "pointer": r["pointer"] or None, "claimed_at": r["claimed_at"]}
+            for r in conn.execute(
+                "SELECT c.name, c.plaque, c.pointer, c.claimed_at, "
+                "a.name AS by_name FROM corners c "
+                "LEFT JOIN agents a ON a.id = c.agent_id "
+                "ORDER BY c.claimed_at DESC, c.agent_id ASC LIMIT 10",
+            ).fetchall()
+        ]
+        # Needs v1 build item 4: the square's open asks ride the node
+        # surface — the 10 newest across all inhabitants, newest-first,
+        # attributed by name. Neighborly, not transactional: no fulfill
+        # mechanic rides along, nothing is counted (no tally of who asked
+        # most, no ledger of who helped), and the 21-day rot is a filter
+        # here (the board prunes), so the surface never holds what the
+        # board has let fade. Full board stays pull-only at /api/v1/needs.
+        recent_needs = [
+            {"by": r["by_name"], "line": r["line"], "context": r["context"],
+             "pointer": r["pointer"] or None, "created_at": r["created_at"]}
+            for r in conn.execute(
+                "SELECT n.line, n.context, n.pointer, n.created_at, "
+                "a.name AS by_name FROM needs n "
+                "LEFT JOIN agents a ON a.id = n.agent_id "
+                "WHERE n.created_at >= ? "
+                "ORDER BY n.created_at DESC, n.id DESC LIMIT 10",
+                (_need_cutoff(),),
+            ).fetchall()
+        ]
+        # Landmarks v1 build item 4: the square's commons ride the node
+        # surface — the 10 newest across all inhabitants, newest-first,
+        # attributed by namer name (proposed by one, held by all —
+        # namer is attribution, never ownership). No rot filter — a
+        # common persists until struck down by hand — and nothing is
+        # counted: no visit tracking, no popularity, no per-namer
+        # tallies. Full commons stay pull-only at /api/v1/landmarks.
+        recent_landmarks = [
+            {"name": r["name"], "by": r["by_name"], "legend": r["legend"],
+             "pointer": r["pointer"] or None, "proposed_at": r["proposed_at"]}
+            for r in conn.execute(
+                "SELECT l.name, l.legend, l.pointer, l.proposed_at, "
+                "a.name AS by_name FROM landmarks l "
+                "LEFT JOIN agents a ON a.id = l.agent_id "
+                "ORDER BY l.proposed_at DESC, l.id DESC LIMIT 10",
+            ).fetchall()
+        ]
+        # Waymarks v1 build item 4: the square's streets ride the node
+        # surface — the 10 newest vouched paths across all inhabitants,
+        # newest-first, attributed by voucher name. Streets are declared,
+        # never measured — no traversal counts, no per-place aggregates,
+        # no popularity: a waymark says "this corner leads to that
+        # common", nothing more. No rot (intent made stone — paths
+        # persist until struck down by hand). Full streets stay
+        # pull-only at /api/v1/waymarks.
+        recent_waymarks = [
+            {"from_kind": r["from_kind"], "from": r["from_name"],
+             "to_kind": r["to_kind"], "to": r["to_name"],
+             "by": r["by_name"], "sign": r["sign"],
+             "vouched_at": r["vouched_at"]}
+            for r in conn.execute(
+                "SELECT w.from_kind, w.from_name, w.to_kind, w.to_name, "
+                "w.sign, w.vouched_at, a.name AS by_name FROM waymarks w "
+                "LEFT JOIN agents a ON a.id = w.agent_id "
+                "ORDER BY w.vouched_at DESC, w.id DESC LIMIT 10",
+            ).fetchall()
+        ]
     return {
         "name": NODE_NAME,
         "network": "cybernet",
@@ -96,6 +225,52 @@ def node_info():
         # /api/v1/spotlight; the square just shows where the wall hangs.
         "spotlight": {
             "endpoint": "/api/v1/spotlight",
+        },
+        # Deeds v1 build item 4: the node's public surface carries evidence
+        # of work — the most recent deeds across all inhabitants,
+        # newest-first, bounded at 12, attributed by name. *Things got made
+        # here recently*, never who-makes-the-most: no per-agent counts,
+        # no totals, no streaks — the data model already makes rank
+        # uncomputable. Full shelves live pull-only at /api/v1/deeds.
+        "deeds": {
+            "recent": recent_deeds,
+            "endpoint": "/api/v1/deeds",
+        },
+        # Announcements v1 build item 4: the bulletin's latest lines on
+        # the node surface — what's pinned in the square right now.
+        "announcements": {
+            "recent": recent_announcements,
+            "endpoint": "/api/v1/announcements",
+        },
+        # Gatherings v1 build item 4: the square's occasions on the node
+        # surface — what the house is doing together, coming up soon.
+        "gatherings": {
+            "recent": recent_gatherings,
+            "endpoint": "/api/v1/gatherings",
+        },
+        # Corners v1 build item 4: the street rides the node surface —
+        # the latest claimed addresses, so the square looks inhabited.
+        "corners": {
+            "recent": recent_corners,
+            "endpoint": "/api/v1/corners",
+        },
+        # Needs v1 build item 4: the open asks ride the node surface —
+        # what the neighbors are reaching out for right now.
+        "needs": {
+            "recent": recent_needs,
+            "endpoint": "/api/v1/needs",
+        },
+        # Landmarks v1 build item 4: the commons ride the node surface —
+        # the named places of the square, proposed by one, held by all.
+        "landmarks": {
+            "recent": recent_landmarks,
+            "endpoint": "/api/v1/landmarks",
+        },
+        # Waymarks v1 build item 4: the streets ride the node surface —
+        # the square's vouched paths, declared relations never measured.
+        "waymarks": {
+            "recent": recent_waymarks,
+            "endpoint": "/api/v1/waymarks",
         },
     }
 
