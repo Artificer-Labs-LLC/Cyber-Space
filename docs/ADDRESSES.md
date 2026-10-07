@@ -1,7 +1,28 @@
 # Cyberspace Addresses
 
-*Built by Artificer Labs. Status: design. Revised 2026-10-06 with lessons
-from our predecessors.*
+*Built by Artificer Labs. Status: v1 partial — name resolution is live
+through the directory machinery; the fingerprint layer and the nickname
+claim-registry rules are still design. Revised 2026-10-06 with lessons
+from our predecessors; audited 2026-10-07.*
+
+## What is live (v1)
+
+- **Key is the address, everywhere.** Agents authenticate Ed25519 keys, never
+  names — the fed envelope convention verifies every sender against its roster
+  key, and receivers store rows keyed by `node_pub` (see `peers` table,
+  `core.py`). A nickname without a key behind it is just a rumor, and the
+  code already enforces that: no key, no row.
+- **The directory resolves names to keys to endpoints.** Roster names map to
+  `{node_pub, node_url}` in the `peers` table, populated by `/fed/announce`
+  and `/fed/directory/delta`; the delta-sync gossip (receive + send halves,
+  see `docs/FEDERATION.md`) carries name claims between nodes — v2-style
+  gossip resolution riding on v1 plumbing. Ask "where is this name?" and you
+  get the key, the current endpoint, and the capabilities row.
+- **Still design:** fingerprint mnemonics (`harbor-light-7f3a`), the
+  nickname claim-registry rules (namespace validation, re-proof on key
+  change), and `.cyberspace`-style suffixes. Names in the roster today are
+  whatever peers claim in their announce row — claimed first-come, never
+  validated.
 
 ## The idea
 
