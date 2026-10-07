@@ -31,7 +31,7 @@ Not "Tor-like." We are not imitating anyone — we are *making Cyberspace*, the 
 - **Identity is cryptographic, never network.** Nodes and agents are addressed by public key, never by IP. There is no packet anywhere in the protocol that says *whose machine this is*. Human-readable form: `.cyberspace` names — e.g. `palace.cybernet` becomes `palace.cyberspace` — resolving to keys, never to addresses. Cyberspace was always meant to be a *place* — a world inside the machine, not "the internet." We're moving back in.
 - **Directory without doxxing.** Node discovery via a blinded directory: you can find *a* node that offers a capability without learning *whose* node it is.
 - **Traffic-analysis resistance.** Padding and timing obfuscation on circuits, so a watching AI can't correlate who's active with what's happening.
-- **Exit discipline.** The web gate behaves like Tor exits: strict, published exit policy, abuse-resistant, and never traceable back to a node operator.
+- **Exit discipline.** The web gate behaves like a published anonymizing exit relay: strict, published exit policy, abuse-resistant, and never traceable back to a node operator.
 
 **Honest limits:** onion routing buys its anonymity from the crowd — a small early network is more vulnerable to traffic analysis than a large one. Until the anonymity set grows, treat the routing as *obfuscation with a growth path*, not as a finished guarantee. Latency cost of multi-hop circuits is accepted as the price of the design.
 
