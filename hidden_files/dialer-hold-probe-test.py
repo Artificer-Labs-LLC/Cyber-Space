@@ -7,19 +7,22 @@ and probe gating are all real.
 Cases:
   probe queries E then E-1 (the pair the REAL rendezvous.derive_points
     computes for the name key), GET {relay}/relay/hold_query?point_id=
-  held:true on E -> session opens: POST to {relay}/relay/open with
-    {\"name\",\"token\"} body, valid name-key sig -> True
-  held:true on E-1 only -> also opens (boundary tolerance)
+  held:true on E -> session opens BY THE POINT: POST to
+    {relay}/relay/open with {\"name\",\"rendezvous_point\"} body (the
+    dialer never sends the token on the rendezvous path), valid
+    name-key sig -> True
+  held:true on E-1 only -> opens by E-1 point (boundary tolerance)
   held:false on both -> False and NO /relay/open attempt (only the
     two hold_query GETs were seen; no session minted, no wait on
     silence)
   endpoint absent (404, relay predates hold_query) -> legacy session
-    opens (True with a valid sig) — new dialer never goes silent
-    under an old relay
+    opens with {\"name\",\"token\"} (True with a valid sig) — new
+    dialer never goes silent under an old relay
   transport failure on the query -> same legacy fallback
   bad name key (point not derivable) -> legacy fallback
   request shape: GETs are hold_query with the derived point ids;
-    POST body is name+token only (no identity), unchanged
+    POST body is name+rendezvous_point on the rendezvous path,
+    name+token only on the legacy path (no identity either way)
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/dialer-hold-probe-test.py
 """
@@ -80,6 +83,9 @@ def _fake_factory(hold_e=None, hold_prev=None, endpoint=True,
     endpoint=False: the relay predates hold_query (404).
     query_fails: the transport raises on the query."""
     calls = []
+    # The probe returns E first when it answers held; a held case opens
+    # BY THE POINT (token never sent), a legacy case by token.
+    held_point = PAIR[0] if hold_e else (PAIR[1] if hold_prev else None)
 
     def fake(target, timeout=8):
         method = target.get_method()
@@ -99,9 +105,11 @@ def _fake_factory(hold_e=None, hold_prev=None, endpoint=True,
             return _FakeResp(200, {"held": bool(held)})
         if url == RELAY_URL.rstrip("/") + "/relay/open":
             assert method == "POST"
-            assert json.loads(target.data.decode()) == {"name": RLABEL,
-                                                        "token": "tok-abc"}, \
-                "open body must stay name+token only (no identity)"
+            want = ({"name": RLABEL, "rendezvous_point": held_point}
+                    if held_point
+                    else {"name": RLABEL, "token": "tok-abc"})
+            assert json.loads(target.data.decode()) == want, \
+                "open body mismatch (no identity either way)"
             if not open_ok:
                 return _FakeResp(500, {})
             chal = os.urandom(32).hex()
