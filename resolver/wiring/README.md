@@ -85,10 +85,12 @@ genesis name resolves its own address.
 ## Smoke test
 
 ```
-python resolver/wiring/smoke.py [--name genesis.cyberspace]
+python resolver/wiring/smoke.py [--name genesis.cyberspace]        # UDP path
+python resolver/wiring/smoke.py --tcp [--name genesis.cyberspace]  # DNS-over-TCP path (RFC 7766)
 ```
 
 1. registered name → NOERROR with at least one A record
 2. random never-registered `.cyberspace` label → NXDOMAIN (fail-closed)
+3. run both: the daemon serves UDP and TCP on the same port; check each wire
 
-Exit 0 only if both pass. Run it after wiring, before trusting anything.
+Exit 0 only if all run checks pass. Run it after wiring, before trusting anything.

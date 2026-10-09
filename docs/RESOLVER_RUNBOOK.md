@@ -38,6 +38,9 @@ On HQ: `cd ~/cybernet/node && git pull && sudo ./deploy/install.sh`
   NXDOMAINs by design.
 - On HQ: `python3 resolver/wiring/smoke.py` — expects the registered name
   -> NOERROR + A, junk label -> NXDOMAIN, exit 0. Both lines must say PASS.
+- Run it twice: once plain (UDP) and once `python3 resolver/wiring/smoke.py
+  --tcp` (DNS-over-TCP, RFC 7766) — the daemon serves the same zone on both
+  wires and each path must PASS separately before anything is trusted.
 - If smoke fails: daemon not answering -> `systemctl status
   cybernet-resolver.service`; answering but NXDOMAIN on the real name ->
   the claim isn't in `name_bindings` (check `GET /api/v1/names/genesis`,

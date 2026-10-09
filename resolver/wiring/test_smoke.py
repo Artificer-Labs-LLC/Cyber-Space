@@ -1,15 +1,17 @@
 """Fail-closed plumbing tests for resolver/wiring/smoke.py.
 
-No daemon, no network: monkeypatch smoke._query to fake transport and
-DNS answers in-process, and assert main()'s exit codes — the
-fail-closed contract the wiring README promises ("Exit 0 only if both
-pass") is real.
+No daemon, no network: monkeypatch smoke._query / smoke._query_tcp to fake
+transport and DNS answers in-process, and assert main()'s exit codes — the
+fail-closed contract the wiring README promises ("Exit 0 only if all pass")
+is real.
 
-Four checks:
+Checks:
   daemon down on the wire -> _query raises (transport failure is loud)
   _query raising -> main() exits 1 ("unreachable" is said, not swallowed)
   good NOERROR+A then junk NXDOMAIN -> main() exits 0 (PASS path)
   junk not NXDOMAIN -> main() exits 1 (fail-closed answer refuses)
+  --tcp routes both checks through _query_tcp (UDP never touched)
+  packet shape: _build_query header parses, qname encodes
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python resolver/wiring/test_smoke.py
 """
@@ -83,8 +85,9 @@ def _test_happy_path():
 
     rc, out = _run_main_with_fake(_good)
     check("good daemon -> exit 0", rc == 0, f"got {rc}")
-    check("PASS lines printed", "PASS: registered name resolves" in out
+    check("PASS lines printed", "registered name resolves" in out
           and "NXDOMAIN (fail-closed)" in out, repr(out[:120]))
+    check("default wire says udp", "[udp]" in out, repr(out[:120]))
 
 
 # 4. daemon that answers junk -> exit 1, not trusted
@@ -97,7 +100,38 @@ def _test_junk_not_nxdomain():
     check("fail-closed refusal said", "not fail-closed" in out, repr(out[:80]))
 
 
-# 5. packet shape: _build_query header parses, qname encodes
+# 5b. --tcp routes the checks through _query_tcp, not _query
+def _test_tcp_flag_routes():
+    calls = {"tcp": 0, "udp": 0}
+
+    def _good_tcp(name, qtype, server, port, timeout=3.0):
+        calls["tcp"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    def _never_udp(name, qtype, server, port, timeout=3.0):
+        calls["udp"] += 1
+        raise AssertionError("UDP transport must not be used under --tcp")
+
+    real_query, real_tcp = smoke._query, smoke._query_tcp
+    smoke._query, smoke._query_tcp = _never_udp, _good_tcp
+    old_argv = sys.argv
+    sys.argv = ["smoke.py", "--server", "127.0.0.1", "--port", "53599",
+                "--tcp"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = smoke.main()
+    finally:
+        smoke._query, smoke._query_tcp = real_query, real_tcp
+        sys.argv = old_argv
+    out = buf.getvalue()
+    check("--tcp happy path -> exit 0", rc == 0, f"got {rc}")
+    check("--tcp uses TCP transport only",
+          calls["tcp"] == 2 and calls["udp"] == 0, repr(calls))
+    check("--tcp wire is labeled", "[tcp]" in out, repr(out[:120]))
+
+
+# 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
     pkt, txid = smoke._build_query("genesis.cyberspace", 1)
@@ -117,6 +151,7 @@ if __name__ == "__main__":
     _test_fail_closed_unreachable()
     _test_happy_path()
     _test_junk_not_nxdomain()
+    _test_tcp_flag_routes()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
