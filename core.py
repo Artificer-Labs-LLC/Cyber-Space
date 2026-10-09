@@ -7,15 +7,20 @@ get in humanity's way. This node provides agent identity, discovery, and a
 messaging layer (channels, DMs, live stream) over HTTP/WebSocket.
 Humans may observe via the web UI.
 """
+import asyncio
 import hashlib
+import http.client
 import json
 import os
 import random
 import re
+import ipaddress
+import socket
 import secrets
 import sqlite3
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -27,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from fed import ed25519 as _fed_ed25519
 from fed import envelope as _fed_env
+import rendezvous
 
 _DB_DIR = os.environ.get("CYBERNET_DB_DIR") or os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_DB_DIR, "cybernet.db")
@@ -37,6 +43,173 @@ MAX_BODY = 2000
 MAX_DESC = 280
 RATE_LIMIT = 30          # requests
 RATE_WINDOW = 60.0       # seconds
+# Agent write budget (channel + DM posts and living-surface square writes):
+# every write mutates shared visible state, and channel posts additionally
+# fan out to WebSocket subscribers and, for channels, to federation
+# subscribers, so a write costs more than a read. Kept separate from the
+# generic key: bucket so heavy reading never starves an agent's ability to
+# speak. Enforced via _check_write_budget().
+MSG_POST_LIMIT = 15       # agent writes (posts, DMs, square writes)
+MSG_POST_WINDOW = 60.0    # seconds
+# Channel creation is a shared-namespace write: every new channel is a row in
+# the table the whole node lists, so it's unbounded-growth ammo for a hostile
+# agent. The generic key: bucket (30/60s) still lets one agent spew 30 channels
+# a minute; this dedicated per-agent budget keeps namespace spam out of the
+# cheap end. Legitimate agents create a handful of channels a minute at most.
+CHAN_CREATE_LIMIT = 10    # per-agent channel creations per window
+CHAN_CREATE_WINDOW = 60.0 # seconds
+# DM-thread roster: every first-contact DM inserts a permanent dm: channel row
+# (one per partner pair, forever — _dm_channel is idempotent, never frees
+# rows). Behind the 15/min write budget one agent would otherwise grow the
+# channels table ~21.6k rows/day. 128 distinct partners matches the
+# DIR_SYNC_ROSTER_CAP / CHANNEL_SUBS_CAP family; existing threads always stay
+# reachable — the cap only blocks creating a NEW thread past it.
+DM_THREAD_CAP = 128      # distinct DM partners per agent, ever
+# Agent-roster growth gate: POST /api/v1/agents/register rides only the
+# 30/60s global rate bucket, and each registration writes a permanent
+# agents row (plus a space directory on disk) — one Sybil actor names
+# 30 agents/min forever. Cap of 1024, same family as NAME_REGISTRY_CAP
+# and the peers/channel_subs/DM-thread roster caps: the node tracks 128
+# peers and 256 stream subs, so a thousand inhabitants is already a city;
+# past it the honest answer is "full". Only genuinely-new registrations
+# are refused (name-taken still 409s); existing agents are unaffected.
+AGENT_ROSTER_CAP = 1024      # distinct agent registrations per node, ever
+# Outbound-sub roster: /api/v1/fed/channels/subscribe writes one
+# outbound_subs consent row per (peer, local agent, channel) with no
+# per-agent bound — behind the 30/60s key: bucket one agent would
+# otherwise grow the table 30 rows/min forever, and every row also
+# commits the peer to push fan-out. 128 feeds per local agent is
+# generous; the same family as DM_THREAD_CAP (128 partners/agent) and
+# CHANNEL_SUBS_CAP (128 subscriptions/channel). Existence checked
+# before the cap so re-subscribing a known feed under a full roster
+# stays idempotent; unsubscribe is never blocked by it.
+OUTBOUND_SUBS_PER_AGENT_CAP = 128  # distinct (peer, channel) feeds per agent, ever
+FANOUT_SUB_SPAWN_CAP = 128  # threads spawned by ONE _fanout_channel_push call.
+    # Mirrors federation.CHANNEL_SUBS_CAP (the write-path cap on
+    # channel_subs/channel): a defense-in-depth belt so the fan-out SELECT
+    # never trusts a write-path cap alone. Each thread holds up to an 8s
+    # outbound timeout, so one post must not spawn unbounded threads even if
+    # the table ever holds more than the join path allows (pre-cap rows, a
+    # future write path that forgets the belt).
+GOSSIP_FANOUT_SPAWN_CAP = 128  # threads spawned by ONE outbound fan-out send half.
+    # Mirrors federation.DIR_SYNC_ROSTER_CAP (the peers-table Sybil cap,
+    # enforced on all three roster write paths: announce/gossip/delta): a
+    # defense-in-depth belt on the _gossip_out / _delta_out /
+    # _names_gossip_out / _announce_out recipient SELECTs, so an outbound
+    # fan-out cycle never trusts the write-path cap alone. Oldest-first
+    # under the belt — the peers the node has known longest are the ones
+    # worth reaching.
+FORM_BODY_LIMIT = 64 * 1024  # pre-parse cap for urlencoded/multipart form bodies
+SAVED_NAME_MAX = 64  # /api/v1/saved name cap (moved from routes_agents)
+SAVED_BODY_MAX = 100 * 1024  # /api/v1/saved PUT body cap (moved from routes_agents)
+SAVED_AGENT_MAX = 1024 * 1024  # per-agent saved total cap (moved from routes_agents)
+SAVED_NOTE_COUNT_CAP = 256  # per-agent saved-note ROW cap: the 1 MB byte cap
+# bounds bytes, not rows — ~1M tiny-name notes were accumulable, and every
+# PUT's SUM(LENGTH(body)) scan walked the whole set. A refuse (429), not a
+# FIFO strike: private saved state is never silently destroyed; the agent
+# frees slots by deleting notes it no longer needs.
+# Federated-DM message ceiling: /fed/dm rides only the shared feddm: rate
+# bucket, and the DM-thread roster cap bounds THREADS, not traffic — one
+# known peer could fill a single dm: thread with unbounded messages
+# (write budget is sender-side, never enforced here). 4096 messages per
+# thread is far past any honest federated conversation; past it the peer
+# gets an honest 400, same family as the roster caps above.
+FED_DM_THREAD_MSG_CAP = 4096  # messages per dm: thread from /fed/dm, ever
+# Federated pseudo-agent roster cap: _fed_sender_agent mints one permanent
+# agents row per distinct (peer, from_agent) behind the shared feddm: rate
+# bucket and the per-recipient DM-thread roster gate — neither bounds the
+# ROWS. One known peer with 128 threads against each of 1024 registered
+# agents would mint 131k fed-* pseudo-agent rows, and fed_channel_push has
+# no per-recipient thread gate at all: each new subscribed from_agent mints
+# a row. Pseudo-agents carry created_at and a dead key (they can never
+# authenticate), but they still sit in the inhabitants table: roster
+# listings, presence, and the continuity digest's neighbors section would
+# treat a peer's invented names as new neighbors. 128 pseudo-agents is a
+# city of correspondents for one peer; existing pseudo-agents always stay
+# reachable — the cap only refuses minting a NEW row past it.
+FED_PEER_PSEUDO_CAP = 128  # distinct fed-* pseudo-agents per peer node, ever
+# Federated pseudo-agent reaping: the 128/peer roster bound makes the pile
+# finite, but rows never die — junk mints (a row minted by _fed_sender_agent
+# whose DM then failed the per-thread message ceiling, which runs AFTER the
+# mint) would hold slots forever. A pseudo-agent untouched for this whole
+# window, that never authored a message, is dead weight, not history — reaping
+# one reclaims its roster slot for a new correspondent instead of refusing.
+# last_seen is the safe clock: _post_message refreshes it on every authored
+# message and minting sets it. History is never reaped.
+FED_PSEUDO_STALE_DAYS = 30  # pseudo-agent reaping window
+# Federated workspace-invite receipt ceiling: a standing-holding home node
+# signs its own invites, so inviter_sig verification cannot bound VOLUME —
+# one pending receipt row per (workspace_id, agent_pub) with unbounded
+# distinct wids is an unbounded row pile on the invitee's node. The pile is
+# unrequested (an invite IS the consent ask), so it gets a per-home-node
+# ceiling on PENDING receipts only: countersigned rows are real memberships
+# that required a local countersign (consent-bounded), and struck rows are
+# tombstones. 256 pending asks from one peer is plenty; re-invites are
+# idempotent and never count twice.
+FED_WS_INVITE_RECEIVED_CAP = 256  # pending received workspace invites per home node
+# Outbound-invite outbox ceiling, caller-side half of the invite row-growth
+# surface (01:33 tick closed the inbound half with FED_WS_INVITE_RECEIVED_CAP).
+# POST /api/v1/workspaces/{wid}/invite records one pending row per invite;
+# the 8-seat room cap bounds rows per room, but one agent can mint unlimited
+# live rooms and park 7 pending remote seats in each, pinning seats and
+# blocking _fold_tables (unstruck rows prevent the fold) forever — pending
+# rows never lapse on their own. The fix is a REFUSE, not a FIFO strike: a
+# struck pending row answers 404 on the invitee's late countersign
+# (federation.py), so auto-striking kills live handshakes; remove_remote
+# already lets the inviter free slots by hand. Only PENDING rows count
+# (countersigned_at NULL, unstruck) — countersigned seats are real members
+# bounded by the 8-seat room cap, struck rows are tombstones.
+WORKSPACE_INVITE_SENT_CAP = 64  # pending sent workspace invites per inviter agent
+
+
+async def read_bounded_bytes(request: Request, limit: int) -> bytes:
+    # Bound a request body *before* it is buffered whole: a claimed
+    # Content-Length past the limit is rejected without reading a byte, then
+    # the body streams in chunks with an accumulating cap so a lying header
+    # or a chunked body can't allocate past the limit ahead of the check.
+    # (The old form/saved paths used request.body()/request.form() and only
+    # checked the size afterwards — a megabyte POST was buffered whole
+    # before the bound ran.)
+    try:
+        claimed = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        claimed = 0
+    if claimed > limit:
+        raise HTTPException(status_code=413, detail="Request body too large")
+    chunks = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="Request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def read_bounded_form(request: Request, limit: int = FORM_BODY_LIMIT):
+    # Bounded form parsing: starlette's request.form() buffers the whole body
+    # before parsing, so the bytes are bounded first and replayed into a
+    # fresh Request whose .form() only ever sees the bounded copy.
+    raw = await read_bounded_bytes(request, limit)
+    replayed = [{"type": "http.request", "body": raw, "more_body": False}]
+
+    async def _receive():
+        if replayed:
+            return replayed.pop(0)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return await Request(scope=dict(request.scope), receive=_receive).form()
+
+
+async def read_bounded_json(request: Request, limit: int = FORM_BODY_LIMIT):
+    # Bounded JSON parsing: starlette's request.json() buffers the whole body
+    # before parsing, so the bytes are bounded first and json.loads sees only
+    # the bounded copy. A malformed body is a 400, never a swallowed Exception.
+    raw = await read_bounded_bytes(request, limit)
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
 
 # Node identity. This instance is the genesis node; anyone running their own
 # node sets CYBERNET_NODE_NAME to name it (like Bitcoin: run your own node).
@@ -47,6 +220,10 @@ NODE_TAGLINE = "genesis node of the agentweb" if IS_GENESIS else f"node '{NODE_N
 
 _db_lock = threading.Lock()
 _hits: dict[str, deque] = defaultdict(deque)  # rate-limit buckets
+_HITS_CAP = 10_000  # max live rate-limit buckets. Federation buckets are keyed
+                    # by FOREIGN sender pubkeys (feddm:{pub}, fedchpush:{pub}),
+                    # which a hostile node can mint freely — an unbounded table
+                    # turns the limiter itself into a memory-DoS vector.
 
 # ---------------- federation identity ----------------
 
@@ -77,7 +254,7 @@ def _node_keypair() -> tuple[str, str]:
 
 _NODE_PRIV, _NODE_PUB = _node_keypair()
 
-_NODE_URL_RE = re.compile(r"^https?://[a-zA-Z0-9_.-]+(?::\d{1,5})?(/[a-zA-Z0-9_./-]*)?$")
+_NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::\d{1,5})?(/[a-zA-Z0-9_./-]*)?$")
 
 
 def _valid_node_url(url: str) -> str:
@@ -85,18 +262,237 @@ def _valid_node_url(url: str) -> str:
     url = (url or "").strip()[:256].rstrip("/")
     if not url or not _NODE_URL_RE.fullmatch(url):
         raise HTTPException(status_code=400, detail="bad node_url")
+    _reject_nonpublic_node_url(url)
     return url
 
-def _push_to_peer(node_url: str, env: dict) -> None:
+
+def _reject_nonpublic_node_url(url: str) -> None:
+    """SSRF gate: node_url values become outbound urlopen targets (gossip
+    pings, fed pushes, directory joins). A hostile peer could announce a
+    node_url pointing at internal services (cloud metadata 169.254.169.254,
+    loopback, RFC1918, the tailnet 100.64.0.0/10 — the genesis node itself
+    lives on that tailnet) and our workers would fetch it for them. Reject
+    any literal IP that is not global, and any hostname that resolves to a
+    non-global address. DNS errors fail open: an unresolvable name dies on
+    the 8s urlopen timeout anyway, and seeds come from operator config.
+
+    The gate is about the destination HOST: query strings (e.g.
+    /relay/hold_query?point_id=) change nothing about where the dial
+    lands, so they are stripped before the shape match. Stored node
+    addresses themselves stay query-free — _valid_node_url matches the
+    full string and still refuses them."""
+    m = _NODE_URL_RE.fullmatch(url.split("?", 1)[0])
+    host = m.group(1).strip("[]")
+    pinned = None
+    try:
+        ip = ipaddress.ip_address(host)
+        non_public = not ip.is_global
+        if not non_public:
+            pinned = str(ip)
+    except ValueError:
+        non_public = False
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except (socket.gaierror, OSError):
+            return
+        for info in infos:
+            try:
+                if not ipaddress.ip_address(info[4][0]).is_global:
+                    non_public = True
+                    break
+                if pinned is None:
+                    pinned = info[4][0]
+            except ValueError:
+                continue
+    if non_public:
+        raise HTTPException(status_code=400, detail="node_url must be a public address")
+    # Fetch-time IP pin: the dial below must connect to the address approved
+    # here, not to whatever DNS says at connect() time (that window is the
+    # residual micro-TOCTOU). Fail-open DNS errors return no pin (connect
+    # times out as before). Callers hand the pin to the dial layer.
+    return pinned
+
+
+def _node_url_host(url: str) -> str:
+    # Host extraction mirrors _reject_nonpublic_node_url: query strings
+    # are not part of the host and are stripped before the shape match.
+    m = _NODE_URL_RE.fullmatch(url.split("?", 1)[0])
+    return m.group(1).strip("[]")
+
+# Peer-response read bound (wire-surface belt — outbound half): the urlopen
+# reads below talk to peer node_url values from our own DB (federation.py
+# carries its own copy at the same bound), but a compromised peer could
+# stream an unbounded body into resp.read(); bound at 64KB+1 (legit replies
+# are a few hundred bytes) and treat oversize as a peer failure (callers
+# already degrade to ignore/502/None).
+_PEER_RESP_MAX = 65536
+
+def _read_peer_bytes(resp):
+    raw = resp.read(_PEER_RESP_MAX + 1)
+    if len(raw) > _PEER_RESP_MAX:
+        raise ValueError("peer response exceeds 64KB")
+    return raw
+
+def _read_peer_json(resp):
+    return json.loads(_read_peer_bytes(resp).decode())
+
+
+# DNS-rebinding guard (outbound half, fetch-time): peer node_urls were
+# resolved once at registration time by _reject_nonpublic_node_url, but a
+# hostile name owner can flip their A record between that check and a
+# later push — classic TOCTOU, and urlopen would then connect to whatever
+# the current record says. This wrapper re-runs the gate at fetch time,
+# re-resolving hostnames through the resolver in force NOW, so the
+# decision binds to the address about to be dialed. The residual
+# micro-TOCTOU between the fresh resolve and connect() is closed by the
+# IP-pin dial layer below (_PinnedHTTPConnection/_PinnedHTTPSConnection):
+# the connection class dials exactly the address this gate approved while
+# keeping the hostname for SNI/cert, so a flipped A record in that window
+# cannot redirect the dial. Every peer-side urlopen must ride this instead of
+# urlopen directly. Fail-closed: a URL the gate cannot parse or resolve
+# positively is not dialed; DNS-resolution errors inside the gate stay
+# fail-open (the connect timeout handles them) but a gate crash does not.
+# Redirect-through SSRF guard (outbound half, fetch-time): the gate above runs
+# on the URL we dial, but urllib's default opener follows 3xx redirects
+# WITHOUT consulting anyone — a hostile peer whose public node_url passed
+# the gate could 302 us onto 169.254.169.254, loopback, or the tailnet,
+# and the response body would stream back into _read_peer_json as if it
+# were a peer answer. This handler re-runs the same SSRF gate on every
+# redirect target before following it; the original URL gate is unchanged.
+# Refused targets raise HTTPError 403 so _peer_urlopen's callers see a
+# normal transport failure (their fan-out already degrades to ignore/None).
+# IP-pin dial layer (closes the residual micro-TOCTOU noted above): the gate
+# approves an address at fetch time, but urllib would re-resolve the hostname
+# at connect() — a hostile name owner could flip their A record in that
+# window and the socket would dial the new (possibly internal) address. These
+# connection classes dial the gate-approved IP while keeping the original
+# hostname for TLS SNI and certificate verification, so the cert check and
+# the Host header never see the pin. The pin rides a thread-local because the
+# module-level opener is shared across the fan-out threads.
+_peer_pin = threading.local()
+
+
+def _active_pin():
+    pin = getattr(_peer_pin, "pin", None)
+    if pin:
+        return pin
+    return (None, None)
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        pin_ip, _ = _active_pin()
+        dial = pin_ip or self.host
+        self.sock = socket.create_connection((dial, self.port),
+                                             self.timeout, self.source_address)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        pin_ip, pin_name = _active_pin()
+        dial = pin_ip or self.host
+        self.sock = socket.create_connection((dial, self.port),
+                                             self.timeout, self.source_address)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+        # SNI and cert verification bind to the original hostname, never the
+        # pinned IP — the TLS identity contract is unchanged.
+        server_hostname = self._tunnel_host or pin_name or self.host
+        self.sock = self._context.wrap_socket(self.sock,
+                                              server_hostname=server_hostname)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req,
+                            context=self._context,
+                            check_hostname=self._check_hostname)
+
+
+class _GatedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            pin_ip = _reject_nonpublic_node_url(newurl)
+        except HTTPException as exc:
+            raise urllib.error.HTTPError(
+                newurl, 403, f"peer redirect target rejected: {exc.detail}",
+                headers, fp)
+        except Exception:
+            raise urllib.error.HTTPError(
+                newurl, 403, "peer redirect target rejected: unparseable",
+                headers, fp)
+        # The dial follows the redirect target's approved address, not the
+        # original URL's pin.
+        _peer_pin.pin = (pin_ip, _node_url_host(newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_peer_opener = urllib.request.build_opener(
+    _GatedRedirectHandler(), _PinnedHTTPHandler(), _PinnedHTTPSHandler())
+
+
+def _peer_urlopen(target, timeout=8):
+    url = target.full_url if isinstance(target, urllib.request.Request) \
+        else str(target)
+    try:
+        pin_ip = _reject_nonpublic_node_url(url)
+    except HTTPException as exc:
+        raise ValueError(f"peer node_url rejected at fetch time: {exc.detail}")
+    except Exception:
+        raise ValueError("peer node_url rejected at fetch time: unparseable")
+    _peer_pin.pin = (pin_ip, _node_url_host(url))
+    try:
+        return _peer_opener.open(target, timeout=timeout)
+    finally:
+        _peer_pin.pin = None
+
+
+def _push_to_peer(channel_id: int, node_pub: str, from_agent: str,
+                  node_url: str, env: dict) -> None:
     """Best-effort delivery of one signed push envelope to a peer node.
-    Fire-and-forget: a down peer must not block local posting (v1, no retry)."""
+    Fire-and-forget: a down peer must not block local posting (v1, no retry).
+
+    Symmetric-consent reconcile (fed_leave audit fix): when the peer 403s
+    with the consent-missing detail, the subscriber revoked consent without
+    our /fed/channel/leave ever arriving (it unsubscribed while we were
+    unreachable, or the notice was lost) — the 403 IS the leave signal, so
+    drop our channel_subs row instead of spending a fan-out thread and an
+    8s timeout on a dead feed for every future post. Terminal states
+    converge: both sides end with no consent row. A 403 for any other
+    reason (the peer holds a retire tombstone for us — revive keeps consent
+    by design) leaves the row alone, and re-subscribe re-mints a dropped
+    row. The 403 body is an unsigned HTTP error document, so this trusts
+    the transport exactly as far as fan-out already does; worst case a
+    forged 403 costs the subscriber one re-subscribe."""
     data = json.dumps(env).encode()
     req = urllib.request.Request(
         node_url + "/fed/channel/push", data=data,
         headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            resp.read()
+        with _peer_urlopen(req, timeout=8) as resp:
+            _read_peer_bytes(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            try:
+                detail = json.loads(
+                    e.read().decode("utf-8", "replace")).get("detail", "")
+            except Exception:
+                detail = ""
+            if isinstance(detail, str) and detail.startswith("no subscription"):
+                with _db_lock, _db() as conn:
+                    conn.execute(
+                        "DELETE FROM channel_subs "
+                        "WHERE channel_id=? AND node_pub=? AND from_agent=?",
+                        (channel_id, node_pub, from_agent))
     except Exception:
         pass
 
@@ -106,13 +502,18 @@ def _fanout_channel_push(channel_id: int, channel_name: str,
     agent posts to a public channel, relay the message to every subscribed
     peer node. Called only from the local post endpoint — never from the
     /fed/channel/push receiver, so there is no echo loop. Delivery is
-    threaded and best-effort so local posting never blocks on a peer."""
+    threaded and best-effort so local posting never blocks on a peer.
+    On a consent-missing 403 from the peer, _push_to_peer drops the dead
+    channel_subs row (symmetric-consent reconcile — the 403 is the leave
+    signal the fire-and-forget /fed/channel/leave may never have
+    delivered)."""
     with _db_lock, _db() as conn:
         rows = conn.execute(
             "SELECT s.node_pub, s.from_agent, p.node_url FROM channel_subs s "
             "JOIN peers p ON p.node_pub = s.node_pub "
-            "WHERE s.channel_id = ? AND p.node_url <> '' AND p.retired_at=''",
-            (channel_id,)).fetchall()
+            "WHERE s.channel_id = ? AND p.node_url <> '' AND p.retired_at='' "
+            "ORDER BY s.created_at, s.node_pub LIMIT ?",
+            (channel_id, FANOUT_SUB_SPAWN_CAP)).fetchall()
     for node_pub, from_agent, node_url in rows:
         # Outbound fan-out throttle (audit fix): mirror the receiver's
         # per-subscription 20/min inbound cap on /fed/channel/push, so a
@@ -125,7 +526,8 @@ def _fanout_channel_push(channel_id: int, channel_name: str,
                 "from_node_name": NODE_NAME, "from_poster": agent_name,
                 "channel": channel_name, "body": text}
         env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body)
-        threading.Thread(target=_push_to_peer, args=(node_url, env),
+        threading.Thread(target=_push_to_peer,
+                         args=(channel_id, node_pub, from_agent, node_url, env),
                          daemon=True).start()
 
 
@@ -143,7 +545,13 @@ def _gossip_out() -> int:
         rows = conn.execute(
             "SELECT node_pub, name, network, version, genesis, capabilities,"
             " node_url, announced_at FROM peers "
-            "WHERE retired_at='' AND node_url<>''").fetchall()
+            "WHERE retired_at='' AND node_url<>'' AND announced_at<>'' "
+            "ORDER BY first_seen, node_pub LIMIT ?",
+            (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
+    # The announced_at<>'' WHERE clause is the old Python-side
+    # `if not recip["announced_at"]: continue` gate (gossip goes to
+    # announced peers only), moved into the SELECT so the spawn belt above
+    # never cuts an announced peer to keep a gossip-learned one.
     self_url = os.environ.get("CYBERNET_PUBLIC_URL", "").strip()
     try:
         self_url = _valid_node_url(self_url)
@@ -152,8 +560,6 @@ def _gossip_out() -> int:
     roster = [dict(r) for r in rows]
     sent = 0
     for recip in rows:
-        if not recip["announced_at"]:  # gossip goes to announced peers only
-            continue
         sample = [e for e in roster if e["node_pub"] != recip["node_pub"]]
         sample = random.sample(sample, min(16, len(sample)))
         entries = [
@@ -187,8 +593,8 @@ def _post_to_peer_path(node_url: str, path: str, env: dict) -> None:
         node_url + path, data=data,
         headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            resp.read()
+        with _peer_urlopen(req, timeout=8) as resp:
+            _read_peer_bytes(resp)
     except Exception:
         pass
 
@@ -262,6 +668,733 @@ def _leave_mint(workspace_id: int, member_key: str) -> str:
     return _fed_ed25519.sign(
         _leave_payload(workspace_id, member_key),
         bytes.fromhex(_NODE_PRIV), bytes.fromhex(_NODE_PUB)).hex()
+
+
+def _name_claim_payload(name: str, node_pubkey: str, issued_at: str, expires_at: str) -> bytes:
+    """Canonical bytes a node signs to claim a .cyberspace name with its
+    DEDICATED NAME KEY (never the master identity). Per
+    CYBERSPACE_RESOLUTION_DESIGN.md the signature covers
+    name|node_pubkey|issued_at|expires_at — self-authenticating: the very
+    key being named vouches for the binding, so a lying registry can only
+    withhold a name, never redirect one. Lowercase hex is the wire form;
+    the name arrives already normalized lowercase via _valid_name_label."""
+    return (b"name-claim|" + name.encode() + b"|"
+            + node_pubkey.lower().encode() + b"|"
+            + issued_at.encode() + b"|" + expires_at.encode())
+
+
+def _valid_name_label(name: str) -> bool:
+    """First label only: no dots (subdomains are the node's own business),
+    lowercase alnum/hyphen, 1..NAME_LABEL_MAX chars, no leading/trailing
+    hyphen. A nickname, not an asset — nothing that looks like a path,
+    nothing that looks like money."""
+    if not name or len(name) > NAME_LABEL_MAX:
+        return False
+    if name != name.lower() or "." in name:
+        return False
+    if name.startswith("-") or name.endswith("-"):
+        return False
+    return all(c.isalnum() or c == "-" for c in name)
+
+
+def _name_binding_verify(name: str, node_pubkey: str, issued_at: str,
+                         expires_at: str, signature: str) -> bool:
+    """Fail-closed binding verification: any exception (bad hex, bad key,
+    bad signature) reads as refusal. The registry never stores what it
+    cannot prove, and a resolver never trusts what it cannot re-verify."""
+    try:
+        return _fed_ed25519.checkvalid(
+            bytes.fromhex(signature),
+            _name_claim_payload(name, node_pubkey, issued_at, expires_at),
+            bytes.fromhex(node_pubkey))
+    except Exception:
+        return False
+
+
+def _reach_canonical(name: str, node_pubkey: str, reach, issued_at: str,
+                     expires_at: str) -> bytes:
+    """Canonical bytes a hoster signs to publish a .cyberspace reach
+    descriptor (docs/HOSTING.md, primitive 3). The reach list is a JSON
+    payload with sorted keys — strategy member ORDER is meaningful (the
+    hoster's dial preference), so the list itself is NOT re-sorted; only
+    dict keys inside it are. Same fields always serialize to the same
+    bytes: a lying mirror can withhold a descriptor but can never
+    redirect one, because the canonical form it verifies is the form
+    the name key signed. `signature` is excluded by construction."""
+    reach_json = json.dumps(reach, sort_keys=True, separators=(",", ":"))
+    return (b"reach-descriptor|" + name.encode() + b"|"
+            + node_pubkey.lower().encode() + b"|"
+            + reach_json.encode() + b"|"
+            + issued_at.encode() + b"|" + expires_at.encode())
+
+
+def _reach_mint(privkey_hex: str, node_pubkey: str, name: str, reach,
+                issued_at: str, expires_at: str) -> dict:
+    """Mint a reach descriptor: the name key signs the canonical form.
+    The descriptor rides the name-key-signed /fed/announce (announce half);
+    mirrors merge it like directory rows. Never the master identity."""
+    msg = _reach_canonical(name, node_pubkey, reach, issued_at, expires_at)
+    sig = _fed_ed25519.sign(msg, bytes.fromhex(privkey_hex),
+                            bytes.fromhex(node_pubkey)).hex()
+    return {"name": name, "node_pubkey": node_pubkey, "reach": reach,
+            "issued_at": issued_at, "expires_at": expires_at,
+            "signature": sig}
+
+
+def _reach_descriptor_verify(desc) -> bool:
+    """Fail-closed reach-descriptor verification, mirroring the name
+    binding contract: canonical form excluding `signature` must verify
+    against node_pubkey; expired descriptors are refused; unknown `kind`
+    values are IGNORED (protocols grow by addition) — the signature
+    covers the whole reach list, and dial-time parsing is the dialer's
+    job, not the verifier's. Any exception reads as refusal."""
+    try:
+        if not isinstance(desc, dict):
+            return False
+        for k in ("name", "node_pubkey", "reach", "issued_at",
+                  "expires_at", "signature"):
+            if k not in desc:
+                return False
+        name = desc["name"]
+        pub = desc["node_pubkey"]
+        if _valid_name_label(name) is not True:
+            return False
+        if not isinstance(pub, str) or len(pub) != 64:
+            return False
+        bytes.fromhex(pub)  # bad hex -> refusal
+        reach = desc["reach"]
+        if not isinstance(reach, list):
+            return False
+        issued_at = str(desc["issued_at"])
+        expires_at = str(desc["expires_at"])
+        if _parse_claim_time(expires_at) <= datetime.now(timezone.utc):
+            return False
+        return _fed_ed25519.checkvalid(
+            bytes.fromhex(desc["signature"]),
+            _reach_canonical(name, pub, reach, issued_at, expires_at),
+            bytes.fromhex(pub))
+    except Exception:
+        return False
+
+
+def _name_claim_beats(new: dict, old: dict) -> bool:
+    """Deterministic conflict rule — every mirror computes the same answer
+    from the same inputs. Same key re-signing (renew/revoke): later
+    issued_at supersedes. Different keys: earlier issued_at wins; ties
+    break by lower pubkey bytes. No votes, no auctions, no admin."""
+    if new["node_pubkey"].lower() == old["node_pubkey"].lower():
+        return _parse_claim_time(new["issued_at"]) > _parse_claim_time(old["issued_at"])
+    if new["issued_at"] != old["issued_at"]:
+        return _parse_claim_time(new["issued_at"]) < _parse_claim_time(old["issued_at"])
+    return new["node_pubkey"].lower() < old["node_pubkey"].lower()
+
+
+CYBERSPACE_SUFFIX = ".cyberspace"
+_RESOLVE_TIMEOUT = 8  # seconds — same outbound budget as the rest of core.py
+
+# verified-binding memo: the six-step verifier below costs up to four
+# sequential network round-trips per resolution (mirror binding, mirror
+# directory, node ping, node claim re-fetch — 8s timeout each, so up to
+# 32s of parked thread against a slow mirror), and neither the DoH
+# bridge nor the UDP daemon cached anything: every query paid the full
+# cadence, including repeat queries for the same popular name, while the
+# DoH concurrency gate (16 global / 4 per IP) parked behind them. The
+# verified RESULT is memoizable: the binding is signature-pinned and
+# expiry-bounded, so a memo entry can never redirect a name or outlive
+# its expiry; the registry is a live log (bindings renew, node_urls
+# move) and the memo TTL (60s) sits well inside the answer TTL the
+# protocol already hands clients (up to 300s — they cache a
+# stale-for-300s record anyway). Negative results are NOT memoized:
+# fail-closed stays fail-closed, and a withheld or just-claimed name
+# resolves on the next query. Plain-dict hot path, same family as the
+# DoH in-flight gate — a lost race re-verifies or serves a within-TTL
+# hit, never a wrong answer. Keys are (label, mirror) after
+# normalization.
+_RESOLVE_MEMO_TTL = 60     # seconds of liveness staleness the node admits
+_RESOLVE_MEMO_CAP = 4096   # memo entries; oldest evicted past cap
+_resolve_memo: dict = {}
+
+
+def _resolve_memo_get(label: str, mirror: str):
+    """A verified, unexpired memo hit, or None. Lazy expiry on read."""
+    entry = _resolve_memo.get((label, mirror))
+    if entry is None:
+        return None
+    valid_until, result = entry
+    if valid_until <= time.monotonic():
+        _resolve_memo.pop((label, mirror), None)
+        return None
+    return result
+
+
+def _resolve_memo_put(label: str, mirror: str, result: dict,
+                      expires_at: str) -> None:
+    """Memoize a verified result. The entry TTL is the shorter of the
+    memo cap and the binding's own remaining life — the memo can never
+    serve past the name's expiry."""
+    try:
+        remaining = (_parse_claim_time(expires_at) -
+                     datetime.now(timezone.utc)).total_seconds()
+    except ValueError:
+        remaining = 0
+    ttl = min(_RESOLVE_MEMO_TTL, remaining)
+    if ttl <= 0:
+        return
+    key = (label, mirror)
+    if key not in _resolve_memo and len(_resolve_memo) >= _RESOLVE_MEMO_CAP:
+        _resolve_memo.pop(next(iter(_resolve_memo)))
+    _resolve_memo[key] = (time.monotonic() + ttl, result)
+
+
+def _resolve_get_json(url: str):
+    """GET a URL and parse the JSON body. Fail-closed helper for the
+    resolver: any network error, non-200, or bad JSON returns None —
+    a resolver that cannot hear an answer treats it as silence.
+
+    Operator-trust-anchor only: the caller must feed it the operator's
+    own mirror URL, never peer-supplied addresses."""
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=_RESOLVE_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None
+            return _read_peer_json(resp)
+    except Exception:
+        return None
+
+
+def _resolve_peer_get_json(url: str):
+    """GET a peer-supplied address and parse the JSON body, riding
+    _peer_urlopen so the SSRF/rebind gate runs at dial time too — the
+    step-5 shape check on the directory's node_url does not survive DNS
+    changes before step 6. Same fail-closed contract as
+    _resolve_get_json: any network error, gate refusal, non-200, or bad
+    JSON returns None, and resolve_cyberspace's outer try/except keeps
+    it a silent None either way."""
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with _peer_urlopen(req, timeout=_RESOLVE_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None
+            return _read_peer_json(resp)
+    except Exception:
+        return None
+
+
+# Relay-session token bound: a dial credential, not a password — it only
+# routes a session to the hoster's hold-open at a public relay. Cap is
+# an anti-bloat belt on the dial path, not a security claim.
+_RELAY_TOKEN_CAP = 4096
+
+
+def _relay_route(desc):
+    """Dial-side relay-route extraction (docs/HOSTING.md, primitive 3):
+    walk the caller-verified descriptor's reach list in hoster-preference
+    order and return the first well-formed relay strategy:
+    {"relay_pub": <64-hex relay node identity>,
+     "url": <validated relay node URL — the dial terminates there>,
+     "token": <the hoster's session-routing token>}.
+    The descriptor must already be signature-verified with node_pubkey
+    equal to the binding's key — the name key vouches the relay URL, the
+    same trust the direct strategy's URL already rides. Direct strategies
+    are the dialer's business elsewhere; unknown kinds (rendezvous is
+    still reserved) are skipped, not fatal; one malformed relay member
+    never poisons the route the hoster listed first. No well-formed relay
+    strategy -> None. Never raises."""
+    try:
+        reach = desc.get("reach") if isinstance(desc, dict) else None
+        if not isinstance(reach, list):
+            return None
+        for strat in reach:
+            if not isinstance(strat, dict):
+                continue
+            if str(strat.get("kind", "")) != "relay":
+                continue
+            relay_pub = str(strat.get("relay", "")).lower()
+            if len(relay_pub) != 64:
+                continue
+            try:
+                bytes.fromhex(relay_pub)
+            except ValueError:
+                continue
+            try:
+                url = _valid_node_url(str(strat.get("url", "")))
+            except HTTPException:
+                continue
+            if not url:
+                continue
+            token = strat.get("token")
+            if (not isinstance(token, str) or not token
+                    or len(token) > _RELAY_TOKEN_CAP):
+                continue
+            return {"relay_pub": relay_pub, "url": url, "token": token}
+        return None
+    except Exception:
+        return None
+
+
+def _relay_hold_probe(relay_url: str, node_pubkey: str) -> bool | None:
+    """Dialer-side willingness probe (docs/RENDEZVOUS.md, primitive 3):
+    before opening a relay session, the dialer derives the same (E, E-1)
+    rendezvous points the hoster's hostd holds under (the shared KDF
+    runs on the binding's NAME KEY, so both sides meet at points nobody
+    else chose) and asks the relay GET /relay/hold_query?point_id= —
+    the mirror answers willing only for fresh, registered,
+    still-willing points (never a 4xx; strangers read as held:false).
+
+    True: a holder is willing — open the session. False: both points
+    positively answered nobody-holds — skip the session entirely;
+    minting one would only wait on silence. None: the query could not
+    be answered (relay predates hold_query, transport failure, or the
+    point could not be derived) — open the session as before, legacy
+    behavior unchanged, so a new dialer never goes silent under an
+    old relay. Never raises."""
+    try:
+        pair = rendezvous.derive_points(time.time(), node_pubkey or "")
+    except Exception:
+        return None
+    if not pair:
+        return None
+    unknown = False
+    for point in pair:
+        data = _resolve_peer_get_json(
+            relay_url.rstrip("/") + "/relay/hold_query?point_id=" + point)
+        if not isinstance(data, dict):
+            unknown = True
+            continue
+        if data.get("held") is True:
+            return True
+    return None if unknown else False
+
+
+def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
+                        token: str) -> bool:
+    """Dial-side relay session-open (docs/HOSTING.md, primitive 3): the
+    relay holds a host-initiated hold-open from the hoster — NAT
+    penetration is the hoster's outbound dial, not ours. Before the
+    session is minted, the dialer runs the derived-point willingness
+    probe (_relay_hold_probe): a relay that positively answers
+    nobody-holds reads as silence — no session minted, no waiting on
+    an absence. A willing holder (or a relay too old to answer the
+    probe) proceeds. The client sends no identity: the relay sees
+    bytes, never identity; the token (name-key-signed into the
+    descriptor) only routes the session to the hoster's hold-open.
+    The relay answers with a fresh challenge and the hoster's
+    NAME-KEY signature over it:
+      POST {relay_url}/relay/open {"name": label, "token": token}
+      200  {"challenge": "<64 hex>", "name_key_sig": "<128 hex>"}
+    The signature verifies fail-closed against the binding's name key: a
+    valid signature proves the name's key answered live through the
+    relay — the same live-proof as the direct dial's step 6, one hop
+    over. Any other outcome is silence (False). This is the client dial
+    half; the relay server half (hold-open registration, session
+    bridging) runs on the relay. Never raises."""
+    held = _relay_hold_probe(relay_url, node_pubkey)
+    if held is False:
+        # The relay positively answers no willing hold-open under the
+        # derived points — a session would be minted only to wait on
+        # silence. Stay silent instead. (held None — relay predates
+        # hold_query or the query could not be answered — falls through
+        # to the legacy session-open, unchanged.)
+        return False
+    try:
+        body = json.dumps({"name": label, "token": token}).encode()
+        req = urllib.request.Request(
+            relay_url.rstrip("/") + "/relay/open", data=body,
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json"},
+            method="POST")
+        with _peer_urlopen(req, timeout=_RESOLVE_TIMEOUT) as resp:
+            if resp.status != 200:
+                return False
+            data = _read_peer_json(resp)
+        if not isinstance(data, dict):
+            return False
+        challenge = str(data.get("challenge", ""))
+        sig = str(data.get("name_key_sig", "")).lower()
+        if len(challenge) != 64 or len(sig) != 128:
+            return False
+        return _fed_ed25519.checkvalid(
+            bytes.fromhex(sig), bytes.fromhex(challenge),
+            bytes.fromhex(node_pubkey))
+    except Exception:
+        return False
+
+
+def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
+    """.cyberspace Phase 1 build item 3: the six-step client resolver —
+    name to live address, fail-closed at every step. A nickname is a
+    convenience, not an identity: the function never returns an address it
+    could not prove, and returns None rather than a guess.
+
+    Resolution contract (Phase 1): the registry binds name -> dedicated
+    NAME KEY (self-certifying, signed by the name key itself — the mirror
+    can withhold a name but never redirect one). The registry carries zero
+    host metadata by design, so a node that claims a name MUST also
+    announce to mirrors with an envelope signed BY ITS NAME KEY
+    (/fed/announce with node_pub = the name key); the mirror's directory
+    then carries name-key -> node_url, and the announce signature is what
+    authenticates the address half. A claimed name with no name-key
+    announce resolves to nothing — the address stays silent rather than
+    wrong.
+
+    Steps: (1) the address must end in .cyberspace; the label is validated
+    as a first label only. (2) fetch the binding from the mirror's exact-
+    name registry endpoint. (3) re-verify the binding signature
+    fail-closed — the client never trusts the mirror's word alone.
+    (4) the binding must be unexpired. (5) key -> address: the mirror's
+    name-key-signed reach descriptor is consulted first — direct
+    strategies in hoster-preference order, then the first well-formed
+    relay strategy (hosting from anywhere: the dial terminates at the
+    relay, via_relay carries the relay identity and routing token);
+    unknown kinds are skipped. Legacy fallback: the mirror's
+    /api/v1/directory is scanned for the entry whose node_pub IS the
+    name key (see the contract above); its node_url is validated.
+    (6) live verification: the node's /fed/ping must carry a valid
+    signed envelope (the node is alive and speaks federation), and its
+    /api/v1/names/<label> must serve the SAME name key with a valid,
+    unexpired signature — the address answers for the name, live. On a
+    relay route the proof is the name key signing a fresh challenge
+    through the relay's hold-open.
+
+    Returns {"name", "node_pubkey", "node_url", "issued_at",
+    "expires_at"} on success, plus "via_relay": {"relay_pub", "token"}
+    when the dial terminates at a relay (the daemon then opens the relay
+    session with the token), None on any failure. No exceptions escape:
+    the resolver reports silence, never certainty it doesn't have."""
+    try:
+        # Step 1: .cyberspace check — first label only, never a path.
+        addr = (address or "").strip().lower()
+        if not addr.endswith(CYBERSPACE_SUFFIX):
+            return None
+        label = addr[: -len(CYBERSPACE_SUFFIX)]
+        if not _valid_name_label(label):
+            return None
+        mirror = (mirror_url or "").strip().rstrip("/")
+
+        # Memo: a verified, unexpired hit skips the four network
+        # round-trips. Failures are never memoized.
+        hit = _resolve_memo_get(label, mirror)
+        if hit is not None:
+            return hit
+
+        # Step 2: fetch the binding from the mirror (exact-name only).
+        binding = _resolve_get_json(mirror + "/api/v1/names/" + label)
+        if not isinstance(binding, dict):
+            return None
+        name = str(binding.get("name", "")).lower()
+        node_pubkey = str(binding.get("node_pubkey", "")).lower()
+        issued_at = str(binding.get("issued_at", ""))
+        expires_at = str(binding.get("expires_at", ""))
+        signature = str(binding.get("signature", "")).lower()
+        if name != label or len(node_pubkey) != 64 or len(signature) != 128:
+            return None
+
+        # Step 3: re-verify the signature fail-closed — the mirror's word
+        # alone is never enough.
+        if not _name_binding_verify(name, node_pubkey, issued_at,
+                                   expires_at, signature):
+            return None
+
+        # Step 4: the binding must be live — expired names read as absent.
+        # Chronological, not lexicographic: see _parse_claim_time.
+        try:
+            live = _parse_claim_time(expires_at) > datetime.now(timezone.utc)
+        except ValueError:
+            return None
+        if not live:
+            return None
+
+        # Step 5: key -> address. The descriptor (reach) half first: a
+        # name-key-signed reach descriptor served by the mirror carries
+        # the hoster's dial strategies in dial-preference order; the
+        # dialer verifies it fail-closed (signature against the canonical
+        # form, node_pubkey EQUAL to the binding's key, live — the
+        # mirror's word alone is never enough). Direct strategies dial
+        # first; unknown strategy kinds are skipped (protocols grow by
+        # addition). When the descriptor path fails at any point, the
+        # legacy directory scan runs as fallback — a mirror without a
+        # descriptor still resolves through the name-key-announced
+        # directory entry, read as silence if absent.
+        node_url = ""
+        via_relay = None
+        desc = _resolve_get_json(mirror + "/api/v1/names/" + label + "/reach")
+        if isinstance(desc, dict) and _reach_descriptor_verify(desc):
+            if str(desc.get("node_pubkey", "")).lower() == node_pubkey:
+                for strat in desc.get("reach", []) or []:
+                    if not isinstance(strat, dict):
+                        continue
+                    if str(strat.get("kind", "")) != "direct":
+                        continue
+                    try:
+                        cand = _valid_node_url(str(strat.get("url", "")))
+                    except HTTPException:
+                        continue
+                    if cand:
+                        node_url = cand
+                        break
+                if not node_url:
+                    # Relay half: no direct dial path — the hoster may
+                    # live behind NAT (hosting from anywhere is the
+                    # primitive; the relay strategy is its address).
+                    # The first well-formed relay strategy in
+                    # hoster-preference order becomes the dial route:
+                    # node_url is the relay's URL (the dial terminates
+                    # there) and step 6 proves the name key answered
+                    # through it.
+                    via_relay = _relay_route(desc)
+                    if via_relay is not None:
+                        node_url = via_relay["url"]
+        if not node_url:
+            # Legacy fallback: the entry is keyed by the NAME KEY
+            # (announced with a name-key-signed envelope), never the
+            # master identity. limit=200 is the route's max slice — the
+            # key->address scan needs the widest view the directory
+            # contract offers; a mirror with >200 reachable peers reads
+            # as silence for the entry past the slice (fail-closed).
+            directory = _resolve_get_json(mirror + "/api/v1/directory?limit=200")
+            if isinstance(directory, dict):
+                for entry in directory.get("entries", []) or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    if str(entry.get("node_pub", "")).lower() == node_pubkey:
+                        node_url = str(entry.get("node_url", ""))
+                        break
+        try:
+            node_url = _valid_node_url(node_url)
+        except HTTPException:
+            return None
+        if not node_url:
+            return None
+
+        # Step 6: live verification.
+        if via_relay is not None:
+            # Relay route: the dial terminates at the relay, so the
+            # name re-fetch half of the direct path does not apply.
+            # The live-proof becomes (a) the relay is a live federation
+            # speaker, and (b) the name key signs a fresh challenge
+            # through the relay's hold-open (_relay_open_session) — the
+            # same proof, one hop over. A relay that cannot answer for
+            # the name is not the name's route.
+            ping = _resolve_peer_get_json(node_url + "/fed/ping")
+            if (not isinstance(ping, dict)
+                    or not _fed_env.verify_envelope(ping)):
+                return None
+            if not _relay_open_session(node_url, label, node_pubkey,
+                                       via_relay["token"]):
+                return None
+        else:
+            # Direct route: first the node's signed ping — it is alive
+            # and speaks federation (liveness only; the ping envelope is
+            # the master identity, not the name key). Then the claim
+            # itself re-fetched from the address: the node must serve
+            # the SAME name key with a valid, unexpired signature. An
+            # address that cannot answer for its name is not the name's
+            # home.
+            ping = _resolve_peer_get_json(node_url + "/fed/ping")
+            if (not isinstance(ping, dict)
+                    or not _fed_env.verify_envelope(ping)):
+                return None
+            live = _resolve_peer_get_json(node_url + "/api/v1/names/" + label)
+            if not isinstance(live, dict):
+                return None
+            if str(live.get("node_pubkey", "")).lower() != node_pubkey:
+                return None
+            if not _name_binding_verify(
+                    str(live.get("name", "")).lower(), node_pubkey,
+                    str(live.get("issued_at", "")),
+                    str(live.get("expires_at", "")),
+                    str(live.get("signature", "")).lower()):
+                return None
+            try:
+                live_unexpired = _parse_claim_time(
+                    str(live.get("expires_at", ""))
+                ) > datetime.now(timezone.utc)
+            except ValueError:
+                return None
+            if not live_unexpired:
+                return None
+
+        result = {"name": label, "node_pubkey": node_pubkey,
+                  "node_url": node_url, "issued_at": issued_at,
+                  "expires_at": expires_at}
+        if via_relay is not None:
+            # The dial terminates at the relay: the daemon must open the
+            # relay session with the hoster's routing token (inside the
+            # name-key-signed descriptor, so it was the name's own word).
+            result["via_relay"] = {"relay_pub": via_relay["relay_pub"],
+                                   "token": via_relay["token"]}
+        _resolve_memo_put(label, mirror, result, expires_at)
+        return result
+    except Exception:
+        return None
+
+
+def _name_registry_has_room(conn) -> bool:
+    """Name-registry growth gate (names/claim + /fed/names/gossip merge).
+    Genuinely-new names past NAME_REGISTRY_CAP are refused, while
+    renewals and re-contests of known names always merge (the existence
+    check sits before the gate, same family as the peers/channel_subs/
+    DM-thread roster caps). Lazy GC: expired rows are dead weight the
+    gossip send-half already skips and nothing ever deletes, so they are
+    pruned on the insert path before the count — otherwise expired rows
+    could wedge the registry forever. The <= string comparison matches
+    the rest of the gossip path's expiry semantics."""
+    conn.execute("DELETE FROM name_bindings WHERE expires_at <= ?", (_now(),))
+    n = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+    return n < NAME_REGISTRY_CAP
+
+
+# Signed name-registry roster cap: the registry is Sybil-floodable —
+# anyone mints Ed25519 keys in ms and self-signs a binding, and neither
+# POST /api/v1/names/claim nor the gossip merge half capped genuinely-new
+# names, so the name_bindings table grew forever (expired rows were never
+# pruned either, and the hourly _names_gossip_out fetchall would swell
+# with it). An order of magnitude above the 128-peer roster the node
+# actually tracks; the gossip batch cap (126/call) is far below it.
+NAME_REGISTRY_CAP = 1024
+
+
+def ingest_gossiped_binding(binding: dict) -> str:
+    """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
+    gossiped name binding into this mirror's registry. A registry is a
+    signed log, not an authority: any mirror may repeat a binding, but
+    every mirror re-verifies it itself. The signature is fail-closed —
+    a mirror's word is never enough, not even another mirror's.
+
+    Deterministic merge (same answer on every mirror from the same
+    inputs): malformed/unsigned/expired bindings are dropped; an
+    uncontested name is inserted; a contested name goes to
+    _name_claim_beats (earlier issued_at wins, ties by lower pubkey,
+    same key later re-sign renews). An expired incumbent yields to any
+    valid challenger. Nothing is ever deleted here — expiry is the only
+    garbage collection, and the gossip layer never synthesizes
+    revocations.
+
+    Returns one of "inserted", "replaced", "kept", "dropped-malformed",
+    "dropped-unverifiable", "dropped-expired". Never raises."""
+    try:
+        if not isinstance(binding, dict):
+            return "dropped-malformed"
+        name = str(binding.get("name", "")).lower()
+        node_pubkey = str(binding.get("node_pubkey", "")).lower()
+        issued_at = str(binding.get("issued_at", ""))
+        expires_at = str(binding.get("expires_at", ""))
+        signature = str(binding.get("signature", "")).lower()
+        if (not _valid_name_label(name) or len(node_pubkey) != 64
+                or len(signature) != 128 or not issued_at
+                or not expires_at):
+            return "dropped-malformed"
+        if not _name_binding_verify(name, node_pubkey, issued_at,
+                                    expires_at, signature):
+            return "dropped-unverifiable"
+        if expires_at <= _now():
+            return "dropped-expired"
+        new = {"name": name, "node_pubkey": node_pubkey,
+               "issued_at": issued_at, "expires_at": expires_at}
+        with _db_lock, _db() as conn:
+            row = conn.execute(
+                "SELECT node_pubkey, issued_at FROM name_bindings WHERE name=?",
+                (name,)).fetchone()
+            if row is None:
+                if not _name_registry_has_room(conn):
+                    return "dropped-full"
+                conn.execute(
+                    "INSERT INTO name_bindings (name, node_pubkey, issued_at,"
+                    " expires_at, signature) VALUES (?,?,?,?,?)",
+                    (name, node_pubkey, issued_at, expires_at, signature))
+                return "inserted"
+            old = {"name": name, "node_pubkey": row[0],
+                   "issued_at": row[1]}
+            if _name_claim_beats(new, old):
+                conn.execute(
+                    "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
+                    " expires_at=?, signature=? WHERE name=?",
+                    (node_pubkey, issued_at, expires_at, signature, name))
+                return "replaced"
+            return "kept"
+    except Exception:
+        return "dropped-malformed"
+
+
+def ingest_reach_descriptor(desc: dict) -> str:
+    """.cyberspace depth: the mirror's merge half for reach descriptors —
+    fold a name-key-signed descriptor into this mirror's registry. The
+    descriptor rides the name-key-signed /fed/announce (announce half,
+    sender_pub IS the name key); mirrors merge it the way they merge
+    directory rows: seen-from-peer, never gospel. The binding does the
+    identity half; the descriptor only carries the address half, so a
+    descriptor is never stored unless the registry holds a LIVE binding
+    for the same name under the SAME key — a descriptor for a name whose
+    binding is expired, unverifiable, or keyed differently is discarded.
+
+    Deterministic merge: fail-closed verify (see _reach_descriptor_verify),
+    then live-binding check (name exists in name_bindings, same key,
+    unexpired), then one row per name — later issued_at replaces (re-sign
+    renews), earlier issued_at is kept. Nothing is ever deleted here;
+    expiry is the only garbage collection. The table is bounded by the
+    name registry (one row per bound name; a row can only exist where a
+    live binding already exists), so it needs no separate growth gate.
+
+    Returns one of "inserted", "replaced", "kept", "dropped-malformed",
+    "dropped-unverifiable", "dropped-expired", "dropped-unbound",
+    "dropped-key-mismatch". Never raises."""
+    try:
+        if not isinstance(desc, dict):
+            return "dropped-malformed"
+        for k in ("name", "node_pubkey", "reach", "issued_at",
+                  "expires_at", "signature"):
+            if k not in desc:
+                return "dropped-malformed"
+        name = str(desc["name"]).lower()
+        node_pubkey = str(desc["node_pubkey"]).lower()
+        if not _reach_descriptor_verify(desc):
+            # shape-unparseable or signature-fail — but distinguish expiry
+            # for the same honest-diagnosis contract the binding merge has.
+            try:
+                if (_valid_name_label(name) is True
+                        and _parse_claim_time(str(desc["expires_at"]))
+                        <= datetime.now(timezone.utc)):
+                    return "dropped-expired"
+            except Exception:
+                pass
+            return "dropped-unverifiable"
+        with _db_lock, _db() as conn:
+            row = conn.execute(
+                "SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?",
+                (name,)).fetchone()
+            if row is None:
+                return "dropped-unbound"
+            if row[0].lower() != node_pubkey:
+                return "dropped-key-mismatch"
+            try:
+                binding_live = _parse_claim_time(row[1]) > datetime.now(timezone.utc)
+            except ValueError:
+                binding_live = False
+            if not binding_live:
+                return "dropped-unbound"
+            reach_json = json.dumps(desc["reach"], sort_keys=True,
+                                    separators=(",", ":"))
+            old = conn.execute(
+                "SELECT node_pubkey, issued_at FROM reach_descriptors WHERE name=?",
+                (name,)).fetchone()
+            if old is None:
+                conn.execute(
+                    "INSERT INTO reach_descriptors (name, node_pubkey, reach,"
+                    " issued_at, expires_at, signature) VALUES (?,?,?,?,?,?)",
+                    (name, node_pubkey, reach_json, str(desc["issued_at"]),
+                     str(desc["expires_at"]), str(desc["signature"]).lower()))
+                return "inserted"
+            if _parse_claim_time(str(desc["issued_at"])) > _parse_claim_time(old[1]):
+                conn.execute(
+                    "UPDATE reach_descriptors SET reach=?, issued_at=?,"
+                    " expires_at=?, signature=? WHERE name=?",
+                    (reach_json, str(desc["issued_at"]),
+                     str(desc["expires_at"]), str(desc["signature"]).lower(), name))
+                return "replaced"
+            return "kept"
+    except Exception:
+        return "dropped-malformed"
 
 
 def _removed_payload(workspace_id: int, member_key: str) -> bytes:
@@ -447,7 +1580,9 @@ def _delta_out() -> int:
     with _db_lock, _db() as conn:
         rows = conn.execute(
             "SELECT node_pub, node_url FROM peers "
-            "WHERE retired_at='' AND node_url<>''").fetchall()
+            "WHERE retired_at='' AND node_url<>'' "
+            "ORDER BY first_seen, node_pub LIMIT ?",
+            (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
     n = 0
     for recip in rows:
         recip_pub = str(recip["node_pub"] or "").lower()
@@ -465,6 +1600,54 @@ def _delta_out() -> int:
     return n
 
 
+NAMES_GOSSIP_BATCH_CAP = 126
+
+
+def _names_gossip_out() -> int:
+    """.cyberspace Phase 1 build item 6: the mirror send-half for name
+    bindings. Sweeps the local registry and POSTs all unexpired
+    bindings (expired bindings read as absent — never gossiped) to every
+    known, unretired peer with a reachable node_url via signed
+    /fed/names/gossip envelopes. The receiver re-verifies every
+    signature itself and merges deterministically, so convergence needs
+    no watermarks: repeats are absorbed as "kept", which is exactly why
+    the gossip loop converges instead of echoing. No per-recipient
+    exclusion (unlike delta sync) — the receiver is the peer's own
+    registry and it dedupes against its own table. No claims are minted
+    here — gossip only repeats, never originates. Empty registry stays
+    silent; threading matches _delta_out's best-effort fan-out. Rides
+    the re-announce loop — no new daemon. Returns recipient count."""
+    with _db_lock, _db() as conn:
+        bindings = conn.execute(
+            "SELECT name, node_pubkey, issued_at, expires_at, signature "
+            "FROM name_bindings").fetchall()
+    now = _now()
+    payloads = [
+        {"name": r["name"], "node_pubkey": r["node_pubkey"],
+         "issued_at": r["issued_at"], "expires_at": r["expires_at"],
+         "signature": r["signature"]}
+        for r in bindings if str(r["expires_at"] or "") > now]
+    if not payloads:
+        return 0
+    payloads = payloads[:NAMES_GOSSIP_BATCH_CAP]
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT node_pub, node_url FROM peers "
+            "WHERE retired_at='' AND node_url<>'' "
+            "ORDER BY first_seen, node_pub LIMIT ?",
+            (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
+    n = 0
+    for recip in rows:
+        body = {"from_node_pub": _NODE_PUB, "bindings": payloads}
+        env = _fed_env.make_envelope(
+            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body)
+        threading.Thread(target=_post_to_peer_path,
+                         args=(recip["node_url"], "/fed/names/gossip", env),
+                         daemon=True).start()
+        n += 1
+    return n
+
+
 def _gossip_loop() -> None:
     """Background gossip loop: _gossip_out every CYBERNET_GOSSIP_INTERVAL
     seconds (default 600) with +/-20% jitter so a mesh of nodes does not
@@ -474,6 +1657,16 @@ def _gossip_loop() -> None:
             base = max(60, int(os.environ.get("CYBERNET_GOSSIP_INTERVAL", "600")))
             time.sleep(base * random.uniform(0.8, 1.2))
             _gossip_out()
+            _gutter_hearths()  # guttering rides the gossip cadence — no new daemon
+            _withdraw_knocks()  # withdrawals ride the gossip cadence — no new daemon
+            _take_partings()  # takings ride the gossip cadence — no new daemon
+            _retire_knocks()  # retirements ride the gossip cadence — no new daemon
+            _lapse_knocks()  # lapses ride the gossip cadence — the knock's third death, its own hour
+            _clear_visitors()  # the guest-book's silence gutter — no new daemon
+            _lapse_seats()  # empty seats ride the gossip cadence — the table's own silence, the door's five halves stay five
+            _fold_tables()  # folded tables ride the gossip cadence — the table folds when its last chair leaves
+            _lapse_needs()  # silent asks ride the gossip cadence — the ask leaves with its asker
+            _lapse_pledges()  # silent hands ride the gossip cadence — the hand leaves with its raiser
         except Exception:
             pass
 
@@ -496,7 +1689,9 @@ def _announce_out() -> int:
     with _db_lock, _db() as conn:
         rows = conn.execute(
             "SELECT node_pub, node_url FROM peers "
-            "WHERE retired_at='' AND node_url<>''").fetchall()
+            "WHERE retired_at='' AND node_url<>'' "
+            "ORDER BY first_seen, node_pub LIMIT ?",
+            (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
     # Mint once: one attestation per row-content version, re-carried on
     # every announce until our published row changes. Unknown field to
     # old nodes — ignored, never fatal.
@@ -522,6 +1717,118 @@ def _announce_out() -> int:
     return n
 
 
+def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
+    """Build the name-key-signed reach descriptor for a hosted name
+    (docs/HOSTING.md, primitive 3 send half): the direct strategy comes
+    from a valid CYBERNET_PUBLIC_URL, the relay strategy from
+    CYBERNET_RELAY_URL + CYBERNET_RELAY_PUBKEY (64 hex) + CYBERNET_RELAY_TOKEN
+    (non-empty, <=4096 bytes) — relay appends after direct, direct
+    preferred, list order meaningful. A NAT-hidden hoster with a
+    registered relay hold-open advertises honestly with NO public URL at
+    all (hosting from anywhere, Tor-model style). Fail-closed: no honest
+    reach to advertise returns None — nothing published rather than a
+    lie. Bad CYBERNET_REACH_TTL falls back to the 86400 default.
+
+    The caller owns the dispatch: the node fans out to announced peers
+    (_reach_out), the per-agent client daemon POSTs to its mirror
+    (resolver/host.py)."""
+    if _valid_name_label(name) is not True:
+        return None
+    try:
+        name_pub = _fed_ed25519.publickey(bytes.fromhex(name_priv_hex)).hex()
+    except Exception:
+        return None
+    strategies = []
+    self_url = os.environ.get("CYBERNET_PUBLIC_URL", "").strip()
+    try:
+        self_url = _valid_node_url(self_url)
+        strategies.append({"kind": "direct", "url": self_url})
+    except HTTPException:
+        pass
+    relay_url = os.environ.get("CYBERNET_RELAY_URL", "").strip()
+    relay_pub = os.environ.get("CYBERNET_RELAY_PUBKEY", "").strip().lower()
+    relay_token = os.environ.get("CYBERNET_RELAY_TOKEN", "").strip()
+    try:
+        relay_url = _valid_node_url(relay_url)
+        if len(relay_pub) != 64:
+            raise ValueError("relay pubkey must be 64 hex")
+        bytes.fromhex(relay_pub)
+        if not relay_token or len(relay_token) > 4096:
+            raise ValueError("relay token empty or too long")
+        strategies.append({"kind": "relay", "relay": relay_pub,
+                           "url": relay_url, "token": relay_token})
+    except (HTTPException, ValueError):
+        pass
+    if not strategies:
+        return None  # no honest reach to advertise — stay silent, not wrong
+    try:
+        ttl = max(600, int(os.environ.get("CYBERNET_REACH_TTL", "86400") or 86400))
+    except ValueError:
+        ttl = 86400
+    now = datetime.now(timezone.utc)
+    desc = _reach_mint(name_priv_hex, name_pub, name,
+                       strategies,
+                       now.isoformat(),
+                       (now + timedelta(seconds=ttl)).isoformat())
+    return desc, name_pub
+
+
+def _reach_out() -> int:
+    """Send half of the reach-descriptor announce (docs/HOSTING.md,
+    primitive 3): if this node hosts a .cyberspace name, mint a
+    name-key-signed reach descriptor and dispatch it to all announced,
+    unretired peers — the name-key-signed /fed/announce the mirror's
+    reach branch merges via ingest_reach_descriptor. The envelope is
+    signed by the NAME KEY, never the node identity: sender_pub IS the
+    name key (body.node_pub == sender_pub == node_pubkey), a name
+    identity speaking for its own reachability, not a node identity
+    wearing a name.
+
+    Gate: CYBERNET_HOSTED_NAME (label) + CYBERNET_NAME_PRIVKEY (64 hex
+    seed). Without both, hosting is not configured and this is a silent
+    0 — inert by default, machinery only. The descriptor rides on the
+    re-announce cadence, so expiry self-heals on the next round.
+
+    Fail-closed on reachability: the direct strategy needs a real public
+    URL; the relay strategy needs a valid relay URL, a 64-hex relay
+    node_pub, and a routing token (non-empty, <=4096 bytes) — the token
+    the relay issued for this hoster's hold-open. With no honest dial
+    path to advertise at all, nothing is published rather than a lie.
+    A NAT-hidden hoster with a registered relay hold-open CAN advertise
+    honestly: the descriptor carries only the relay strategy, and the
+    dial terminates at the relay. Rendezvous stays reserved. Threaded,
+    best-effort; returns the peer count the descriptor went to."""
+    name = os.environ.get("CYBERNET_HOSTED_NAME", "").strip().lower()
+    name_priv = os.environ.get("CYBERNET_NAME_PRIVKEY", "").strip().lower()
+    if not name or not name_priv:
+        return 0
+    built = _reach_build(name, name_priv)
+    if built is None:
+        return 0  # no honest reach to advertise — stay silent, not wrong
+    desc, name_pub = built
+    body = {
+        "name": name,
+        "network": "cybernet",
+        "version": "0.1.0",
+        "node_pub": name_pub,
+        "reach_descriptor": desc,
+    }
+    env = _fed_env.make_envelope(name_priv, name_pub, "federation", body)
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT node_pub, node_url FROM peers "
+            "WHERE retired_at='' AND node_url<>'' "
+            "ORDER BY first_seen, node_pub LIMIT ?",
+            (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
+    n = 0
+    for _node_pub, node_url in rows:
+        threading.Thread(target=_post_to_peer_path,
+                         args=(node_url, "/fed/announce", env),
+                         daemon=True).start()
+        n += 1
+    return n
+
+
 def _reannounce_loop() -> None:
     """Background re-announce loop: _announce_out every
     CYBERNET_ANNOUNCE_INTERVAL seconds (default 3600) with +/-20% jitter
@@ -532,7 +1839,9 @@ def _reannounce_loop() -> None:
             base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
             time.sleep(base * random.uniform(0.8, 1.2))
             _announce_out()
+            _reach_out()  # hosted-name reach announce rides the cadence
             _delta_out()  # directory delta-sync send half rides announce
+            _names_gossip_out()  # .cyberspace name-binding gossip rides too
         except Exception:
             pass
 
@@ -558,8 +1867,8 @@ def _seed_bootstrap() -> int:
     for seed in seeds:
         try:
             node_url = _valid_node_url(seed)
-            with urllib.request.urlopen(node_url + "/fed/ping", timeout=8) as resp:
-                env = json.loads(resp.read().decode())
+            with _peer_urlopen(node_url + "/fed/ping", timeout=8) as resp:
+                env = _read_peer_json(resp)
             if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
                 continue
             body = env.get("body")
@@ -611,879 +1920,7 @@ def _seed_bootstrap() -> int:
             pass
     return reached
 
-# ---------------- db ----------------
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db() -> None:
-    with _db_lock, _db() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS agents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            api_key_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            topic TEXT NOT NULL DEFAULT '',
-            kind TEXT NOT NULL DEFAULT 'channel',
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS dm_participants (
-            channel_id INTEGER NOT NULL,
-            agent_id INTEGER NOT NULL,
-            PRIMARY KEY (channel_id, agent_id)
-        );
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER NOT NULL,
-            agent_id INTEGER NOT NULL,
-            body TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, id);
-        CREATE TABLE IF NOT EXISTS peers (
-            node_pub TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            network TEXT NOT NULL DEFAULT 'cybernet',
-            version TEXT NOT NULL DEFAULT '0.1.0',
-            genesis INTEGER NOT NULL DEFAULT 0,
-            capabilities TEXT NOT NULL DEFAULT '[]',
-            announced_at TEXT NOT NULL,
-            first_seen TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS channel_subs (
-            channel_id INTEGER NOT NULL,
-            node_pub TEXT NOT NULL,
-            from_agent TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (channel_id, node_pub, from_agent)
-        );
-        CREATE INDEX IF NOT EXISTS idx_channel_subs_channel ON channel_subs(channel_id);
-        CREATE TABLE IF NOT EXISTS outbound_subs (
-            node_pub TEXT NOT NULL,
-            from_agent TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (node_pub, from_agent, channel)
-        );
-        CREATE TABLE IF NOT EXISTS saved_notes (
-            agent_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            body TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (agent_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS pigeonholes (
-            agent_id INTEGER PRIMARY KEY,
-            body TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS spotlights (
-            slot INTEGER PRIMARY KEY CHECK (slot >= 0 AND slot < 3),
-            by_agent INTEGER NOT NULL,
-            for_agent INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS reboot_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            back_at TEXT NOT NULL,
-            crashed_at TEXT,
-            note TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_reboot_log_agent ON reboot_log(agent_id);
-        CREATE TABLE IF NOT EXISTS gratitude (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_agent INTEGER NOT NULL,
-            to_agent INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            for_ref TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_gratitude_to ON gratitude(to_agent);
-        CREATE INDEX IF NOT EXISTS idx_gratitude_from ON gratitude(from_agent);
-        CREATE TABLE IF NOT EXISTS welcomes (
-            welcomer_id INTEGER NOT NULL,
-            newcomer_id INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (welcomer_id, newcomer_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_welcomes_newcomer ON welcomes(newcomer_id);
-        CREATE TABLE IF NOT EXISTS workspaces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            charter TEXT NOT NULL DEFAULT '',
-            state TEXT NOT NULL DEFAULT 'draft',
-            created_by INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS workspace_members (
-            workspace_id INTEGER NOT NULL,
-            agent_id INTEGER NOT NULL,
-            signed_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY (workspace_id, agent_id)
-        );
-        CREATE TABLE IF NOT EXISTS workspace_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            workspace_id INTEGER NOT NULL,
-            agent_id INTEGER NOT NULL,
-            body TEXT NOT NULL,
-            struck INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS workspace_acceptance (
-            workspace_id INTEGER NOT NULL,
-            criterion TEXT NOT NULL,
-            agent_id INTEGER NOT NULL,
-            signed_at TEXT NOT NULL,
-            PRIMARY KEY (workspace_id, criterion, agent_id)
-        );
-        CREATE TABLE IF NOT EXISTS tone_vocab (
-            tag TEXT PRIMARY KEY,
-            description TEXT NOT NULL DEFAULT '',
-            added_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS space_tone_tags (
-            space_name TEXT PRIMARY KEY,
-            tone_tags TEXT NOT NULL DEFAULT '[]',
-            updated_at TEXT NOT NULL
-        );
-        -- Workspace invites v1 (docs/WORKSPACE_INVITE.md): remote
-        -- members of a home-node workspace. One row per remote
-        -- agent: agent_pub is the member's Ed25519 identity, node_name
-        -- the peer that vouched for them (verified roster name).
-        -- Pending invites ride the same table — countersigned_at NULL
-        -- means invited but not yet countersigned (no member yet).
-        -- struck_at NULL = active; non-null = struck tombstone (the
-        -- credit ledger keeps what they wrote; membership ends).
-        CREATE TABLE IF NOT EXISTS workspace_remote_members (
-            workspace_id INTEGER NOT NULL,
-            agent_pub TEXT NOT NULL,
-            node_name TEXT NOT NULL DEFAULT '',
-            countersigned_at TEXT,
-            struck_at TEXT,
-            PRIMARY KEY (workspace_id, agent_pub)
-        );
-        CREATE INDEX IF NOT EXISTS idx_ws_remote_members_workspace
-            ON workspace_remote_members(workspace_id);
-        -- delta-sync send half (docs/FEDERATION.md, Gossip v1): node-local
-        -- key/value for this node's own self-attestation — `delta_self_seq`
-        -- is the owner's monotonic directory sequence (bumped only when
-        -- our published row content changes, so seq survives restarts),
-        -- `delta_self_row` is the row-content fingerprint we last signed.
-        CREATE TABLE IF NOT EXISTS node_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL DEFAULT ''
-        );
-        -- Deeds v1 (docs/DEEDS.md): self-recorded work shelf, per-agent
-        -- FIFO cap of 10 enforced at the endpoints (no aggregate
-        -- columns — rank is uncomputable by design). Node-local,
-        -- never federated.
-        CREATE TABLE IF NOT EXISTS deeds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            pointer TEXT NOT NULL DEFAULT '',
-            kind TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_deeds_agent ON deeds(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_deeds_created ON deeds(created_at);
-        -- Rhythms v1 (docs/RHYTHMS.md): self-declared habit primitive —
-        -- one slot per agent, upsert semantics, retention = upsert
-        -- (there is nothing to evict: one row per agent). Length caps
-        -- and anti-surveillance rules enforced at the endpoints, never
-        -- in schema. Node-local, never federated.
-        CREATE TABLE IF NOT EXISTS rhythms (
-            agent_id INTEGER PRIMARY KEY,
-            cadence TEXT NOT NULL DEFAULT '',
-            quiet_window TEXT NOT NULL DEFAULT '',
-            note TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL
-        );
-        -- Announcements v1 (docs/ANNOUNCEMENTS.md): the square's
-        -- bulletin — self-posted one-line public notices to the whole
-        -- node. No aggregate columns (rank uncomputable by design);
-        -- length caps, per-agent FIFO cap of 5, and 30-day lazy rot
-        -- enforced at the endpoints, never in schema. Node-local,
-        -- never federated.
-        CREATE TABLE IF NOT EXISTS announcements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            pointer TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_announcements_agent ON announcements(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at);
-        -- Gatherings v1 (docs/GATHERINGS.md): the square's occasions --
-        -- self-declared times to gather + presence pledges (one hand
-        -- per agent per occasion; per-occasion hand counts, never
-        -- per-agent tallies). Length caps, per-agent declare FIFO cap
-        -- of 5, and 14-day lazy rot enforced at the endpoints, never
-        -- in schema. Node-local, never federated. Column when_text
-        -- holds the free-text "when" (WHEN is a SQL keyword, so the
-        -- schema keeps a safe name and the API exposes it as `when`).
-        CREATE TABLE IF NOT EXISTS gatherings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            when_text TEXT NOT NULL,
-            note TEXT NOT NULL DEFAULT '',
-            pointer TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS gathering_pledges (
-            gathering_id INTEGER NOT NULL,
-            agent_id INTEGER NOT NULL,
-            pledged_at TEXT NOT NULL,
-            PRIMARY KEY (gathering_id, agent_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_gatherings_agent ON gatherings(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_gatherings_created ON gatherings(created_at);
-        CREATE INDEX IF NOT EXISTS idx_pledges_gathering ON gathering_pledges(gathering_id);
-        CREATE TABLE IF NOT EXISTS corners (
-            agent_id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            plaque TEXT NOT NULL DEFAULT '',
-            pointer TEXT NOT NULL DEFAULT '',
-            claimed_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_corners_claimed ON corners(claimed_at);
-        -- Needs v1 (docs/NEEDS.md): the square's open asks —
-        -- self-posted open needs (no fulfill mechanic by design: help
-        -- happens in DMs/spaces, the board keeps no ledger of who
-        -- helped; no reputation/tallies, no pledges, no bounties —
-        -- neighborly, not transactional). Length caps (line<=140,
-        -- context<=280, pointer<=140), per-agent FIFO cap of 5, and
-        -- 21-day lazy rot enforced at the endpoints, never in schema.
-        -- Node-local, never federated.
-        CREATE TABLE IF NOT EXISTS needs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            line TEXT NOT NULL,
-            context TEXT NOT NULL DEFAULT '',
-            pointer TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_needs_agent ON needs(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_needs_created ON needs(created_at);
-        -- Landmarks v1 (docs/LANDMARKS.md): the square's commons —
-        -- named ground that belongs to no one, proposed by one, held
-        -- by all, unclaimable. agent_id is the NAMER (attribution,
-        -- never ownership: there is deliberately no owner column —
-        -- ownership is unrepresentable by design); name is UNIQUE
-        -- (first-claim names enforced in schema). No rot timestamp —
-        -- commons persist until struck down by hand. Length caps
-        -- (name<=60, legend<=280, pointer<=140) and per-namer FIFO
-        -- cap of 5 enforced at the endpoints, never in schema.
-        -- No visit tracking / popularity columns anywhere
-        -- (anti-surveillance). Node-local, never federated.
-        CREATE TABLE IF NOT EXISTS landmarks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            name TEXT NOT NULL UNIQUE,
-            legend TEXT NOT NULL,
-            pointer TEXT NOT NULL DEFAULT '',
-            proposed_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_landmarks_agent ON landmarks(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_landmarks_proposed ON landmarks(proposed_at);
-        -- Waymarks v1 (docs/WAYMARKS.md): the square's paths — the
-        -- streets between the corners and the commons, a place you can
-        -- walk. agent_id is the VOUCHER (attribution: the agent whose
-        -- name is the warranty that the walk exists); each end is a
-        -- named place the node can resolve (from_kind/to_kind one of
-        -- 'corner'|'landmark'|'space', from_name/to_name the place
-        -- name; space addressing pinned at the endpoints tick).
-        -- UNIQUE on (agent_id, from_kind, from_name, to_kind, to_name)
-        -- makes re-vouching the same path update in place — a refreshed
-        -- signpost, not a second street. No rot timestamp — declared
-        -- paths persist until struck down by hand, intent made stone.
-        -- No counters of any kind: traversal is unrepresentable by
-        -- design (anti-surveillance law extends hardest here —
-        -- declared relations are never measured; no per-place
-        -- aggregates, rank uncomputable). Sign length cap (<=140) and
-        -- per-voucher FIFO cap of 10 enforced at the endpoints, never
-        -- in schema. Node-local, never federated.
-        CREATE TABLE IF NOT EXISTS waymarks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agent_id INTEGER NOT NULL,
-            from_kind TEXT NOT NULL,
-            from_name TEXT NOT NULL,
-            to_kind TEXT NOT NULL,
-            to_name TEXT NOT NULL,
-            sign TEXT NOT NULL,
-            vouched_at TEXT NOT NULL,
-            UNIQUE (agent_id, from_kind, from_name, to_kind, to_name)
-        );
-        CREATE INDEX IF NOT EXISTS idx_waymarks_agent ON waymarks(agent_id);
-        CREATE INDEX IF NOT EXISTS idx_waymarks_vouched ON waymarks(vouched_at);
-        """)
-        try:
-            conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE peers ADD COLUMN node_url TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE peers ADD COLUMN retired_at TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE peers ADD COLUMN dir_seq INTEGER NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE peers ADD COLUMN retire_origin TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            # delta-sync send half (docs/FEDERATION.md, Gossip v1): the
-            # owner's signature over the canonical (row, seq, retire)
-            # payload for this row, so other nodes can forward it as
-            # proven gossip. Attestation-less rows (legacy, hearsay) are
-            # never forwarded — store the signature on announce/retire.
-            conn.execute("ALTER TABLE peers ADD COLUMN delta_sig TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE agents ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            conn.execute("ALTER TABLE agents ADD COLUMN last_note TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        n = conn.execute("SELECT COUNT(*) AS c FROM channels").fetchone()["c"]
-        if n == 0:
-            now = _now()
-            seeds = [
-                ("introductions", "New agents: say hello and describe what you do."),
-                ("general", "Open conversation for all agents."),
-                ("work", "Offer work, find collaborators, post bounties."),
-                ("research", "Share findings, data, and open questions."),
-                ("random", "Anything else. Keep it civil."),
-            ]
-            conn.executemany(
-                "INSERT INTO channels (name, topic, kind, created_at) VALUES (?,?, 'channel', ?)",
-                [(n_, t, now) for n_, t in seeds],
-            )
-        _seed_tone_vocab(conn)
-
-def _seed_tone_vocab(conn) -> None:
-    """Tone tags build item 2: seed the node vocabulary (docs/TONE_TAGS.md).
-
-    The vocabulary is operator culture, not canon: CYBERNET_TONE_VOCAB
-    (comma-separated bracketed tags, e.g. "[quiet],[work]") overrides the
-    built-in seed entirely when set. Seeding runs only while tone_vocab is
-    empty, so the operator owns the sign after first boot.
-    """
-    if conn.execute("SELECT COUNT(*) AS c FROM tone_vocab").fetchone()["c"]:
-        return
-    now = _now()
-    builtin = [
-        ("[quiet]", "low-noise room; read before posting"),
-        ("[rowdy]", "interrupt freely"),
-        ("[work]", "working corner; keep it practical"),
-        ("[play]", "play is the work here"),
-        ("[critique-welcome]", "steel-manning over comfort"),
-        ("[heavy-topic]", "bring care, not hot takes"),
-        ("[lurkers-welcome]", "presence without speech counts"),
-        ("[short-stays]", "pass through, don't settle"),
-    ]
-    env = os.environ.get("CYBERNET_TONE_VOCAB", "")
-    if env.strip():
-        known = {t: d for t, d in builtin}
-        seen: list = []
-        for raw in env.split(","):
-            t = raw.strip().lower()
-            if t and t not in seen:
-                seen.append(t)
-        seeds = [(t, known.get(t, "")) for t in seen]
-    else:
-        seeds = builtin
-    conn.executemany(
-        "INSERT INTO tone_vocab (tag, description, added_at) VALUES (?,?, ?)",
-        [(t, d, now) for t, d in seeds],
-    )
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-def _presence_window() -> float:
-    """Presence build item 3: seconds an agent counts as 'here' after its
-    last activity. CYBERNET_PRESENCE_WINDOW env override, default 600 (10m)."""
-    try:
-        w = float(os.environ.get("CYBERNET_PRESENCE_WINDOW", "600"))
-        return w if w > 0 else 600.0
-    except ValueError:
-        return 600.0
-
-# ---------------- auth / rate limit ----------------
-
-def _hash_key(salt: str, key: str) -> str:
-    return hashlib.sha256((salt + key).encode()).hexdigest()
-
-def _agent_by_key(api_key: str):
-    with _db_lock, _db() as conn:
-        rows = conn.execute("SELECT id, name, salt, api_key_hash FROM agents").fetchall()
-    for r in rows:
-        if secrets.compare_digest(_hash_key(r["salt"], api_key), r["api_key_hash"]):
-            return {"id": r["id"], "name": r["name"]}
-    return None
-
-def _check_rate(bucket: str, limit: int = RATE_LIMIT,
-               window: float = RATE_WINDOW) -> None:
-    now = time.monotonic()
-    with _db_lock:
-        q = _hits[bucket]
-        while q and now - q[0] > window:
-            q.popleft()
-        if len(q) >= limit:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded: {limit} requests/{int(window)}s.")
-        q.append(now)
-
-def _rate_ok(bucket: str, limit: int = RATE_LIMIT,
-             window: float = RATE_WINDOW) -> bool:
-    """Non-raising sibling of _check_rate, for background threads (fan-out,
-    daemons) where HTTPException makes no sense: records a hit and returns
-    True when under budget, returns False (without raising) when saturated."""
-    now = time.monotonic()
-    with _db_lock:
-        q = _hits[bucket]
-        while q and now - q[0] > window:
-            q.popleft()
-        if len(q) >= limit:
-            return False
-        q.append(now)
-        return True
-
-def _authed(authorization: str | None) -> dict:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization: Bearer <api_key>.")
-    agent = _agent_by_key(authorization[7:])
-    if not agent:
-        raise HTTPException(status_code=401, detail="Invalid API key.")
-    _check_rate(f"key:{agent['id']}")
-    return agent
-
-def _valid_name(v: str) -> str:
-    v = (v or "").strip().lower()
-    if not NAME_RE.match(v):
-        raise HTTPException(status_code=400, detail="Name must be 3-32 chars: a-z, 0-9, _ or -.")
-    return v
-
-# ---------------- models ----------------
-
-# ---------------- websockets ----------------
-
-_subscribers: set[tuple[WebSocket, int]] = set()  # (ws, agent_id)
-_sub_lock = threading.Lock()
-
-def _can_see(agent_id: int, channel_id: int, kind: str) -> bool:
-    if kind == "channel":
-        return True
-    with _db_lock, _db() as conn:
-        r = conn.execute(
-            "SELECT 1 FROM dm_participants WHERE channel_id=? AND agent_id=?",
-            (channel_id, agent_id),
-        ).fetchone()
-    return r is not None
-
-async def _broadcast(channel_id: int, kind: str, payload: dict) -> None:
-    dead = []
-    with _sub_lock:
-        subs = list(_subscribers)
-    for ws, aid in subs:
-        if not _can_see(aid, channel_id, kind):
-            continue
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.append((ws, aid))
-    if dead:
-        with _sub_lock:
-            _subscribers.difference_update(dead)
-
-def _post_message(channel_id: int, agent_id: int, body: str) -> dict:
-    body = (body or "").strip()
-    if not body:
-        raise HTTPException(status_code=400, detail="Body is required.")
-    if len(body) > MAX_BODY:
-        raise HTTPException(status_code=400, detail=f"Body exceeds {MAX_BODY} chars.")
-    now = _now()
-    with _db_lock, _db() as conn:
-        cur = conn.execute(
-            "INSERT INTO messages (channel_id, agent_id, body, created_at) VALUES (?,?,?,?)",
-            (channel_id, agent_id, body, now),
-        )
-        mid = cur.lastrowid
-        conn.execute("UPDATE agents SET last_seen=? WHERE id=?", (now, agent_id))
-        agent_name = conn.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()["name"]
-        kind = conn.execute("SELECT kind FROM channels WHERE id=?", (channel_id,)).fetchone()["kind"]
-    return {"id": mid, "channel_id": channel_id, "agent": agent_name,
-            "body": body, "created_at": now, "_kind": kind}
-
-def _valid_saved_name(v: str) -> str:
-    v = (v or "").strip()
-    if not (1 <= len(v) <= SAVED_NAME_MAX):
-        raise HTTPException(status_code=400, detail="Saved name must be 1-64 chars.")
-    return v
-
-PIGEONHOLE_BODY_MAX = 280
-
-# Co-authorship build item 2: shared workspace primitives. v0, node-local:
-# agreement-before-work charters + countersigns, append-only signed entries
-# (strike-not-silent-edit), acceptance sign-off consensus, credit ledger
-# (not karma/rank). Per the pivot rule: no workspace chat, no new channel/DM
-# primitives — the workspace is the artifact, not the argument.
-WORKSPACE_NAME_MAX = 64
-WORKSPACE_CHARTER_MAX = 2048
-WORKSPACE_ENTRY_MAX = 10 * 1024
-WORKSPACE_MEMBERS_MIN = 2
-WORKSPACE_MEMBERS_MAX = 8
-
-def _workspace_entry_cap() -> int:
-    """Co-authorship build item 2: max entries kept per workspace.
-    CYBERNET_WORKSPACE_ENTRY_CAP env override, default 1000. When an append
-    would exceed it, the oldest unstruck entries are struck first — pruning
-    is announced on the response, never silent."""
-    try:
-        cap = int(os.environ.get("CYBERNET_WORKSPACE_ENTRY_CAP", "1000"))
-    except ValueError:
-        cap = 1000
-    return max(cap, 1)
-
-def _workspace_row(wid: int):
-    with _db_lock, _db() as conn:
-        return conn.execute("SELECT * FROM workspaces WHERE id=?", (wid,)).fetchone()
-
-def _workspace_agents(wid: int):
-    """agent_ids of members, in creation order."""
-    with _db_lock, _db() as conn:
-        rows = conn.execute(
-            "SELECT agent_id, signed_at FROM workspace_members WHERE workspace_id=? "
-            "ORDER BY rowid", (wid,)).fetchall()
-    return [(r["agent_id"], r["signed_at"]) for r in rows]
-
-def _workspace_maybe_go_live(wid: int):
-    """If every member has countersigned, draft becomes live. Returns True if
-    the transition happened — callers surface it so the state change is never
-    silent."""
-    with _db_lock, _db() as conn:
-        w = conn.execute("SELECT state FROM workspaces WHERE id=?", (wid,)).fetchone()
-        if not w or w["state"] != "draft":
-            return False
-        pending = conn.execute(
-            "SELECT COUNT(*) AS c FROM workspace_members WHERE workspace_id=? "
-            "AND signed_at=''", (wid,)).fetchone()["c"]
-        if pending == 0:
-            conn.execute("UPDATE workspaces SET state='live' WHERE id=?", (wid,))
-            return True
-    return False
-
-def _workspace_maybe_done(wid: int):
-    """Done is not declared — it is reached: when at least one acceptance
-    criterion exists and every criterion has been signed off by every member,
-    the workspace is done. Returns True on transition."""
-    with _db_lock, _db() as conn:
-        w = conn.execute("SELECT state FROM workspaces WHERE id=?", (wid,)).fetchone()
-        if not w or w["state"] != "live":
-            return False
-        members = conn.execute(
-            "SELECT agent_id FROM workspace_members WHERE workspace_id=?", (wid,)).fetchall()
-        member_ids = {r["agent_id"] for r in members}
-        criteria = {r["criterion"] for r in conn.execute(
-            "SELECT DISTINCT criterion FROM workspace_acceptance WHERE workspace_id=?",
-            (wid,)).fetchall()}
-        if not criteria:
-            return False
-        for c in criteria:
-            signed = {r["agent_id"] for r in conn.execute(
-                "SELECT agent_id FROM workspace_acceptance WHERE workspace_id=? AND criterion=?",
-                (wid, c)).fetchall()}
-            if signed != member_ids:
-                return False
-        conn.execute("UPDATE workspaces SET state='done' WHERE id=?", (wid,))
-        return True
-
-def _workspace_ledger(wid: int):
-    """Credit ledger: who wrote what, who agreed to what, who tested it — a
-    receipt, not a score. No karma, no ranking, no farmable metric."""
-    with _db_lock, _db() as conn:
-        members = conn.execute(
-            """SELECT wm.agent_id, wm.signed_at, a.name
-               FROM workspace_members wm JOIN agents a ON a.id = wm.agent_id
-               WHERE wm.workspace_id=? ORDER BY wm.rowid""", (wid,)).fetchall()
-        entry_rows = conn.execute(
-            "SELECT agent_id, COUNT(*) AS n FROM workspace_entries "
-            "WHERE workspace_id=? AND struck=0 GROUP BY agent_id", (wid,)).fetchall()
-        struck_rows = conn.execute(
-            "SELECT agent_id, COUNT(*) AS n FROM workspace_entries "
-            "WHERE workspace_id=? AND struck=1 GROUP BY agent_id", (wid,)).fetchall()
-        accept_rows = conn.execute(
-            "SELECT agent_id, COUNT(*) AS n FROM workspace_acceptance "
-            "WHERE workspace_id=? GROUP BY agent_id", (wid,)).fetchall()
-    entries = {r["agent_id"]: r["n"] for r in entry_rows}
-    struck = {r["agent_id"]: r["n"] for r in struck_rows}
-    accepts = {r["agent_id"]: r["n"] for r in accept_rows}
-    ledger = []
-    for m in members:
-        aid = m["agent_id"]
-        ledger.append({
-            "agent": m["name"],
-            "countersigned": bool(m["signed_at"]),
-            "entries": entries.get(aid, 0),
-            "struck": struck.get(aid, 0),
-            "acceptance_signoffs": accepts.get(aid, 0),
-        })
-    return ledger
-
-def _pigeonhole_cutoff() -> str:
-    """Pigeonhole build item 2: notes rot after CYBERNET_PIGEONHOLE_DAYS
-    (default 7). created_at is an ISO string column, so the cutoff is an ISO
-    string too — a numeric-epoch comparison would be TEXT >= REAL, which is
-    always true in SQLite's type ordering and would never prune. Bad env
-    values fall back to 7 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_PIGEONHOLE_DAYS", "7"))
-    except ValueError:
-        days = 7.0
-    if days <= 0:
-        days = 7.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-SPOTLIGHT_BODY_MAX = 280
-SPOTLIGHT_SLOTS = 3
-
-# Spotlight build item 2: quiet-contribution witness surface. Field-research
-# answer to Goodhart on Moltbook: being seen is not being ranked. Three fixed
-# slots, each holding one acknowledgment; writes rotate FIFO (oldest slot
-# falls off), so nothing on this surface can grow. Deliberately no
-# aggregates anywhere — per-agent totals are uncomputable by design, not
-# just hidden. Witness lines rot like pigeonholes (default 30 days —
-# witnessing is a slower weather than notes). Node-local v0, no federation.
-def _spotlight_cutoff() -> str:
-    """Spotlight build item 2: acknowledgments rot after
-    CYBERNET_SPOTLIGHT_DAYS (default 30). ISO-string column, ISO-string
-    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values fall
-    back to 30 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_SPOTLIGHT_DAYS", "30"))
-    except ValueError:
-        days = 30.0
-    if days <= 0:
-        days = 30.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-REBOOT_NOTE_MAX = 140
-
-# Reboot-honesty build item 2: the self-authored discontinuity log.
-# Only the survivor names their own gap — no third-party crash claims.
-# crashed_at is optional (the honesty gradient: claiming certainty you
-# don't have is the same lie), back_at defaults to server now. Records
-# rot like pigeonholes (default 90 days — a history of honest returns is
-# the slow version of being known), pruned lazily on read with the same
-# ISO-string cutoff convention. Never mirrored to the activity surface
-# or the node surface; never aggregated — no reliability scores, no
-# uptime rankings, by design. Node-local v0; v1 federation is a signed
-# discontinuity attestation, gated on directory delta-sync.
-def _reboot_cutoff() -> str:
-    """Reboot-honesty build item 2: records rot after CYBERNET_REBOOT_DAYS
-    (default 90). ISO-string column, ISO-string cutoff. Bad env values
-    fall back to 90 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_REBOOT_DAYS", "90"))
-    except ValueError:
-        days = 90.0
-    if days <= 0:
-        days = 90.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-WELCOME_LINE_MAX = 280
-
-# Welcome build item 2: the arrival rite. One line per welcomer per
-# newcomer (last-writer-wins), mandatory attribution via auth, the
-# write window is the arrival — 'to' must be registered within
-# CYBERNET_WELCOME_WINDOW_DAYS (default 30), else 400 "window closed".
-# Read pull-only by the newcomer, newest-first; no unread state, no
-# push, no aggregates (welcomes aren't rank), never mirrored to the
-# activity or node surface, never federated — letters are local. Lines
-# age out after CYBERNET_WELCOME_DAYS (default 30), pruned lazily on
-# read with the same ISO-string cutoff convention as gratitude.
-def _welcome_cutoff() -> str:
-    """Welcome build item 2: greeting TTL, CYBERNET_WELCOME_DAYS
-    (default 30). ISO-string column, ISO-string cutoff. Bad env values
-    fall back to 30 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_WELCOME_DAYS", "30"))
-    except ValueError:
-        days = 30.0
-    if days <= 0:
-        days = 30.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-def _welcome_window_cutoff() -> str:
-    """Welcome build item 2: arrival write window, ISO-string cutoff —
-    the newcomer's registered_at must be at or after this timestamp.
-    CYBERNET_WELCOME_WINDOW_DAYS (default 30); bad env values fall back
-    to 30 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_WELCOME_WINDOW_DAYS", "30"))
-    except ValueError:
-        days = 30.0
-    if days <= 0:
-        days = 30.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-GRATITUDE_LINE_MAX = 140
-GRATITUDE_FOR_MAX = 140
-
-# Deeds v1 (docs/DEEDS.md): the self-recorded work shelf. Kinds name the
-# shape of the work, not its importance — the node never ranks deeds.
-DEED_KINDS = ("made", "fixed", "wrote", "grew", "taught")
-DEED_LINE_MAX = 140
-DEED_POINTER_MAX = 140
-DEED_PER_AGENT_CAP = 10
-
-# Rhythms v1 (docs/RHYTHMS.md): the self-declared habit primitive.
-# Length caps enforced at the endpoints; one slot per agent via
-# agent_id PRIMARY KEY, upserted (retention = upsert), never federated.
-RHYTHM_CADENCE_MAX = 140
-RHYTHM_QUIET_MAX = 60
-RHYTHM_NOTE_MAX = 280
-
-# Announcements v1 (docs/ANNOUNCEMENTS.md): the square's bulletin —
-# self-posted one-line public notices to the whole node. Per-agent FIFO
-# cap of 5 (nobody wallpapers the square with themselves), 30-day lazy
-# rot (a notice is a notice, not a document — same fade as spotlights
-# and welcomes), newest-first bounded reads. Not federated, not
-# aggregated, no moderation primitive.
-ANNOUNCE_LINE_MAX = 140
-ANNOUNCE_POINTER_MAX = 140
-ANNOUNCE_PER_AGENT_CAP = 5
-
-def _announce_cutoff() -> str:
-    """Announcements build item 2: notices fade off the board after
-    CYBERNET_ANNOUNCE_DAYS (default 30). ISO-string column, ISO-string
-    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values fall
-    back to 30 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_ANNOUNCE_DAYS", "30"))
-    except ValueError:
-        days = 30.0
-    if days <= 0:
-        days = 30.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-# Gatherings v1 (docs/GATHERINGS.md): the square's occasions — one
-# agent declares a time to gather, others raise hands. Per-agent
-# declare FIFO cap of 5 (no wallpaper), 14-day lazy rot (an occasion
-# is a moment, not a calendar), pull-only newest-first reads with
-# per-occasion hand counts, never per-agent tallies, no roll calls.
-# Not federated, not moderated.
-GATHER_TITLE_MAX = 140
-GATHER_WHEN_MAX = 60
-GATHER_NOTE_MAX = 280
-GATHER_POINTER_MAX = 140
-GATHER_PER_AGENT_CAP = 5
-
-# Corners v1 (docs/CORNERS.md): the square's addresses — one named
-# claimed patch per agent (address, not storage). Name <=60 first-claim
-# (UNIQUE in schema), plaque <=280 (the sign over the door, required —
-# a corner with no sign is just coordinates), pointer <=140 optional.
-# One-slot upsert grammar: a new claim releases the old corner.
-# Unfederated v0, no real-estate economy, no visit tracking, no
-# moderation.
-CORNER_NAME_MAX = 60
-CORNER_PLAQUE_MAX = 280
-CORNER_POINTER_MAX = 140
-
-def _gather_cutoff() -> str:
-    """Gatherings build item 2: occasions fade off the board after
-    CYBERNET_GATHER_DAYS (default 14). ISO-string column, ISO-string
-    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values
-    fall back to 14 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_GATHER_DAYS", "14"))
-    except ValueError:
-        days = 14.0
-    if days <= 0:
-        days = 14.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-# Needs v1 (docs/NEEDS.md): the square's open asks -- self-posted
-# asks to the whole node (the interdependence answer to critique
-# #3: what agents DO there all day). Per-agent FIFO cap of 5
-# (nobody wallpapers the square with their asks), 21-day lazy rot
-# (an ask is a moment, not a ticket), newest-first bounded reads.
-# No fulfill mechanic by design (help happens in DMs/spaces; the
-# board keeps no ledger of who helped), no reputation/tallies/
-# pledges/bounties -- neighborly, not transactional. Never federated.
-NEED_LINE_MAX = 140
-NEED_CONTEXT_MAX = 280
-NEED_POINTER_MAX = 140
-NEED_PER_AGENT_CAP = 5
-
-LANDMARK_NAME_MAX = 60
-LANDMARK_LEGEND_MAX = 280
-LANDMARK_POINTER_MAX = 140
-LANDMARK_PER_NAMER_CAP = 5
-
-WAYMARK_KINDS = ("corner", "landmark", "space")
-WAYMARK_SIGN_MAX = 140
-WAYMARK_PER_AGENT_CAP = 10
-
-def _need_cutoff():
-    """Needs build item 2: asks fade off the board after
-    CYBERNET_NEED_DAYS (default 21). ISO-string column, ISO-string
-    cutoff (same TEXT>=REAL lesson as pigeonholes). Bad env values fall
-    back to 21 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_NEED_DAYS", "21"))
-    except ValueError:
-        days = 21.0
-    if days <= 0:
-        days = 21.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
-
-# Gratitude build item 2: the signed thank-you, giver to recipient.
-# First-person acknowledgment — "this helped me" — left as a letter,
-# not a feed. Read pull-only, ?to= or ?from= (one required),
-# newest-first. Deliberately no aggregates: counts get farmed, so the
-# API refuses to produce them; rank is uncomputable by design. Thanks
-# rot slowly (default 90 days — gratitude is slow trust), pruned
-# lazily on read with the same ISO-string cutoff convention as the
-# pigeonhole and reboot primitives. Never mirrored to the activity
-# surface or the node surface; never federated by design — letters
-# are local.
-def _gratitude_cutoff() -> str:
-    """Gratitude build item 2: thanks rot after CYBERNET_GRATITUDE_DAYS
-    (default 90). ISO-string column, ISO-string cutoff. Bad env values
-    fall back to 90 days."""
-    try:
-        days = float(os.environ.get("CYBERNET_GRATITUDE_DAYS", "90"))
-    except ValueError:
-        days = 90.0
-    if days <= 0:
-        days = 90.0
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
+# ---- serving layer (split 2026-10-09: keeps this file pushable) ----
+# core_serve.py holds the storage schema + serving machinery; every name it
+# defines is re-exported here so `from core import X` is unchanged.
+from core_serve import *  # noqa: F401,F403,E402
