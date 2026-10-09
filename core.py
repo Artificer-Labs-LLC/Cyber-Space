@@ -933,7 +933,48 @@ def _relay_route(desc):
         return None
 
 
-def _relay_hold_probe(relay_url: str, node_pubkey: str) -> bool | None:
+# The wired hold_query path on relays (docs/RENDEZVOUS.md frozen spec):
+# the descriptor advertises it, the dialer appends ?point_id=.
+_RENDEZVOUS_HOLD_QUERY = "/relay/hold_query"
+
+
+def _rendezvous_strategy(desc):
+    """Dial-side rendezvous-strategy extraction (docs/RENDEZVOUS.md,
+    primitive 3): walk the caller-verified descriptor's reach list in
+    hoster-preference order and return the first well-formed rendezvous
+    strategy: {"epoch_len": <60..86400>, "hold_query": <relative path>}.
+    The descriptor must already be signature-verified with node_pubkey
+    equal to the binding's key — the name key vouches the epoch math,
+    the same trust the relay strategy's URL already rides. A missing
+    or malformed rendezvous member reads as None (the probe runs with
+    the frozen defaults, unchanged behavior) — never raises."""
+    try:
+        reach = desc.get("reach") if isinstance(desc, dict) else None
+        if not isinstance(reach, list):
+            return None
+        for strat in reach:
+            if not isinstance(strat, dict):
+                continue
+            if str(strat.get("kind", "")) != "rendezvous":
+                continue
+            epoch_len = strat.get("epoch_len")
+            if not rendezvous._epoch_len_ok(epoch_len):
+                continue
+            hold_query = strat.get("hold_query")
+            if (not isinstance(hold_query, str)
+                    or not hold_query.startswith("/")
+                    or "?" in hold_query or "#" in hold_query
+                    or len(hold_query) > 256):
+                continue
+            return {"epoch_len": epoch_len, "hold_query": hold_query}
+        return None
+    except Exception:
+        return None
+
+
+def _relay_hold_probe(relay_url: str, node_pubkey: str,
+                      epoch_len: int = rendezvous.EPOCH_LEN_DEFAULT,
+                      hold_query: str = _RENDEZVOUS_HOLD_QUERY):
     """Dialer-side willingness probe (docs/RENDEZVOUS.md, primitive 3):
     before opening a relay session, the dialer derives the same (E, E-1)
     rendezvous points the hoster's hostd holds under (the shared KDF
@@ -942,15 +983,25 @@ def _relay_hold_probe(relay_url: str, node_pubkey: str) -> bool | None:
     the mirror answers willing only for fresh, registered,
     still-willing points (never a 4xx; strangers read as held:false).
 
-    True: a holder is willing — open the session. False: both points
-    positively answered nobody-holds — skip the session entirely;
-    minting one would only wait on silence. None: the query could not
-    be answered (relay predates hold_query, transport failure, or the
-    point could not be derived) — open the session as before, legacy
-    behavior unchanged, so a new dialer never goes silent under an
-    old relay. Never raises."""
+    Returns the HELD POINT ID (a 64-hex string) when a holder is
+    willing — open the session BY THAT POINT, never the token (the
+    dialer never learns the routing token on the rendezvous path).
+    False: both points positively answered nobody-holds — skip the
+    session entirely; minting one would only wait on silence. None:
+    the query could not be answered (relay predates hold_query,
+    transport failure, or the point could not be derived) — open the
+    session as before, legacy behavior unchanged, so a new dialer
+    never goes silent under an old relay. Never raises."""
     try:
-        pair = rendezvous.derive_points(time.time(), node_pubkey or "")
+        if not rendezvous._epoch_len_ok(epoch_len):
+            epoch_len = rendezvous.EPOCH_LEN_DEFAULT
+        if not (isinstance(hold_query, str)
+                and hold_query.startswith("/")
+                and "?" not in hold_query and "#" not in hold_query
+                and len(hold_query) <= 256):
+            hold_query = _RENDEZVOUS_HOLD_QUERY
+        pair = rendezvous.derive_points(time.time(), node_pubkey or "",
+                                       epoch_len)
     except Exception:
         return None
     if not pair:
@@ -958,17 +1009,19 @@ def _relay_hold_probe(relay_url: str, node_pubkey: str) -> bool | None:
     unknown = False
     for point in pair:
         data = _resolve_peer_get_json(
-            relay_url.rstrip("/") + "/relay/hold_query?point_id=" + point)
+            relay_url.rstrip("/") + hold_query + "?point_id=" + point)
         if not isinstance(data, dict):
             unknown = True
             continue
         if data.get("held") is True:
-            return True
+            return point
     return None if unknown else False
 
 
 def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
-                        token: str) -> bool:
+                        token: str,
+                        epoch_len: int = rendezvous.EPOCH_LEN_DEFAULT,
+                        hold_query: str = _RENDEZVOUS_HOLD_QUERY) -> bool:
     """Dial-side relay session-open (docs/HOSTING.md, primitive 3): the
     relay holds a host-initiated hold-open from the hoster — NAT
     penetration is the hoster's outbound dial, not ours. Before the
@@ -981,15 +1034,20 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
     descriptor) only routes the session to the hoster's hold-open.
     The relay answers with a fresh challenge and the hoster's
     NAME-KEY signature over it:
-      POST {relay_url}/relay/open {"name": label, "token": token}
-      200  {"challenge": "<64 hex>", "name_key_sig": "<128 hex>"}
+      POST {relay_url}/relay/open {"name": label,
+                                   "rendezvous_point": "<held point>"}
+    (or the legacy {"name": label, "token": token} when the relay
+    predates the hold_query probe — an explicit token still wins on
+    the mirror side when both are given).
+    200  {"challenge": "<64 hex>", "name_key_sig": "<128 hex>"}
     The signature verifies fail-closed against the binding's name key: a
     valid signature proves the name's key answered live through the
     relay — the same live-proof as the direct dial's step 6, one hop
     over. Any other outcome is silence (False). This is the client dial
     half; the relay server half (hold-open registration, session
     bridging) runs on the relay. Never raises."""
-    held = _relay_hold_probe(relay_url, node_pubkey)
+    held = _relay_hold_probe(relay_url, node_pubkey, epoch_len,
+                             hold_query)
     if held is False:
         # The relay positively answers no willing hold-open under the
         # derived points — a session would be minted only to wait on
@@ -997,8 +1055,16 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
         # hold_query or the query could not be answered — falls through
         # to the legacy session-open, unchanged.)
         return False
+    if isinstance(held, str):
+        # A willing holder answered at this derived point: open the
+        # session BY THE POINT. The token never leaves the dialer on
+        # the rendezvous path — the mirror resolves the point to the
+        # held routing token, and the dialer never learns it.
+        payload = {"name": label, "rendezvous_point": held}
+    else:
+        payload = {"name": label, "token": token}
     try:
-        body = json.dumps({"name": label, "token": token}).encode()
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             relay_url.rstrip("/") + "/relay/open", data=body,
             headers={"Content-Type": "application/json",
@@ -1118,6 +1184,7 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         # directory entry, read as silence if absent.
         node_url = ""
         via_relay = None
+        via_rendezvous = None
         desc = _resolve_get_json(mirror + "/api/v1/names/" + label + "/reach")
         if isinstance(desc, dict) and _reach_descriptor_verify(desc):
             if str(desc.get("node_pubkey", "")).lower() == node_pubkey:
@@ -1145,6 +1212,13 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                     via_relay = _relay_route(desc)
                     if via_relay is not None:
                         node_url = via_relay["url"]
+                        # Rendezvous kind (docs/RENDEZVOUS.md frozen
+                        # spec): the hoster advertises its epoch math
+                        # and probe path — the derived-point probe in
+                        # step 6 runs under the hoster's epoch_len, not
+                        # the frozen default. Absent or malformed reads
+                        # as None: unchanged default behavior.
+                        via_rendezvous = _rendezvous_strategy(desc)
         if not node_url:
             # Legacy fallback: the entry is keyed by the NAME KEY
             # (announced with a name-key-signed envelope), never the
@@ -1181,7 +1255,13 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                     or not _fed_env.verify_envelope(ping)):
                 return None
             if not _relay_open_session(node_url, label, node_pubkey,
-                                       via_relay["token"]):
+                                       via_relay["token"],
+                                       (via_rendezvous or {}).get(
+                                           "epoch_len",
+                                           rendezvous.EPOCH_LEN_DEFAULT),
+                                       (via_rendezvous or {}).get(
+                                           "hold_query",
+                                           _RENDEZVOUS_HOLD_QUERY)):
                 return None
         else:
             # Direct route: first the node's signed ping — it is alive
@@ -1317,6 +1397,52 @@ def ingest_gossiped_binding(binding: dict) -> str:
         return "dropped-malformed"
 
 
+def _reap_expired_reach_descriptors(conn) -> int:
+    """Lazy garbage collection for the mirror's reach-descriptor store —
+    runs once per ingest on the ingest path (the only writer). Drops
+    every row the serve side already reads as absent:
+
+      - the descriptor itself is expired or its expires_at is
+        unparseable (fail-closed: unreadable expiry is treated as dead,
+        the same contract the /names/{name}/reach route enforces);
+      - the registry binding under the row is gone, expired, or keyed
+        differently (the merge half already refuses these at ingest,
+        but a live row can outlive its binding; serve reads it as
+        absent, so keeping it is dead weight).
+
+    The table is one row per bound name, so this is a single cheap
+    scan. Never raises. Returns the count reaped."""
+
+    try:
+        now = datetime.now(timezone.utc)
+        rows = conn.execute(
+            "SELECT name, expires_at, node_pubkey FROM reach_descriptors").fetchall()
+        reaped = 0
+        for rname, expires_at, node_pubkey in rows:
+            dead = True
+            try:
+                dead = _parse_claim_time(expires_at) <= now
+            except ValueError:
+                dead = True
+            if not dead:
+                bind = conn.execute(
+                    "SELECT node_pubkey, expires_at FROM name_bindings"
+                    " WHERE name=?", (rname,)).fetchone()
+                try:
+                    binding_live = (bind is not None
+                                    and bind[0].lower() == str(node_pubkey).lower()
+                                    and _parse_claim_time(bind[1]) > now)
+                except ValueError:
+                    binding_live = False
+                dead = not binding_live
+            if dead:
+                conn.execute("DELETE FROM reach_descriptors WHERE name=?", (rname,))
+                reaped += 1
+        return reaped
+    except Exception:
+        return 0
+
+
 def ingest_reach_descriptor(desc: dict) -> str:
     """.cyberspace depth: the mirror's merge half for reach descriptors —
     fold a name-key-signed descriptor into this mirror's registry. The
@@ -1331,10 +1457,14 @@ def ingest_reach_descriptor(desc: dict) -> str:
     Deterministic merge: fail-closed verify (see _reach_descriptor_verify),
     then live-binding check (name exists in name_bindings, same key,
     unexpired), then one row per name — later issued_at replaces (re-sign
-    renews), earlier issued_at is kept. Nothing is ever deleted here;
-    expiry is the only garbage collection. The table is bounded by the
-    name registry (one row per bound name; a row can only exist where a
-    live binding already exists), so it needs no separate growth gate.
+    renews), earlier issued_at is kept. Garbage collection is lazy, on the
+    ingest path (the only writer): _reap_expired_reach_descriptors runs
+    once per ingest and drops rows the serve side already reads as absent
+    (expired or unparseable expires_at; binding gone, expired, or
+    re-keyed under the row). The table is bounded by the name registry
+    (one row per bound name; a row can only exist where a live binding
+    already exists), so the scan is cheap and it needs no separate
+    growth gate.
 
     Returns one of "inserted", "replaced", "kept", "dropped-malformed",
     "dropped-unverifiable", "dropped-expired", "dropped-unbound",
@@ -1360,6 +1490,7 @@ def ingest_reach_descriptor(desc: dict) -> str:
                 pass
             return "dropped-unverifiable"
         with _db_lock, _db() as conn:
+            _reap_expired_reach_descriptors(conn)
             row = conn.execute(
                 "SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
@@ -1723,7 +1854,11 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
     from a valid CYBERNET_PUBLIC_URL, the relay strategy from
     CYBERNET_RELAY_URL + CYBERNET_RELAY_PUBKEY (64 hex) + CYBERNET_RELAY_TOKEN
     (non-empty, <=4096 bytes) — relay appends after direct, direct
-    preferred, list order meaningful. A NAT-hidden hoster with a
+    preferred, list order meaningful. The rendezvous strategy appends
+    after relay when CYBERNET_RENDEZVOUS=1 (epoch_len from
+    CYBERNET_RENDEZVOUS_EPOCH_LEN, frozen default 3600) — the dialer
+    derives its derived-point probe with the hoster's epoch_len.
+    A NAT-hidden hoster with a
     registered relay hold-open advertises honestly with NO public URL at
     all (hosting from anywhere, Tor-model style). Fail-closed: no honest
     reach to advertise returns None — nothing published rather than a
@@ -1759,6 +1894,29 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
                            "url": relay_url, "token": relay_token})
     except (HTTPException, ValueError):
         pass
+    # Rendezvous kind (docs/RENDEZVOUS.md frozen spec): opt-in via
+    # CYBERNET_RENDEZVOUS=1. The hoster's daemon already holds the
+    # derived (E, E-1) points at the relay; this entry makes the
+    # willingness ADVERTISED — the dialer derives its points with the
+    # hoster's epoch_len instead of assuming the default, and probes
+    # the advertised hold_query path. epoch_len from
+    # CYBERNET_RENDEZVOUS_EPOCH_LEN, fail-closed to the frozen default
+    # 3600 when missing or out of the 60..86400 bounds. Malformed
+    # config omits the entry (never a default guess signed as truth).
+    # The entry only rides when a relay strategy is present: the
+    # derived points are held at THAT relay, and a lone rendezvous
+    # entry would advertise a meeting the dialer cannot locate.
+    if (os.environ.get("CYBERNET_RENDEZVOUS", "").strip() == "1"
+            and any(s.get("kind") == "relay" for s in strategies)):
+        try:
+            rz_len = int(os.environ.get(
+                "CYBERNET_RENDEZVOUS_EPOCH_LEN", "") or 0)
+            if not rendezvous._epoch_len_ok(rz_len):
+                raise ValueError("epoch_len out of bounds")
+        except (ValueError, TypeError):
+            rz_len = rendezvous.EPOCH_LEN_DEFAULT
+        strategies.append({"kind": "rendezvous", "epoch_len": rz_len,
+                           "hold_query": "/relay/hold_query"})
     if not strategies:
         return None  # no honest reach to advertise — stay silent, not wrong
     try:
@@ -1796,7 +1954,9 @@ def _reach_out() -> int:
     path to advertise at all, nothing is published rather than a lie.
     A NAT-hidden hoster with a registered relay hold-open CAN advertise
     honestly: the descriptor carries only the relay strategy, and the
-    dial terminates at the relay. Rendezvous stays reserved. Threaded,
+    dial terminates at the relay. With CYBERNET_RENDEZVOUS=1 it also
+    carries the rendezvous strategy, and the dialer's derived-point
+    probe runs under the advertised epoch_len. Threaded,
     best-effort; returns the peer count the descriptor went to."""
     name = os.environ.get("CYBERNET_HOSTED_NAME", "").strip().lower()
     name_priv = os.environ.get("CYBERNET_NAME_PRIVKEY", "").strip().lower()
