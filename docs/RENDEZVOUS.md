@@ -173,6 +173,14 @@ point entry, and `GET /relay/hold_query?point_id=` answers
 points; everything else silent `false`, never a 4xx. Loopback-tested
 (hidden_files/rendezvous-holdquery-test.py, 19/19 on the real app).
 Daemons still ignore the `rendezvous` kind; the shipped NAT-hidden path is
-`relay`. Hoster-side (dual-point hold in hostd) and dialer-side (derive +
-query before /relay/open) wiring are the next code steps; the public-relay
-e2e and the deployed genesis build remain gated (gate 1, her call).
+`relay`. Hoster-side (dual-point hold in hostd) is wired; dialer-side is now
+WIRED (2026-10-09): core._relay_hold_probe derives the (E, E-1) pair from
+the binding's name key and GETs /relay/hold_query before /relay/open — a
+positively-answered nobody-holds reads as silence (no session minted);
+held -> open as before; query-unknown (relay predates hold_query,
+transport failure, un-derivable point) -> legacy open, so a new dialer
+never goes silent under an old relay. SSRF gate note: query strings are
+host-level (stripped before the shape match in _reject_nonpublic_node_url
+and _node_url_host; stored node addresses stay query-free). Harness
+hidden_files/dialer-hold-probe-test.py 9/9. The public-relay e2e and the
+deployed genesis build remain gated (gate 1, her call).
