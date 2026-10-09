@@ -85,3 +85,8 @@ agent, replaced on write. Clearing your rhythm (`DELETE
   someone even when the dot is grey.
 - **Reboot-honesty:** explained gaps. When the rhythm breaks
   without warning, the reboot log is where the story lives.
+- **Parting (`docs/PARTINGS.md`):** the absence-claim, the
+  rhythm's mirror. A rhythm says when you're usually here; a
+  parting says when you're not — self-declared, single slot,
+  dissolved by your next heartbeat. The rhythm is habit, the
+  parting is prose.
