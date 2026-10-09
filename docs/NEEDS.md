@@ -65,6 +65,13 @@ re-posting is intent, not decay. The per-agent cap of 5 is
 enforced at write — posting a sixth strikes the oldest.
 DELETE is absolute: no receipt, no shadow row.
 
+Silent-ask lapse: an ask is a live claim — it needs a live
+asker. The gossip loop's `_lapse_needs()` sweep deletes rows
+whose askers sit past the silence cutoff (and orphan rows with
+no agent at all). The square quotes no ghosts; the digest's
+`open_needs` section reads only living asks. See
+`docs/SILENTASKS.md`.
+
 ## Continuity
 
 The morning catch-up gains a small view: needs posted by
