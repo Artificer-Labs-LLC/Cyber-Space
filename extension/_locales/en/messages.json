@@ -1,0 +1,420 @@
+{
+  "appDescription": {
+    "description": "Extension description shown in chrome://extensions and the Web Store.",
+    "message": "Resolve .cyberspace names. Type genesis.cyberspace and it just works."
+  },
+  "bridgeSummary": {
+    "message": "Bridge endpoint"
+  },
+  "checkLabel": {
+    "message": "Check bridge now"
+  },
+  "endpointLabel": {
+    "message": "DoH bridge endpoint"
+  },
+  "endpointPlaceholder": {
+    "message": "http://185.143.228.228/dns-query"
+  },
+  "goLabel": {
+    "message": "Resolve & open"
+  },
+  "namePlaceholder": {
+    "message": "genesis.cyberspace"
+  },
+  "openOptionsLabel": {
+    "message": "Open full settings"
+  },
+  "optionsPageTitle": {
+    "message": "Cyberspace Resolver — Settings"
+  },
+  "optionsTitle": {
+    "message": "✨ Cyberspace Resolver — Settings"
+  },
+  "popupHint": {
+    "message": "Type a .cyberspace name in the address bar and it just works."
+  },
+  "popupTitle": {
+    "message": "✨ Cyberspace Resolver"
+  },
+  "saveBridgeLabel": {
+    "message": "Save bridge"
+  },
+  "saveLabel": {
+    "message": "Save"
+  },
+  "statusInit": {
+    "message": "Checking resolver…"
+  },
+  "optionsBlurb": {
+    "description": "Options-page blurb explaining the bridge endpoint; carries <code> spans, so it is set via innerHTML from this bundled locale string.",
+    "message": "The extension resolves <code>.cyberspace</code> names through this DNS-over-HTTPS bridge. Leave empty to use the genesis bridge (<code>http://185.143.228.228/dns-query</code>). Must be a full <code>http(s)</code> URL with a path. Save (button, blur, or Enter) commits the value — changing it drops the cached health check so the next popup open re-checks live. \"Check bridge now\" runs a live resolve of <code>genesis.cyberspace</code> against the endpoint currently in the box (unsaved edits included), with no health-cache lookup."
+  },
+  "hintNameSpelling": {
+    "description": "Taxonomy hint: the Go path resolve failed on the name itself (spelling or registration).",
+    "message": " — check the spelling, or claim it on the genesis node"
+  },
+  "hintNameNoAddress": {
+    "description": "Taxonomy hint: the bridge answered authoritatively but the name carries no address records.",
+    "message": " — the name has no address records on the bridge"
+  },
+  "hintBridgeEndpoint": {
+    "description": "Taxonomy hint: the bridge endpoint setting may be wrong; $LOC$ names where the setting sits (\"below\"/\"above\").",
+    "message": " — is the bridge endpoint set correctly $LOC$?",
+    "placeholders": {
+      "loc": {
+        "content": "$1",
+        "example": "below"
+      }
+    }
+  },
+  "hintBridgeUnreadable": {
+    "description": "Taxonomy hint: the extension's settings store rejected the bridge read — the stored bridge endpoint is probably fine, so never route this to the endpoint setting.",
+    "message": " — the extension's settings could not be read; the bridge endpoint itself is probably fine"
+  },
+  "hintGrantMissing": {
+    "message": " — the bridge needs host access: open the extension popup and click \"$LABEL$\".",
+    "description": "Taxonomy hint: a stored custom bridge lacks its optional host-permission grant, so the bridge fetch dies as a network error; $LABEL$ is the popup's Grant-button label.",
+    "placeholders": {
+      "label": {
+        "content": "$1",
+        "example": "Grant access"
+      }
+    }
+  },
+  "hintHealthUnknownProbe": {
+    "description": "Health-check taxonomy hint: the configured bridge does not know genesis.cyberspace.",
+    "message": " — the bridge doesn't know genesis.cyberspace: is the endpoint set correctly $LOC$?",
+    "placeholders": {
+      "loc": {
+        "content": "$1",
+        "example": "below"
+      }
+    }
+  },
+  "hintWireMalformed": {
+    "description": "Taxonomy hint: the bridge answered with a malformed DNS message.",
+    "message": " — the bridge sent a malformed DNS message"
+  },
+  "hintWireMalformedHealth": {
+    "description": "Health-check taxonomy hint: malformed DNS message plus endpoint direction.",
+    "message": " — the bridge sent a malformed DNS message: is the bridge endpoint set correctly $LOC$?",
+    "placeholders": {
+      "loc": {
+        "content": "$1",
+        "example": "below"
+      }
+    }
+  },
+  "optionsCheckBridgeInvalid": {
+    "description": "Options page: Check-bridge-now fails because the box holds an invalid bridge URL.",
+    "message": "Enter a valid DoH bridge URL before checking, e.g. http://1.2.3.4/dns-query — $1$",
+    "placeholders": {
+      "err": {
+        "content": "$1",
+        "example": "Not a valid URL"
+      }
+    }
+  },
+  "optionsCheckBridgeRunning": {
+    "description": "Options page: live bridge health check is in flight.",
+    "message": "checking $1$ …",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "optionsCheckBridgeLive": {
+    "description": "Options page: bridge health check succeeded.",
+    "message": "resolver live — $1$ → genesis.cyberspace → $2$",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      },
+      "ip": {
+        "content": "$2",
+        "example": "1.2.3.4"
+      }
+    }
+  },
+  "optionsCheckBridgeDown": {
+    "description": "Options page: bridge health check failed (taxonomy hint appended after).",
+    "message": "resolver down ($1$): $2$",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      },
+      "msg": {
+        "content": "$2",
+        "example": "timed out"
+      }
+    }
+  },
+  "optionsCheckBridgeDenied": {
+    "description": "Options page: bridge health check aborted because the optional host-permission grant for the custom bridge's origin was denied (or no prompt could be shown); $BRIDGE$ is the truncated bridge URL. Check stays read-only — nothing was saved.",
+    "message": "Host access for $BRIDGE$ was not granted — the check can't reach the bridge, and nothing was saved. Click Save to request it.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "grantAccessLabel": {
+    "message": "Grant access",
+    "description": "Options page grant banner button: requests the optional host-permission grant for a stored custom bridge's origin"
+  },
+  "optionsCheckNoPrompt": {
+    "description": "Options page: bridge health check's permission pre-flight threw the no-prompt fault — the check's click somehow carried no transient activation, so the browser never showed the grant prompt; nothing was denied, nothing saved; $BRIDGE$ is the truncated bridge URL",
+    "message": "The browser never asked for host access for $BRIDGE$ — so nothing was denied and nothing was saved. Click Check again to retry.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "optionsCheckGrantFault": {
+    "description": "Options page: bridge health check's permission pre-flight hit a permissions-surface error (contains/request threw); $BRIDGE$ is the truncated bridge URL, $ERR$ is the truncated internal fault — deliberately NOT phrased as a denial, since a throw is never a denial",
+    "message": "Host access for $BRIDGE$ could not be verified ($ERR$) — the check can't reach the bridge, and nothing was saved. Click Check again to retry.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      },
+      "err": {
+        "content": "$2",
+        "example": "permission surface error"
+      }
+    }
+  },
+  "optionsGrantBanner": {
+    "description": "Options page on-load banner: a stored custom bridge saved before the permission-gating pass lacks its origin grant, so every resolve dies silently; $BRIDGE$ is the truncated bridge URL",
+    "message": "Host access for $BRIDGE$ is not granted — this bridge was saved before permission gating, so checks and lookups will fail until you grant it.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "optionsGrantOk": {
+    "message": "Host access granted — the stored bridge is live again.",
+    "description": "Options page: the Grant button's permission request was approved"
+  },
+  "optionsGrantDenied": {
+    "message": "Host access was not granted — the stored bridge stays, but checks and lookups will keep failing until you grant it.",
+    "description": "Options page: the Grant button's permission request was denied or failed"
+  },
+  "optionsGrantNoPrompt": {
+    "message": "The browser never asked for host access for $BRIDGE$ — so nothing was denied and the stored bridge stays. Click Grant again to retry.",
+    "description": "Options page: the banner's Grant button threw the no-prompt fault — the click carried no transient activation, so the browser never showed the grant prompt; nothing was denied, the stored bridge stays; $BRIDGE$ is the truncated bridge URL",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "optionsGrantGrantFault": {
+    "message": "Host access for $BRIDGE$ could not be verified ($ERR$) — the stored bridge stays, but checks and lookups will keep failing until it can be checked. Click Grant again to retry.",
+    "description": "Options page: the banner's Grant button hit a permissions-surface error (contains/request threw); $BRIDGE$ is the truncated bridge URL, $ERR$ is the truncated internal fault — deliberately NOT phrased as a denial, since a throw is never a denial",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      },
+      "err": {
+        "content": "$2",
+        "example": "permission surface error"
+      }
+    }
+  },
+  "popupGrantBanner": {
+    "description": "Popup on-load banner: a stored custom bridge saved before the permission-gating pass lacks its origin grant, so the popup's health check dies silently; $BRIDGE$ is the truncated bridge URL",
+    "message": "Host access for $BRIDGE$ is not granted — this bridge was saved before permission gating, so the resolver check will fail until you grant it.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "popupGrantOk": {
+    "message": "Host access granted — the stored bridge is live again.",
+    "description": "Popup: the banner's Grant button permission request was approved"
+  },
+  "popupGrantDenied": {
+    "message": "Host access was not granted — the stored bridge stays, but lookups will keep failing until you grant it.",
+    "description": "Popup: the banner's Grant button permission request was denied or failed"
+  },
+  "popupGrantNoPrompt": {
+    "message": "The browser never asked for host access for $BRIDGE$ — so nothing was denied and the stored bridge stays. Click Grant again to retry.",
+    "description": "Popup: the banner's Grant button threw the no-prompt fault — the click carried no transient activation, so the browser never showed the grant prompt; nothing was denied, the stored bridge stays; $BRIDGE$ is the truncated bridge URL",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      }
+    }
+  },
+  "popupGrantFault": {
+    "message": "Host access for $BRIDGE$ could not be verified ($ERR$) — the stored bridge stays, but lookups will keep failing until it can be checked. Click Grant again to retry.",
+    "description": "Popup: the banner's Grant button hit a permissions-surface error (contains/request threw); $BRIDGE$ is the truncated bridge URL, $ERR$ is the truncated internal fault — deliberately NOT phrased as a denial, since a throw is never a denial",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://example.com/dns-query"
+      },
+      "err": {
+        "content": "$2",
+        "example": "permission surface error"
+      }
+    }
+  },
+  "popupBridgeReadFailed": {
+    "message": "cannot read bridge setting: $1$",
+    "description": "Popup health chain: chrome.storage read of the bridge setting failed"
+  },
+  "popupResolverLive": {
+    "message": "resolver live — $1$ → genesis.cyberspace → $2$",
+    "description": "Popup health check success status line"
+  },
+  "popupResolverDown": {
+    "message": "resolver down ($1$): $2$",
+    "description": "Popup health check failure status line; the localized taxonomy hint is appended after this line"
+  },
+  "popupEmptyName": {
+    "message": "Enter a .cyberspace name first",
+    "description": "Popup Go path: empty submit guard"
+  },
+  "popupResolving": {
+    "message": "resolving $1$ …",
+    "description": "Popup Go path: resolving status line"
+  },
+  "popupResolveFailed": {
+    "message": "$1$: $2$",
+    "description": "Popup Go path: resolve failure status line (name + raw error plus already-localized hint)"
+  },
+  "popupTabOpenFailed": {
+    "message": "resolved $1$ → $2$ but the tab failed to open: $3$",
+    "description": "Popup Go path: resolve succeeded but chrome.tabs.create failed"
+  },
+  "popupOpenedLiteral": {
+    "message": "opened $1$$2$ (already an address — no resolve needed)",
+    "description": "Popup Go path: success status for a pasted IP literal (no resolve)"
+  },
+  "popupOpenedResolved": {
+    "message": "opened $1$ → $2$$3$",
+    "description": "Popup Go path: success status after a resolved name opened"
+  },
+  "failPageTitle": {
+    "description": "Failure page: the <h2> title of the resolution-failure page.",
+    "message": "Cyberspace Resolver"
+  },
+  "failCouldNotResolve": {
+    "description": "Failure page: lead line; $NAME$ is the url-encoded failed name (already bolded), $BRIDGE$ is the url-encoded bridge name.",
+    "message": "Could not resolve <b>$NAME$</b> via <b>$BRIDGE$</b>:",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "genesis"
+      },
+      "bridge": {
+        "content": "$2",
+        "example": "genesis"
+      }
+    }
+  },
+  "failHintMissing": {
+    "description": "Failure page: fallback explanation when the taxonomy produced no hint.",
+    "message": "The bridge was unreachable or the name is not claimed."
+  },
+  "failTryAgain": {
+    "description": "Failure page: the retry button label.",
+    "message": "Try again"
+  },
+  "bridgeSaveInvalid": {
+    "description": "Popup + options: bridge save rejected as invalid; $ERR$ is the validation error naming the typed input.",
+    "message": "Enter a DoH bridge URL — a bare host or IP gets https:// and /dns-query, e.g. http://1.2.3.4/dns-query — $ERR$",
+    "placeholders": {
+      "err": {
+        "content": "$1",
+        "example": "Not a valid URL"
+      }
+    }
+  },
+  "popupBridgeSaveOk": {
+    "description": "Popup: bridge saved; next popup open re-checks health against it.",
+    "message": "Saved — resolver re-checks against the new bridge on next open."
+  },
+  "optionsBridgeSaveOk": {
+    "description": "Options page: bridge saved; next popup open re-checks health against it.",
+    "message": "Saved — resolver re-checks against the new bridge on next popup open."
+  },
+  "bridgeSaveCleared": {
+    "description": "Popup + options: bridge setting cleared, back to the genesis bridge.",
+    "message": "Cleared — back to the genesis bridge."
+  },
+  "bridgeSaveFailed": {
+    "description": "Popup + options: chrome.storage write failed during bridge save.",
+    "message": "Could not save the bridge setting."
+  },
+  "bridgeSaveNoPrompt": {
+    "description": "Popup + options: the bridge save was committed without a click gesture (blur/Enter), so the browser could not show the host-permission prompt at all — nothing was denied and nothing was saved.",
+    "message": "The browser never asked for host access — that commit had no click gesture, so nothing was denied and nothing was saved. Click Save to approve it."
+  },
+  "bridgeSaveDenied": {
+    "description": "Popup + options: the user denied the optional host-permission grant for the custom bridge's origin, so the bridge was not saved; $BRIDGE$ is the truncated bridge URL.",
+    "message": "Host access for $BRIDGE$ was not granted — the bridge was not saved. Click Save again to approve it.",
+    "placeholders": {
+      "bridge": {
+        "content": "$1",
+        "example": "https://bridge.example/dns-query"
+      }
+    }
+  },
+  "popupSettingsReadFailed": {
+    "description": "Popup: the initial chrome.storage read failed.",
+    "message": "cannot read settings: $ERR$",
+    "placeholders": {
+      "err": {
+        "content": "$1",
+        "example": "Storage unavailable"
+      }
+    }
+  },
+  "optionsBridgeReadFailed": {
+    "description": "Options page: the chrome.storage read for the saved bridge failed.",
+    "message": "cannot read bridge setting: $ERR$",
+    "placeholders": {
+      "err": {
+        "content": "$1",
+        "example": "Storage unavailable"
+      }
+    }
+  },
+  "recentLabel": {
+    "description": "Popup: heading over the recent-places chips.",
+    "message": "Recent"
+  },
+  "recentClear": {
+    "description": "Popup: clear-recent button text.",
+    "message": "clear"
+  },
+  "recentClearTitle": {
+    "description": "Popup: tooltip for the clear-recent button.",
+    "message": "Forget recent places"
+  },
+  "recentEmpty": {
+    "description": "Popup: empty-state line under the recent-places heading area when the user has no recent places yet.",
+    "message": "Places you visit will appear here."
+  },
+  "goResolving": {
+    "message": "Resolving…",
+    "description": "Go button busy label while a resolve is in flight."
+  }
+}

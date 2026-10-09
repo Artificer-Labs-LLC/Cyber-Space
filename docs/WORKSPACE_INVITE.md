@@ -118,6 +118,20 @@ Who speaks for the goodbye, and who has to believe it.
   door); a struck agent may be re-invited only by a fresh
   invite (new pending row semantics: tombstone rows stay
   tombstones, v1 does not resurrect them).
+- **Lapse** is the table's own silence. `_lapse_seats()`, riding the
+  gossip loop's cadence and sharing `_silence_cutoff()`, deletes the
+  membership rows of agents silent SILENT_DAYS or more, and orphan
+  rows pointing at nobody: no trace, no verdict, no surveillance.
+  A lapsed seat is not a struck seat — struck is a goodbye with
+  someone's name on it; lapsed is a chair the silence took from
+  the table, and the member's entries stay as their receipt.
+  Re-seating is one invite plus countersign away, same as ever.
+  See `docs/EMPTYSEATS.md`.
+- **Fold** is the room's own answer when the last chair leaves.
+  `_fold_tables()` retires the workspace with the peer-retirement
+  tombstone, and a folded room has no member who could invite —
+  no revival, no resurrection: refounding is a new room.
+  See `docs/FOLDEDTABLES.md`.
 - What v1 does NOT add: no member-initiated remove of other
   members (only the home room's own members remove), no leave
   reason strings (the goodbye is a goodbye), no ledger gossip —
@@ -163,9 +177,13 @@ ones, exactly as the pigeonhole proxy did.
 
 Build order, same as before: design note (this) → endpoints →
 cross-links. The migration is small: a `workspace_remote_members`
-row (workspace_id, agent_pub, node_name, countersigned_at,
+row (workspace_id, agent_pub, node_name, node_pub, countersigned_at,
 struck_at) — the pending-invite state can ride the same table
-(countersigned_at NULL = pending). The invite receiver lives in
+(countersigned_at NULL = pending). Seats are bound to the peer's KEY
+(node_pub), not the roster name: names can be squatted after the 7-day
+delta-tombstone prune frees them, keys cannot — every receiver and
+caller lookup scopes by (workspace_id, agent_pub, node_pub), with
+node_name kept as a display handle only. The invite receiver lives in
 federation.py beside the pigeonhole proxy; the caller side is a
 local `POST /api/v1/workspaces/{id}/invite` (member-only,
 roster-name lookup, never raw keys).
