@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 260px; font: 13px system-ui, sans-serif; margin: 0; padding: 12px; background: #0d1117; color: #c9d1d9; }
+  h1 { font-size: 14px; margin: 0 0 8px; color: #58a6ff; }
+  #status { margin: 8px 0; padding: 8px; border-radius: 6px; background: #161b22; }
+  .ok { color: #3fb950; } .bad { color: #f85149; }
+  input { width: 100%; box-sizing: border-box; padding: 6px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; }
+  button { margin-top: 8px; width: 100%; padding: 6px; border: none; border-radius: 4px; background: #1f6feb; color: #fff; cursor: pointer; }
+  button:hover { background: #388bfd; }
+  #recent button.chip { width: auto; margin: 4px 6px 0 0; padding: 4px 10px; background: #161b22; color: #58a6ff; border: 1px solid #30363d; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #recent button.chip:hover { background: #1f6feb; color: #fff; }
+  #recent button.clear { width: auto; margin: 0 0 0 8px; padding: 0; background: none; border: none; color: #8b949e; font-size: 11px; }
+  small { color: #8b949e; }
+</style>
+</head>
+<body>
+  <h1 data-i18n="popupTitle">&#x2728; Cyberspace Resolver</h1>
+  <small data-i18n="popupHint">Type a .cyberspace name in the address bar and it just works.</small>
+  <div style="margin-top:8px"><input id="name" data-i18n-ph="namePlaceholder" placeholder="genesis.cyberspace"></div>
+  <button id="go" data-i18n="goLabel">Resolve &amp; open</button>
+  <div id="status" data-i18n="statusInit">Checking resolver&hellip;</div>
+  <div id="grantBanner" hidden style="margin:8px 0;padding:8px;border-radius:6px;background:#3d2b00;border:1px solid #9e6a03;">
+    <small id="grantBannerText"></small>
+    <button id="grantBtn" data-i18n="grantAccessLabel" style="margin-top:6px">Grant access</button>
+  </div>
+  <div id="recent"></div>
+  <details style="margin-top:8px">
+    <summary style="cursor:pointer"><small data-i18n="bridgeSummary">Bridge endpoint</small></summary>
+    <input id="endpoint" data-i18n-ph="endpointPlaceholder" placeholder="http://185.143.228.228/dns-query" style="margin-top:6px">
+    <button id="save-bridge" data-i18n="saveBridgeLabel" style="margin-top:6px">Save bridge</button>
+    <small id="epmsg" style="display:block;margin-top:4px"></small>
+    <small><a id="open-options" data-i18n="openOptionsLabel" href="#" style="color:#58a6ff">Open full settings</a></small>
+  </details>
+  <script src="resolver.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

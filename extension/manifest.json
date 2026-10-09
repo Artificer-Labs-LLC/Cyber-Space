@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Cyberspace Resolver",
+  "version": "0.1.0",
+  "default_locale": "en",
+  "description": "__MSG_appDescription__",
+  "permissions": [
+    "webNavigation",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://185.143.228.228/*"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cyberspace",
+    "default_icon": {
+      "16": "icon-16.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "description": "Open the Cyberspace resolver popup",
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title data-i18n="optionsPageTitle">Cyberspace Resolver — Settings</title>
+<style>
+  body { max-width: 520px; margin: 40px auto; padding: 0 20px; font: 14px system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+  h1 { font-size: 18px; color: #58a6ff; }
+  label { display: block; margin: 18px 0 6px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #c9d1d9; font-size: 14px; }
+  #msg, #health { margin-top: 8px; min-height: 20px; }
+  .ok { color: #3fb950; } .bad { color: #f85149; }
+  /* On-load grant banner (2026-10-09): a stored custom bridge that predates
+     permission gating has no origin grant, so every resolve dies silently.
+     Amber callout above the endpoint box; the Grant button re-requests
+     from a real click (gesture context a page load lacks). */
+  #grantBanner { margin: 12px 0 4px; padding: 8px 10px; border: 1px solid #9e6a03; border-radius: 6px; background: #2a1f0a; color: #e3b341; }
+  #grantBanner button { margin: 0 0 0 8px; }
+  [hidden] { display: none !important; }
+  button { margin-top: 8px; padding: 6px 12px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #c9d1d9; font-size: 13px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  small { color: #8b949e; }
+  code { background: #161b22; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1 data-i18n="optionsTitle">&#x2728; Cyberspace Resolver — Settings</h1>
+  <!-- On-load grant banner (2026-10-09): a custom bridge stored before the
+       permission-gating pass may lack its origin grant — every later
+       resolve dies as a silent network error. The banner surfaces only
+       then; its Grant button requests the origin grant from a real click,
+       the gesture context a page load cannot supply. -->
+  <div id="grantBanner" hidden>
+    <span id="grantBannerText"></span>
+    <button id="grantBtn" data-i18n="grantAccessLabel" type="button">Grant access</button>
+  </div>
+  <label for="endpoint" data-i18n="endpointLabel">DoH bridge endpoint</label>
+  <input id="endpoint" data-i18n-ph="endpointPlaceholder" placeholder="http://185.143.228.228/dns-query">
+  <button id="save" data-i18n="saveLabel" type="button">Save</button>
+  <div id="msg"></div>
+  <button id="check" data-i18n="checkLabel" type="button">Check bridge now</button>
+  <div id="health"></div>
+  <small data-i18n-html="optionsBlurb">
+    The extension resolves <code>.cyberspace</code> names through this DNS-over-HTTPS bridge.
+    Leave empty to use the genesis bridge (<code>http://185.143.228.228/dns-query</code>).
+    Must be a full <code>http(s)</code> URL with a path. Save (button, blur, or Enter)
+    commits the value — changing it drops the cached
+    health check so the next popup open re-checks live.
+    "Check bridge now" runs a live resolve of <code>genesis.cyberspace</code> against the
+    endpoint currently in the box (unsaved edits included), with no health-cache lookup.
+  </small>
+  <script src="resolver.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
