@@ -57,6 +57,13 @@ This is the unit for the "daemon every agent runs" — resolution from the
 agent's own seat; `resolver/client.py` speaks to it at 127.0.0.1:5353.
 `resolver/wiring/cybernet-resolver.service` remains the HQ operator-side unit.
 
+Shell front door for the same client: `python -m resolver.client
+alice.cyberspace [--qtype AAAA] [--tcp-only]` prints one address per line.
+Exit codes: 0 resolved, 1 name does not resolve (NXDOMAIN), 2 everything
+else (usage, transport, daemon SERVFAIL) — shell scripts can tell "no such
+name" apart from "resolution broke". `CYBERNET_RESOLVER_PORT` picks the
+daemon port (default 5353), same as the library.
+
 ## Dependencies
 
 None beyond the project venv. (Earlier draft considered `dnslib` for the

@@ -103,15 +103,17 @@ def _query_udp(
     sock: socket.socket | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One UDP round trip. Raises ResolveError on failure or truncation."""
-    s = sock or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s = sock
     try:
+        if s is None:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         s.sendto(packet, (server, port))
         data, _ = s.recvfrom(4096)
     except OSError as exc:
         raise ResolveError(f"udp transport failed: {exc}") from exc
     finally:
-        if sock is None:
+        if sock is None and s is not None:
             s.close()
     flags, answers = _parse_response(data, txid)
     if flags & 0x0200:  # TC — answer was truncated; retry on the TCP wire
@@ -128,8 +130,10 @@ def _query_tcp(
     sock: socket.socket | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One DNS-over-TCP round trip (RFC 7766): length-prefixed frames."""
-    s = sock or socket.create_connection((server, port), timeout)
+    s = sock
     try:
+        if s is None:
+            s = socket.create_connection((server, port), timeout)
         s.settimeout(timeout)
         s.sendall(struct.pack(">H", len(packet)) + packet)
         (body_len,) = struct.unpack(">H", _read_exact(s, 2))
@@ -137,7 +141,7 @@ def _query_tcp(
     except OSError as exc:
         raise ResolveError(f"tcp transport failed: {exc}") from exc
     finally:
-        if sock is None:
+        if sock is None and s is not None:
             s.close()
     return _parse_response(data, txid)
 
@@ -196,3 +200,52 @@ def resolve(
     if rcode != 0:
         raise ResolveError(f"daemon answered rcode {rcode} for {name}")
     return [_textify(qtype_n, rdata) for rtype, rdata in answers if rtype == qtype_n]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI front door for the resolver client.
+
+    ``python -m resolver.client alice.cyberspace [--qtype AAAA] [--tcp-only]``
+
+    Prints one address per line on success. Exit codes: 0 resolved,
+    1 name does not resolve (NXDOMAIN), 2 everything else (usage,
+    transport, daemon SERVFAIL, malformed answer) — so a shell script
+    can tell "no such name" apart from "resolution broke".
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="resolver.client",
+        description="Resolve a .cyberspace name through the local daemon face.",
+    )
+    parser.add_argument("name", help="name to resolve, e.g. alice.cyberspace")
+    parser.add_argument(
+        "--qtype", default="A", choices=sorted(_QTYPES), help="record family (default A)"
+    )
+    parser.add_argument(
+        "--server", default=DEFAULT_SERVER, help="daemon host (default 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--tcp-only", action="store_true", help="skip UDP, speak DNS-over-TCP only"
+    )
+    args = parser.parse_args(argv)
+
+    port = _default_port()
+    try:
+        answers = resolve(
+            args.name, qtype=args.qtype, server=args.server, port=port,
+            tcp_only=args.tcp_only,
+        )
+    except NameNotFound as exc:
+        print(f"error: {exc}", flush=True)
+        return 1
+    except (ResolveError, ValueError) as exc:
+        print(f"error: {exc}", flush=True)
+        return 2
+    for addr in answers:
+        print(addr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
