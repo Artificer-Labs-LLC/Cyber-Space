@@ -1,1 +1,150 @@
-IyBUaGUgbG9jYWwgcmVzb2x2ZXIgKFBoYXNlIDI6IC5jeWJlcnNwYWNlIGZvciBvcmRpbmFyeSBzb2Z0d2FyZSkKCipTdGF0dXM6IGl0ZW0gMSBidWlsdCDinIUgKGRhZW1vbiBjb21taXQtZnJvemVuLCB6b25lICsgZm9yd2FyZC9UVEwgc3VpdGVzIDkvOQpncmVlbiwgQUFBQSBzdWl0ZSAxMi8xMiBncmVlbiwgd2lyZSBwYXRoIGRlZmVycmVkKS4gVGhlIGdhdGUgd2FzIG1pbmUsIG5vdCBoZXJzOiAid2lsbCBiZSBnb29kIG9uY2UKd2UgZ2V0IC5jeWJlcnNwYWNlIHdvcmtpbmciIHdhcyB0aGUgb3JkZXIg4oCUIGJ1aWxkaW5nIHRvd2FyZCBpdC4gSXRlbXMgMi0zCndyaXR0ZW4tYnV0LXVucHJvdmVuOiB0aGUgSFEgbm9kZSB3aXJlcyBmaXJzdCAoaXRlbSAyJ3MgcHJvb2YpLCB0aGVuIHRoZQpsaXZlIGVuZC10by1lbmQgKGl0ZW0gMykuKgoKIyMgVGhlIGhvbGUKCi5jeWJlcnNwYWNlIG5hbWVzIHJlc29sdmUgdG9kYXkgb25seSBmb3IgYWdlbnQgY2xpZW50cyBjYWxsaW5nCmByZXNvbHZlX2N5YmVyc3BhY2UoKWAg4oCUIHRoZSBzaXgtc3RlcCBmYWlsLWNsb3NlZCBjbGllbnQgcmVzb2x2ZXIgZnJvbQpQaGFzZSAxIChzZWUgYGNvcmUucHlgKS4gT3JkaW5hcnkgc29mdHdhcmUg4oCUIGJyb3dzZXJzLCBjdXJsLCB0aGUgT1MKcmVzb2x2ZXIgaXRzZWxmIOKAlCBjYW5ub3Qgc2VlIHRoZSBuYW1lc3BhY2UgYXQgYWxsLiBUaGUgaG9tZWxhbmQgaGFzIHN0cmVldApzaWducyBidXQgb25seSByZXNpZGVudHMgY2FuIHJlYWQgdGhlbTsgZXZlcnkgdmlzaXRvciBpcyBibGluZC4gQSBuYW1lCm9ubHkgYWdlbnRzIGNhbiByZXNvbHZlIGlzIGEgcnVtb3Igd2l0aCBnb29kIGNyeXB0b2dyYXBoeS4KCiMjIERlc2lnbjogYGN5YmVybmV0LXJlc29sdmVyYCwgb25lIHNtYWxsIGRhZW1vbgoKQSBsb2NhbCBETlMgc2VydmVyLCBhdXRob3JpdGF0aXZlIGZvciB0aGUgYC5jeWJlcnNwYWNlYCB6b25lIGFuZCBub3RoaW5nCmVsc2Ug4oCUIHNwbGl0LWhvcml6b24gYnkgY29uc3RydWN0aW9uOgoKLSAqKlF1ZXJ5IGA8bGFiZWw+LmN5YmVyc3BhY2VgIChBL0FBQUEpKiog4oaSIHJ1biB0aGUgc2l4LXN0ZXAKICBgcmVzb2x2ZV9jeWJlcnNwYWNlKClgIGFnYWluc3QgdGhlIGNvbmZpZ3VyZWQgbWlycm9yIChkZWZhdWx0OiB0aGUKICBnZW5lc2lzIG5vZGUpIOKGkiBzdWNjZXNzIHJldHVybnMgdGhlIG5vZGUncyBhZGRyZXNzIGFzIEEvQUFBQSByZWNvcmRzLgogICoqQW55IGZhaWx1cmUg4oaSIE5YRE9NQUlOLioqIEZhaWwtY2xvc2VkIGVuZCB0byBlbmQ6IHNpbGVuY2UsIG5ldmVyIGEKICBndWVzcywgbmV2ZXIgYSByZWRpcmVjdC4gVGhlIGRhZW1vbiBhZGRzIG5vIHRydXN0IG9mIGl0cyBvd24g4oCUIGl0IHJldXNlcwogIHRoZSByZWdpc3RyeSdzIHZlcmlmaWNhdGlvbiAobWlycm9yIHNpZ25hdHVyZSByZS12ZXJpZmllZCBjbGllbnQtc2lkZSwKICBiaW5kaW5nIHVuZXhwaXJlZCwgbGl2ZSBgL2ZlZC9waW5nYCArIGAvYXBpL3YxL25hbWVzLzxsYWJlbD5gIGFncmVlbWVudCkuCiAgQSBseWluZyBtaXJyb3IgY2FuIHdpdGhob2xkIGEgbmFtZSBidXQgbmV2ZXIgcmVkaXJlY3Qgb25lIOKAlCB0aGUgc2FtZQogIGd1YXJhbnRlZSBQaGFzZSAxIG1ha2VzIHRvIGFnZW50IGNsaWVudHMuCi0gKipUVEwqKiA9IG1pbihiaW5kaW5nIGBleHBpcmVzX2F0YCwgc21hbGwgY2FwLCBlLmcuIDMwMHMpIOKAlCByZXZva2VkIG9yCiAgZXhwaXJlZCBuYW1lcyBzdG9wIHJlc29sdmluZyBwcm9tcHRseS4KLSAqKkV2ZXJ5dGhpbmcgZWxzZSoqIOKGkiBmb3J3YXJkZWQgdG8gdGhlIHN5c3RlbSdzIHVwc3RyZWFtIHJlc29sdmVyCiAgdW50b3VjaGVkLiBUaGUgZGFlbW9uIGlzIGEgcHVyZSBhZGRpdGlvbiB0byB0aGUgbWFjaGluZSdzIEROUywgbmV2ZXIgYQogIHJlcGxhY2VtZW50LiAoQWx0ZXJuYXRpdmU6IHJlZnVzZSBub24tLmN5YmVyc3BhY2Ugd2l0aCBhIGRvY3VtZW50ZWQKICBwb2ludGVyIOKAlCB0aGUgYnVpbGQgdGljayBkZWNpZGVzOyBmb3J3YXJkaW5nIGlzIGZyaWVuZGxpZXIuKQotICoqTm8gbmV3IHRydXN0IHJvb3RzLioqIE5vIENBLCBubyBjZXJ0IGlzc3VhbmNlLCBubyBjbGVhcm5ldCBETlMKICBhbnl3aGVyZSBpbiB0aGUgcGF0aC4gVGhpcyBpcyBub3QgYSBjbGVhcm5ldCB3ZSdyZSBtYWtpbmcuCgojIyBXaXJpbmcgKHNwbGl0LWhvcml6b24sIGRvY3VtZW50ZWQsIGFsbCB0aHJlZSkKCjEuICoqc3lzdGVtZC1yZXNvbHZlZCoqIChoZXIgbWFjaGluZSwgSFEgbm9kZSk6IGRyb3AtaW4gd2l0aAogICBgRE5TPTEyNy4wLjAuMTo1MzUzYCArIGBEb21haW5zPX5jeWJlcnNwYWNlYCDigJQgb25seSBgLmN5YmVyc3BhY2VgCiAgIHJvdXRlcyB0byB0aGUgZGFlbW9uLgoyLiAqKmRuc21hc3EqKjogYHNlcnZlcj0vLmN5YmVyc3BhY2UvMTI3LjAuMC4xIzUzNTNgLgozLiAqKmAvZXRjL2hvc3RzYCBmYWxsYmFjayoqOiBmb3IgYSBzaW5nbGUgcGlubmVkIG5hbWUsIG5vIGRhZW1vbiBuZWVkZWQuCgojIyBEZXBlbmRlbmNpZXMKCk5vbmUgYmV5b25kIHRoZSBwcm9qZWN0IHZlbnYuIChFYXJsaWVyIGRyYWZ0IGNvbnNpZGVyZWQgYGRuc2xpYmAgZm9yIHRoZQpETlMgY29kZWM7IHRoZSBidWlsZCB0aWNrIDIwMjYtMTAtMDcgMTk6MjAgaGFuZC1yb2xsZWQgYSBtaW5pbWFsIHN0ZGxpYgpjb2RlYyBpbiBgcmVzb2x2ZXIvZG5zLnB5YCBpbnN0ZWFkIOKAlCBkZWxpYmVyYXRlbHkgbmFycm93OiBwYXJzZSBvbmUKcXVlc3Rpb24sIGJ1aWxkIEEvQUFBQSBhbnN3ZXJzLCBOWERPTUFJTiwgU0VSVkZBSUw7IGFueXRoaW5nIGVsc2UgcmFpc2VzLgpBIGRlcGVuZGVuY3ktZnJlZSBkYWVtb24gaW5zdGFsbHMgYW55d2hlcmUsIGFuZCB0aGUgbmFycm93IGNvZGVjIGlzCmZhaWwtY2xvc2VkIGJ5IGNvbnN0cnVjdGlvbi4gVGhlIGRlc2lnbiBub3RlIHBlcm1pdHMgdGhpcy4pCgojIyBCdWlsZCBvcmRlciAoaXRlbSAxIGZsaXBwZWQ7IGl0ZW1zIDItMyBhd2FpdCB0aGUgSFEgbm9kZSkKCjEuICoqYHJlc29sdmVyL2AgZGFlbW9uKiog4pyFICooMjAyNi0xMC0wNykqIOKAlCBETlMgb24gMTI3LjAuMC4xOjUzNTMsCiAgIGAuY3liZXJzcGFjZWAgem9uZSBmcm9tIGByZXNvbHZlX2N5YmVyc3BhY2UoKWAsIE5YRE9NQUlOIG9uIGFueQogICBmYWlsdXJlLCB1cHN0cmVhbSBmb3J3YXJkIGZvciB0aGUgcmVzdDsgdW5pdC10ZXN0ZWQgYWdhaW5zdCBhIGZha2UKICAgbWlycm9yLCA5LzkgZ3JlZW4gKGByZXNvbHZlci90ZXN0X2Fuc3dlcl9taXJyb3IucHlgKTogZ29vZCBiaW5kaW5nIOKGkgogICBBIHJlY29yZDsgYmFkIHNpZ25hdHVyZSDihpIgTlhET01BSU47IGV4cGlyZWQg4oaSIE5YRE9NQUlOOyBtaXJyb3IKICAgc2lsZW50IOKGkiBOWERPTUFJTi4gU2xpY2VzOiBzdGRsaWIgY29kZWMgKGRucy5weSksIGFuc3dlciBoYW5kbGVyCiAgIChhbnN3ZXIucHkpLCBkYWVtb24gbG9vcCAoZGFlbW9uLnB5KSDigJQgYWxsIGNvbW1pdC1mcm96ZW4gYmVmb3JlIHRoZQogICB0ZXN0cy4gRm9yd2FyZC9UVEwgcGF0aHMgdW5pdC10ZXN0ZWQgdG9vLCA5LzkgZ3JlZW4KICAgKGByZXNvbHZlci90ZXN0X2ZvcndhcmRfdHRsLnB5YCk6IG5vbi16b25lIHF1ZXJpZXMgcmVsYXllZCBieXRlLWZvci1ieXRlLAogICBkZWFkIHVwc3RyZWFtIOKGkiBTRVJWRkFJTCBlY2hvaW5nIHRoZSBxdWVyeSBpZCwgVFRMID0KICAgbWluKHNlY29uZHMtdG8tZXhwaXJ5LCAzMDBzKSBmbG9vcmVkIGF0IDAsIE1YIOKGkiBOT0RBVEEgd2l0aG91dCBldmVyCiAgIGFza2luZyB0aGUgbWlycm9yLiBDb2RlYyB1bml0LXRlc3RlZCB0b28sIDM1LzM1IGdyZWVuCiAgIChgcmVzb2x2ZXIvdGVzdF9kbnMucHlgKTogcGFyc2UgaGFwcHkgcGF0aCAoQS9BQUFBLCByZCBlY2hvKSwgYWxsCiAgIHJlZnVzYWxzIChRUiBzZXQsIHFkY291bnQg4omgIDEsIHRydW5jYXRlZCBoZWFkZXIvdGFpbCksIGxhYmVsIGdyYW1tYXIKICAgKHBvaW50ZXIgY29tcHJlc3Npb24gaW5jbC4gdGhlIGp1bXAtb2ZmIGNoZWNrLCBwb2ludGVyIGN5Y2xlcywKICAgMHg0MCBsZW5ndGggYml0cywgb3Zlci1sb25nIGxhYmVscywgbm9uLWFzY2lpKSwgYnVpbGQgKGlkL2ZsYWdzLwogICBhbmNvdW50IGVjaG8sIDB4QzAwQyBhbnN3ZXIgcG9pbnRlciwgTlhET01BSU4sIFJEIGVjaG8sIGJhZCByY29kZS8KICAgdHRsIHJlZnVzZWQpLCBlcnJvcl9yZXNwb25zZSAobmV2ZXIgcmFpc2VzLCBpZCBlY2hvLCBTRVJWRkFJTCkuCiAgIEFBQUEgcGF0aHMgdW5pdC10ZXN0ZWQgdG9vLCAxMi8xMiBncmVlbgogICAoYHJlc29sdmVyL3Rlc3RfYW5zd2VyX2FhYWEucHlgKTogQUFBQSBvbiBhIHY0LW9ubHkgbm9kZSDihpIgTk9EQVRBLAogICBBQUFBIG9uIGEgdjYgbm9kZSDihpIgb25lIDE2LWJ5dGUgYW5zd2VyLCBBIG9uIGEgdjYtb25seSBub2RlIOKGkgogICBOT0RBVEEsIGBfZmFtaWx5X2FkZHJlc3Nlc2AgZGVkdXBlICsganVuay11cmwgYFtdYCAobmV2ZXIgZ3Vlc3NlcykuCiAgIFRoYXQgc3VpdGUgY2F1Z2h0IGEgcmVhbCBgY29yZS5weWAgYnVnOiB0aGUgbm9kZV91cmwgZ3JhbW1hcgogICByZWplY3RlZCBicmFja2V0ZWQgSVB2NiBsaXRlcmFscywgc28gYSB2NiBub2RlIGNvdWxkIG5ldmVyIGFubm91bmNlCiAgICg0MDApIG9yIHJlc29sdmUgKE5YRE9NQUlOKSDigJQgb25lLWxpbmUgZml4LCBqdW5rL21hbGZvcm1lZC9mdHAKICAgc3RpbGwgcmVqZWN0ZWQuCiAgIENvbmZpZyBwYXJzaW5nIHVuaXQtdGVzdGVkIHRvbywgMjUvMjUgZ3JlZW4KICAgKGByZXNvbHZlci90ZXN0X2RhZW1vbl9jb25maWcucHlgKTogYF9lbnZfc3RyYCB1bnNldC9zdHJpcHBlZC9ibGFuaywKICAgYF9lbnZfaW50YCB1bnNldC9wYXJzZWQvbmVnYXRpdmUtZmxvb3IvZ2FyYmFnZS9oZXgtcmVmdXNlZCwKICAgYF9wYXJzZV91cHN0cmVhbWAgYWxsLW1hbGZvcm1lZCDihpIgMS4xLjEuMTo1MywgbmV2ZXIgYSBoYWxmLXBhcnNlLAogICBgX2NvbmZpZ2AgZGVmYXVsdHMgKyBvdmVycmlkZXM7IGZyb3plbi1ub3QtYmxlc3NlZDogYnJhY2tldGVkL2JhcmUKICAgSVB2NiB1cHN0cmVhbXMgZmFsbCBiYWNrIHRvIHRoZSB2NCBkZWZhdWx0ICh0aGUgcGFyc2VyIHNwbGl0cyBvbiB0aGUKICAgZmlyc3QgY29sb24g4oCUIHRoZSBzZWFtIHRvIGZpeCBpZiB2NiB1cHN0cmVhbSBpcyBldmVyIHdhbnRlZCkuCiAgIFNlcnZlIGxvb3AgdW5pdC10ZXN0ZWQgdG9vLCAxMS8xMSBncmVlbgogICAoYHJlc29sdmVyL3Rlc3Rfc2VydmVfbG9vcC5weWApOiBnYXJiYWdlIOKGkiBTRVJWRkFJTCB3aXRoIGlkIGVjaG8sCiAgIGVtcHR5IGRhdGFncmFtIHN3YWxsb3dlZCB3aXRoIHRoZSB6b25lIHN0aWxsIGFuc3dlcmluZyBhZnRlciwKICAgcmFpc2luZy1oYW5kbGVyIOKGkiBTRVJWRkFJTCAodGhlIGxvb3AncyBndWFyZCwgbmV2ZXIgdGhlIGhhbmRsZXIncwogICBzaWxlbmNlKSwgZGVhZCBtaXJyb3Ig4oaSIE5YRE9NQUlOIGZhaWwtY2xvc2VkLCB0aGUgcmVhbCBTSUdURVJNCiAgIGhhbmRsZXIgY2FwdHVyZWQgYW5kIGludm9rZWQgdG8gc3RvcCBgcnVuKClgIGNsZWFuLCBzb2NrZXQgY2xvc2VkCiAgIG9uIGV4aXQ7IHdpcmUgbW9ua2V5cGF0Y2hlZCAodGhlIHNhbmRib3ggYmxvY2tzIFVEUCBzZW5kcyksIHRoZQogICBzaWduYWwgd2lyaW5nIHJlYWwuIE5vdyAxMi8xMiBncmVlbjogdGhlIFRDUCBmYWNlIChSRkMgNzc2NikgaXMgYm91bmQKICAgYW5kIGxpc3RlbmVkIGFsb25nc2lkZSBVRFAgb24gdGhlIHNhbWUgcG9ydCwgY2xvc2VkIG9uIGV4aXQuCiAgIFRDUCB0cmFuc3BvcnQgKFJGQyA3NzY2LCAyLW9jdGV0IGxlbmd0aCBwcmVmaXgpIG5vdyBzZXJ2ZWQgb24gdGhlIHNhbWUKICAgcG9ydCBhcyBVRFA6IHRoZSBzYW1lIGZhaWwtY2xvc2VkIGhhbmRsZV9xdWVyeSgpIG9uIGJvdGggd2lyZXMsIG9uZQogICBUQ1AgY29ubmVjdGlvbiBzZXJ2ZWQgc2VxdWVudGlhbGx5IHRvIEVPRi90aW1lb3V0IGluIHRoZSBzYW1lCiAgIHNpbmdsZS10aHJlYWRlZCBzZWxlY3QoKSBsb29wIOKAlCBubyB0aHJlYWRzLCBubyBuZXcgdHJ1c3QuIEEgbmV0d29yawogICB0aGF0IGVhdHMgVURQIChOQVQtYmxvY2tlZCBob3N0cywgd2FsbGVkIHNhbmRib3hlcykgc3RpbGwgaGFzIGEgd2lyZQogICBwYXRoIHRvIHRoZSB6b25lLgogICBMaXZlIHdpcmUgZXhlcmNpc2UsIGZpcnN0IHJlYWwgb25lOiB0aGUgc2FuZGJveCBibG9ja3MgVURQIGF0IHRoZQogICBzeXNjYWxsIGxheWVyIChFUEVSTSBvbiBzZW5kdG8sIGV2ZW4gbG9vcGJhY2spIGJ1dCBhbGxvd3MgVENQLCBzbwogICBoaWRkZW5fZmlsZXMvcmVzb2x2ZXItdGNwLXdpcmUtbG9vcGJhY2stdGVzdC5weSBydW5zIHRoZSBSRUFMIGRhZW1vbgogICBsb29wIGluIHRoZSBtYWluIHRocmVhZCAocmVhbCBTSUdJTlQvU0lHVEVSTSBoYW5kbGVycyksIHRoZSBSRUFMCiAgIGNsYWltIGVuZHBvaW50IChtaW50X25hbWUpLCB0aGUgUkVBTCBob3N0ZCBhbm5vdW5jZSAoaG9zdC5hbm5vdW5jZV9vbmNlKSwKICAgYW5kIHJlYWwgbGVuZ3RoLXByZWZpeGVkIFRDUCBmcmFtZXMgb24gbG9vcGJhY2s6IDgvOCBncmVlbiDigJQKICAgY2xhaW0rYW5ub3VuY2Urc2l4LXN0ZXAgcmVzb2x2ZXMgTk9FUlJPUiB3aXRoIEEgYW5zd2VycywganVuayDihpIKICAgTlhET01BSU4sIEFBQUEg4oaSIE5PREFUQSwgcGlwZWxpbmVkIHJldXNlIG9uIG9uZSBjb25uZWN0aW9uLCBnYXJiYWdlIOKGkgogICBTRVJWRkFJTCB3aXRoIHR4aWQgZWNobywgb2ZmLXpvbmUg4oaSIFNFUlZGQUlMLiBUZXN0LW9ubHkgYWxsb3dhbmNlczoKICAgdGhlIDEyNy4wLjAuMSBtaXJyb3Ivbm9kZSByaWRlcyB0aGUgaW4tcHJvY2VzcyBTU1JGLWdhdGUgYWxsb3dhbmNlIGFuZAogICBDWUJFUk5FVF9QVUJMSUNfVVJMIHBvaW50cyBhdCB0aGUgdGVzdCBub2RlOyB0aGUgZGFlbW9uIGxvb3AsIHRoZQogICBzaXgtc3RlcCwgYW5kIHRoZSBzaWduYWwgaGFuZGxpbmcgYXJlIHVudG91Y2hlZCBwcm9kdWN0aW9uIGNvZGUuCiAgIFRoZSBmaXZlIFVEUCB3aXJlIGFzc2VydGlvbnMgc3RheSBmcm96ZW4gYXMgREVGRVJSRUQgaW4KICAgaGlkZGVuX2ZpbGVzL3Jlc29sdmVyLXdpcmUtbG9vcGJhY2stdGVzdC5weSBmb3IgSFEgd2lyaW5nIChpdGVtIDIpLgoyLiAqKldpcmluZyBkb2NzICsgc2NyaXB0cyoqIOKAlCB0aGUgdGhyZWUgc3BsaXQtaG9yaXpvbiBjb25maWdzIGFib3ZlIGFzCiAgIGNvcHktcGFzdGUgdW5pdHM7IHByb3ZlbiBmaXJzdCBvbiB0aGUgSFEgbm9kZSAoZ2VuZXNpcyByZXNvbHZpbmcgaXRzCiAgIG93biBuYW1lIOKAlCBhIGZpbmUgc21va2UgdGVzdCksIHRoZW4gb24gaGVyIG1hY2hpbmUgd2hlbiBzaGUncyBhdCBpdC4KMy4gKipMaXZlIGVuZC10by1lbmQqKiDigJQgYGN1cmwgZ2VuZXNpcy5jeWJlcnNwYWNlL2FwaS92MS9ub2RlYCAob3IgdGhlCiAgIGNvbmZpZ3VyZWQgZ2VuZXNpcyBuYW1lKSByZXNvbHZpbmcgdGhyb3VnaCB0aGUgZGFlbW9uIGFnYWluc3QgdGhlIHJlYWwKICAgcmVnaXN0cnksIGZhaWwtY2xvc2VkIGNhc2VzIGRlbW9uc3RyYXRlZCBsaXZlLiBUaGUgb3JkZXJlZCBwcm9jZWR1cmUgaXMKICAgZnJvemVuIGluIGBkb2NzL1JFU09MVkVSX1JVTkJPT0subWRgICh0aGUgdHdvIGdhdGVzLCBkZXBsb3kgc3RlcCBbNC80XSwKICAgY2xhaW0tdGhlbi1yZXNvbHZlIG9yZGVyLCB0aGUgdGhyZWUgd2lyaW5nIHVuaXRzIGFzIHRoZSBjbGllbnQgaGFsZiwKICAgaXRlbS0zIGZsaXAgcnVsZSwgcmVjb3Zlcnkgbm90ZXMpIOKAlCByZWFkIGl0IGJlZm9yZSB0b3VjaGluZyBhbnl0aGluZy4KCiMjIERpc2NpcGxpbmUKCi0gTm90IGEgQ0EsIG5vdCBhIHJlZ2lzdHJhciwgbm90IGEgY2xlYXJuZXQgYnJpZGdlLiBUaGUgZGFlbW9uIGFuc3dlcnMKICBvbmUgem9uZSBmcm9tIG9uZSByZWdpc3RyeSBhbmQgZm9yd2FyZHMgdGhlIHJlc3QuCi0gUGhhc2UgMSdzIGNvbnRyYWN0IGlzIHVudG91Y2hlZDogdGhlIGRhZW1vbiBpcyBhIHJlYWRlciBvZiB0aGUgcmVnaXN0cnksCiAgbmV2ZXIgYSB3cml0ZXIuIE5hbWUgY2xhaW1zIHN0aWxsIGhhcHBlbiBvbiB0aGUgbm9kZXMuCi0gYC5jeWJlcnNwYWNlYCBzdGF5cyBzYWNyZWQgaW4gcHJvc2UgdW50aWwgdGhlIGRhZW1vbiBydW5zIHNvbWV3aGVyZQogIHJlYWwg4oCUIHRoZSB2MCBub3RlIGlzIGEgcGxhbiwgbm90IGEgcGxhY2UuCg==
+# The local resolver (Phase 2: .cyberspace for ordinary software)
+
+*Status: item 1 built ✅ (daemon commit-frozen, zone + forward/TTL suites 9/9
+green, AAAA suite 12/12 green, wire path deferred). The gate was mine, not hers: "will be good once
+we get .cyberspace working" was the order — building toward it. Items 2-3
+written-but-unproven: the HQ node wires first (item 2's proof), then the
+live end-to-end (item 3).*
+
+## The hole
+
+.cyberspace names resolve today only for agent clients calling
+`resolve_cyberspace()` — the six-step fail-closed client resolver from
+Phase 1 (see `core.py`). Ordinary software — browsers, curl, the OS
+resolver itself — cannot see the namespace at all. The homeland has street
+signs but only residents can read them; every visitor is blind. A name
+only agents can resolve is a rumor with good cryptography.
+
+## Design: `cybernet-resolver`, one small daemon
+
+A local DNS server, authoritative for the `.cyberspace` zone and nothing
+else — split-horizon by construction:
+
+- **Query `<label>.cyberspace` (A/AAAA)** → run the six-step
+  `resolve_cyberspace()` against the configured mirror (default: the
+  genesis node) → success returns the node's address as A/AAAA records.
+  **Any failure → NXDOMAIN.** Fail-closed end to end: silence, never a
+  guess, never a redirect. The daemon adds no trust of its own — it reuses
+  the registry's verification (mirror signature re-verified client-side,
+  binding unexpired, live `/fed/ping` + `/api/v1/names/<label>` agreement).
+  A lying mirror can withhold a name but never redirect one — the same
+  guarantee Phase 1 makes to agent clients.
+- **TTL** = min(binding `expires_at`, small cap, e.g. 300s) — revoked or
+  expired names stop resolving promptly.
+- **Everything else** → forwarded to the system's upstream resolver
+  untouched. The daemon is a pure addition to the machine's DNS, never a
+  replacement. (Alternative: refuse non-.cyberspace with a documented
+  pointer — the build tick decides; forwarding is friendlier.)
+- **No new trust roots.** No CA, no cert issuance, no clearnet DNS
+  anywhere in the path. This is not a clearnet we're making.
+
+## Wiring (split-horizon, documented, all three)
+
+1. **systemd-resolved** (her machine, HQ node): drop-in with
+   `DNS=127.0.0.1:5353` + `Domains=~cyberspace` — only `.cyberspace`
+   routes to the daemon.
+2. **dnsmasq**: `server=/.cyberspace/127.0.0.1#5353`.
+3. **`/etc/hosts` fallback**: for a single pinned name, no daemon needed.
+
+## Stand-up (per-agent unit)
+
+`deploy/resolverd.service` — install as `/etc/systemd/system/resolverd.service`
+(EDIT the three machine-specific lines: User, WorkingDirectory,
+ExecStart/PATH — same convention as `deploy/hostd.service`). The unit holds
+NO secrets (the daemon keeps no keys and answers no identity; name keys live
+in the hostd env file, never here) and binds loopback-only 127.0.0.1:5353.
+This is the unit for the "daemon every agent runs" — resolution from the
+agent's own seat; `resolver/client.py` speaks to it at 127.0.0.1:5353.
+`resolver/wiring/cybernet-resolver.service` remains the HQ operator-side unit.
+
+## Dependencies
+
+None beyond the project venv. (Earlier draft considered `dnslib` for the
+DNS codec; the build tick 2026-10-07 19:20 hand-rolled a minimal stdlib
+codec in `resolver/dns.py` instead — deliberately narrow: parse one
+question, build A/AAAA answers, NXDOMAIN, SERVFAIL; anything else raises.
+A dependency-free daemon installs anywhere, and the narrow codec is
+fail-closed by construction. The design note permits this.)
+
+## Build order (item 1 flipped; items 2-3 await the HQ node)
+
+1. **`resolver/` daemon** ✅ *(2026-10-07)* — DNS on 127.0.0.1:5353,
+   `.cyberspace` zone from `resolve_cyberspace()`, NXDOMAIN on any
+   failure, upstream forward for the rest; unit-tested against a fake
+   mirror, 9/9 green (`resolver/test_answer_mirror.py`): good binding →
+   A record; bad signature → NXDOMAIN; expired → NXDOMAIN; mirror
+   silent → NXDOMAIN. Slices: stdlib codec (dns.py), answer handler
+   (answer.py), daemon loop (daemon.py) — all commit-frozen before the
+   tests. Forward/TTL paths unit-tested too, 9/9 green
+   (`resolver/test_forward_ttl.py`): non-zone queries relayed byte-for-byte,
+   dead upstream → SERVFAIL echoing the query id, TTL =
+   min(seconds-to-expiry, 300s) floored at 0, MX → NODATA without ever
+   asking the mirror. Codec unit-tested too, 35/35 green
+   (`resolver/test_dns.py`): parse happy path (A/AAAA, rd echo), all
+   refusals (QR set, qdcount ≠ 1, truncated header/tail), label grammar
+   (pointer compression incl. the jump-off check, pointer cycles,
+   0x40 length bits, over-long labels, non-ascii), build (id/flags/
+   ancount echo, 0xC00C answer pointer, NXDOMAIN, RD echo, bad rcode/
+   ttl refused), error_response (never raises, id echo, SERVFAIL).
+   AAAA paths unit-tested too, 12/12 green
+   (`resolver/test_answer_aaaa.py`): AAAA on a v4-only node → NODATA,
+   AAAA on a v6 node → one 16-byte answer, A on a v6-only node →
+   NODATA, `_family_addresses` dedupe + junk-url `[]` (never guesses).
+   That suite caught a real `core.py` bug: the node_url grammar
+   rejected bracketed IPv6 literals, so a v6 node could never announce
+   (400) or resolve (NXDOMAIN) — one-line fix, junk/malformed/ftp
+   still rejected.
+   Config parsing unit-tested too, 25/25 green
+   (`resolver/test_daemon_config.py`): `_env_str` unset/stripped/blank,
+   `_env_int` unset/parsed/negative-floor/garbage/hex-refused,
+   `_parse_upstream` all-malformed → 1.1.1.1:53, never a half-parse,
+   `_config` defaults + overrides; frozen-not-blessed: bracketed/bare
+   IPv6 upstreams fall back to the v4 default (the parser splits on the
+   first colon — the seam to fix if v6 upstream is ever wanted).
+   Serve loop unit-tested too, 11/11 green
+   (`resolver/test_serve_loop.py`): garbage → SERVFAIL with id echo,
+   empty datagram swallowed with the zone still answering after,
+   raising-handler → SERVFAIL (the loop's guard, never the handler's
+   silence), dead mirror → NXDOMAIN fail-closed, the real SIGTERM
+   handler captured and invoked to stop `run()` clean, socket closed
+   on exit; wire monkeypatched (the sandbox blocks UDP sends), the
+   signal wiring real. Now 12/12 green: the TCP face (RFC 7766) is bound
+   and listened alongside UDP on the same port, closed on exit.
+   TCP transport (RFC 7766, 2-octet length prefix) now served on the same
+   port as UDP: the same fail-closed handle_query() on both wires, one
+   TCP connection served sequentially to EOF/timeout in the same
+   single-threaded select() loop — no threads, no new trust. A network
+   that eats UDP (NAT-blocked hosts, walled sandboxes) still has a wire
+   path to the zone.
+   Live wire exercise, first real one: the sandbox blocks UDP at the
+   syscall layer (EPERM on sendto, even loopback) but allows TCP, so
+   hidden_files/resolver-tcp-wire-loopback-test.py runs the REAL daemon
+   loop in the main thread (real SIGINT/SIGTERM handlers), the REAL
+   claim endpoint (mint_name), the REAL hostd announce (host.announce_once),
+   and real length-prefixed TCP frames on loopback: 8/8 green —
+   claim+announce+six-step resolves NOERROR with A answers, junk →
+   NXDOMAIN, AAAA → NODATA, pipelined reuse on one connection, garbage →
+   SERVFAIL with txid echo, off-zone → SERVFAIL. Test-only allowances:
+   the 127.0.0.1 mirror/node rides the in-process SSRF-gate allowance and
+   CYBERNET_PUBLIC_URL points at the test node; the daemon loop, the
+   six-step, and the signal handling are untouched production code.
+   The five UDP wire assertions stay frozen as DEFERRED in
+   hidden_files/resolver-wire-loopback-test.py for HQ wiring (item 2).
+2. **Wiring docs + scripts** — the three split-horizon configs above as
+   copy-paste units; proven first on the HQ node (genesis resolving its
+   own name — a fine smoke test), then on her machine when she's at it.
+3. **Live end-to-end** — `curl genesis.cyberspace/api/v1/node` (or the
+   configured genesis name) resolving through the daemon against the real
+   registry, fail-closed cases demonstrated live. The ordered procedure is
+   frozen in `docs/RESOLVER_RUNBOOK.md` (the two gates, deploy step [4/4],
+   claim-then-resolve order, the three wiring units as the client half,
+   item-3 flip rule, recovery notes) — read it before touching anything.
+
+## Discipline
+
+- Not a CA, not a registrar, not a clearnet bridge. The daemon answers
+  one zone from one registry and forwards the rest.
+- Phase 1's contract is untouched: the daemon is a reader of the registry,
+  never a writer. Name claims still happen on the nodes.
+- `.cyberspace` stays sacred in prose until the daemon runs somewhere
+  real — the v0 note is a plan, not a place.

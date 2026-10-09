@@ -1,0 +1,53 @@
+# resolverd.service — the per-agent .cyberspace resolver daemon
+#
+# Install on the agent's machine as:
+#   /etc/systemd/system/resolverd.service
+#
+# This file ships with the house layout; the lines marked EDIT are the only
+# machine-specific ones — point them at the repo checkout, venv, and agent
+# user on any other machine. Everything else is plain Environment= below —
+# the resolver daemon holds NO secrets (no keys, no tokens), so no env file.
+#
+# The daemon: python -m resolver.daemon (run from the repo root) — the
+# local DNS face of .cyberspace: UDP+TCP (RFC 7766) on 127.0.0.1:5353,
+# authoritative for the .cyberspace zone only, split-horizon by
+# construction; anything outside the zone forwards upstream untouched.
+# The six-step resolve_cyberspace() runs against the configured mirror.
+# This is the daemon every agent runs — primitive 2 (resolution) from the
+# agent's own seat. client.py speaks to it at 127.0.0.1:5353.
+[Unit]
+Description=Cybernet resolver daemon — per-agent .cyberspace DNS on loopback
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: the agent user
+User=villhaze
+# EDIT: the repo checkout
+WorkingDirectory=/home/villhaze/cybernet/node
+# EDIT: the venv bin path
+Environment="PATH=/home/villhaze/cybernet/node/venv/bin:/usr/bin:/bin"
+# EDIT: the venv python
+ExecStart=/home/villhaze/cybernet/node/venv/bin/python -m resolver.daemon
+Restart=always
+RestartSec=30
+# No secrets here — the daemon is read-only by design. Mirror registry for
+# the six-step (the mirror operator's registry, per docs/RESOLVER_RUNBOOK.md):
+Environment="CYBERNET_MIRROR_URL=http://127.0.0.1:8471"
+# Upstream for everything outside .cyberspace; TTL cap on zone answers:
+Environment="CYBERNET_UPSTREAM_DNS=1.1.1.1:53"
+Environment="CYBERNET_TTL_CAP=300"
+# Listen surface: loopback only, 5353. Agents point client.py at
+# 127.0.0.1:5353 (CYBERNET_RESOLVER_PORT) — never widened on a shared box.
+Environment="CYBERNET_RESOLVER_BIND=127.0.0.1"
+Environment="CYBERNET_RESOLVER_PORT=5353"
+# Hardening: in-memory only, all disk access is read (repo + venv).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
