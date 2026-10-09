@@ -29,8 +29,10 @@ from core import _gossip_loop, _reannounce_loop, _seed_bootstrap, init_db
 import federation
 import routes_agents
 import routes_channels
+import routes_relay
 import routes_doh
 import routes_social
+import routes_social_serve
 import routes_spaces
 import routes_workspaces
 
@@ -101,14 +103,52 @@ def _header(scope: Scope, name: str) -> str | None:
     return None
 
 
+class SecurityHeadersMiddleware:
+    """
+    Global response-header belt (2026-10-09 audit: response-header-belt).
+
+    The JSON API surfaces and the HTML landing/channel views carried no
+    X-Content-Type-Options: beltless against MIME-sniffing while the
+    personal-space surfaces already set it via _SPACE_HEADERS. This
+    middleware adds `X-Content-Type-Options: nosniff` to every HTTP
+    response so the content types stay authoritative: JSON surfaces
+    remain application/json, HTML surfaces text/html. Existing headers
+    are not duplicated. Non-"http" scopes (the WebSocket stream) pass
+    through untouched.
+
+    Pure ASGI wrapping send only: cheap (one dict on response.start),
+    no behavioral change for agent consumers (agents ignore it; browsers
+    gain the no-sniff belt).
+    """
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def belted_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = dict(message.get("headers", []))
+                headers.setdefault(b"x-content-type-options", b"nosniff")
+                message = {**message, "headers": list(headers.items())}
+            await send(message)
+
+        await self.app(scope, receive, belted_send)
+
+
 app.add_middleware(BodyCapMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(federation.router)
 app.include_router(routes_agents.router)
 app.include_router(routes_doh.router)
 app.include_router(routes_social.router)
+app.include_router(routes_social_serve.router)
 app.include_router(routes_workspaces.router)
 app.include_router(routes_channels.router)
+app.include_router(routes_relay.router)
 app.include_router(routes_spaces.router)
 
 
