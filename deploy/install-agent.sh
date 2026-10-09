@@ -2,7 +2,7 @@
 # install-agent.sh — one-command per-agent .cyberspace stand-up.
 #
 # Run as root on the agent's machine from the repo checkout:
-#   sudo ./deploy/install-agent.sh [--user NAME] [--mirror URL] [--hostd-env PATH]
+#   sudo ./deploy/install-agent.sh [--user NAME] [--mirror URL] [--hostd-env PATH] [--nss]
 #
 # What it does:
 #   1. Creates the venv + installs requirements (if missing) at
@@ -18,6 +18,11 @@
 #      /etc/cybernet-hostd/hostd.env (0600) and starts deploy/hostd.service —
 #      the per-agent hosting daemon (primitive 3 + primitive 6).
 #      Otherwise prints the mint_name.py line and stops at resolution.
+#   5. If --nss, installs deploy/resolverd-nss.conf as the systemd-resolved
+#      stub-zone glue (Domains=~cyberspace -> 127.0.0.1:5353) so every program
+#      on the machine resolves *.cyberspace, not just resolver.client.
+#      Opt-in on purpose: it is an alternative to the HQ operator-side
+#      split-horizon drop-in (~cyberspace -> HQ daemon); never force both.
 #
 # The daemon holds no keys. The name key lives only in the 0600 hostd env
 # file. Re-run to update.
@@ -30,7 +35,7 @@ MIRROR_URL="http://127.0.0.1:8471"
 HOSTD_ENV=""
 
 usage() {
-    echo "usage: sudo ./deploy/install-agent.sh [--user NAME] [--mirror URL] [--hostd-env PATH]" >&2
+    echo "usage: sudo ./deploy/install-agent.sh [--user NAME] [--mirror URL] [--hostd-env PATH] [--nss]" >&2
     exit 2
 }
 
@@ -39,10 +44,12 @@ while [[ $# -gt 0 ]]; do
         --user)       AGENT_USER="$2"; NODE_DIR="/home/$AGENT_USER/cybernet/node"; shift 2 ;;
         --mirror)     MIRROR_URL="$2"; shift 2 ;;
         --hostd-env)  HOSTD_ENV="$2"; shift 2 ;;
+        --nss)        NSS_GLUE=1; shift ;;
         -h|--help)    usage ;;
         *)            echo "unknown option: $1" >&2; usage ;;
     esac
 done
+NSS_GLUE="${NSS_GLUE:-0}"
 
 if [[ "$EUID" -ne 0 ]]; then
     echo "must run as root (sudo)" >&2
@@ -122,6 +129,23 @@ else
         || { echo "  ERROR: hostd.service failed to start"; systemctl status hostd.service --no-pager | tail -5; exit 1; }
     HOSTED="$(grep -E '^CYBERNET_HOSTED_NAME=' /etc/cybernet-hostd/hostd.env | cut -d= -f2)"
     echo "  hostd active; $HOSTED.cyberspace is live on this machine"
+fi
+
+echo "[5/5] systemd-resolved stub-zone glue (opt-in)"
+if [[ "$NSS_GLUE" -eq 1 ]]; then
+    if ! systemctl is-active --quiet systemd-resolved.service; then
+        echo "  systemd-resolved not running — install the glue manually:"
+        echo "    cp $REPO_DIR/deploy/resolverd-nss.conf /etc/systemd/resolved.conf.d/cybernet-agent.conf"
+        echo "    (dnsmasq instead: server=/cyberspace/127.0.0.1#5353)"
+    else
+        install -m 0644 "$REPO_DIR/deploy/resolverd-nss.conf" /etc/systemd/resolved.conf.d/cybernet-agent.conf
+        systemctl restart systemd-resolved.service
+        resolvectl domain >/dev/null 2>&1 && resolvectl domain | grep -q '~cyberspace' \
+            && echo "  ~cyberspace routes to the per-agent daemon (getent works for every program)" \
+            || echo "  WARNING: drop-in installed but ~cyberspace not in resolvectl domains — check for a conflicting cyberspace.conf"
+    fi
+else
+    echo "  skipped (run with --nss to make *.cyberspace resolve for every program via systemd-resolved)"
 fi
 
 echo "done — resolve with: $VENV_PY -m resolver.client <name>.cyberspace"

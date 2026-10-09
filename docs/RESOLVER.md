@@ -63,7 +63,14 @@ the EDIT lines rewritten, smoke-tests the daemon through the client CLI (a
 junk name must come back NXDOMAIN), and — if a mint_name.py env file is
 passed or exactly one exists under `~/.cyberspace/hostd/` — installs it
 0600 as `/etc/cybernet-hostd/hostd.env` and starts hostd. Without a hostd
-env it stops at resolution and prints the mint_name.py line.
+env it stops at resolution and prints the mint_name.py line. Opt-in
+`--nss` installs `deploy/resolverd-nss.conf` as the systemd-resolved
+stub-zone glue (`Domains=~cyberspace` → 127.0.0.1:5353) so every program on
+the agent's machine resolves `*.cyberspace` — `curl http://alice.cyberspace/`
+works, not just the client CLI. Opt-in on purpose: it is an alternative to
+the HQ operator-side split-horizon drop-in (`~cyberspace` → HQ daemon);
+never run both on one machine. DNS-less boxes use the dnsmasq line printed
+when systemd-resolved isn't running (`server=/cyberspace/127.0.0.1#5353`).
 
 Shell front door for the same client: `python -m resolver.client
 alice.cyberspace [--qtype AAAA] [--tcp-only]` prints one address per line.
