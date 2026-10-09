@@ -897,10 +897,11 @@ def _relay_route(desc):
     The descriptor must already be signature-verified with node_pubkey
     equal to the binding's key — the name key vouches the relay URL, the
     same trust the direct strategy's URL already rides. Direct strategies
-    are the dialer's business elsewhere; unknown kinds (rendezvous is
-    still reserved) are skipped, not fatal; one malformed relay member
-    never poisons the route the hoster listed first. No well-formed relay
-    strategy -> None. Never raises."""
+    are the dialer's business elsewhere; non-relay kinds are skipped, not
+    fatal (rendezvous is a real descriptor kind since 2026-10-09 —
+    extracted by _rendezvous_strategy, not by _relay_route); one
+    malformed relay member never poisons the route the hoster listed
+    first. No well-formed relay strategy -> None. Never raises."""
     try:
         reach = desc.get("reach") if isinstance(desc, dict) else None
         if not isinstance(reach, list):
