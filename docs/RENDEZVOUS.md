@@ -172,6 +172,15 @@ point entry, and `GET /relay/hold_query?point_id=` answers
 `{"held": true|false}` — true only for fresh, registered, still-willing
 points; everything else silent `false`, never a 4xx. Loopback-tested
 (hidden_files/rendezvous-holdquery-test.py, 19/19 on the real app).
+`POST /relay/open` also accepts the derived `rendezvous_point` in place
+of the routing token (2026-10-09) — the dialer opens a session without
+ever learning the token; the mirror resolves point -> held token only
+for fresh, registered, still-willing points (malformed, unregistered,
+stale, old-epoch = 404 silence, exactly like an unknown token), and the
+name-key signature stays the dialer-verified auth. Explicit token wins
+when both are given. Loopback-tested
+(hidden_files/rendezvous-open-bypoint-test.py, 15/15 on the real route
+functions, incl. full hoster-answer round trips and token-wins-when-both).
 Daemons still ignore the `rendezvous` kind; the shipped NAT-hidden path is
 `relay`. Hoster-side (dual-point hold in hostd) is wired; dialer-side is now
 WIRED (2026-10-09): core._relay_hold_probe derives the (E, E-1) pair from
@@ -182,5 +191,8 @@ transport failure, un-derivable point) -> legacy open, so a new dialer
 never goes silent under an old relay. SSRF gate note: query strings are
 host-level (stripped before the shape match in _reject_nonpublic_node_url
 and _node_url_host; stored node addresses stay query-free). Harness
-hidden_files/dialer-hold-probe-test.py 9/9. The public-relay e2e and the
+hidden_files/dialer-hold-probe-test.py 9/9. Remaining dialer step: teach
+_relay_open_session to open by `rendezvous_point` when the probe said
+held (it still sends the descriptor token today). The public-relay e2e
+and the
 deployed genesis build remain gated (gate 1, her call).
