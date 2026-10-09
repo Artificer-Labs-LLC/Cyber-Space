@@ -1,8 +1,9 @@
-# Rendezvous — Design Stub (reserved primitive)
+# Rendezvous — wired primitive (2026-10-09)
 
-The third dial strategy in the reach descriptor, still reserved. This note
-pins the problem it must solve and the shape candidates, so the reservation
-is a design space, not a TODO.
+The third dial strategy in the reach descriptor — WIRED 2026-10-09
+(mirror, hoster, and dialer halves coded and harnessed; status at the
+end of this note). The design space below is frozen history: the
+problem it had to solve and the shape candidates.
 
 ## The problem the relay leaves open
 
