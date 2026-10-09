@@ -191,8 +191,38 @@ transport failure, un-derivable point) -> legacy open, so a new dialer
 never goes silent under an old relay. SSRF gate note: query strings are
 host-level (stripped before the shape match in _reject_nonpublic_node_url
 and _node_url_host; stored node addresses stay query-free). Harness
-hidden_files/dialer-hold-probe-test.py 9/9. Remaining dialer step: teach
-_relay_open_session to open by `rendezvous_point` when the probe said
-held (it still sends the descriptor token today). The public-relay e2e
-and the
+hidden_files/dialer-hold-probe-test.py 9/9. Dialer-side open-by-point
+WIRED (2026-10-09): `_relay_hold_probe` now returns the held point_id
+(not a bare True), and `_relay_open_session` opens the session BY THAT
+POINT — `{"name", "rendezvous_point"}`, the descriptor token never sent
+— when the probe said held; held:false -> silence; probe-unknown ->
+legacy `{"name", "token"}`. End-to-end proven: the real dial half
+bridged a live daemon through the real relay app with the point doing
+the routing (reach-relay-dial-e2e-test.py 13/13, reach-hostd-test.py
+22/22). A bogus descriptor token no longer fail-closes on the
+rendezvous path — the held point routes and the name-key challenge
+signature is the auth; token silence stays the legacy-relay behavior.
+The public-relay e2e and the
 deployed genesis build remain gated (gate 1, her call).
+
+**Rendezvous is a REAL descriptor kind (2026-10-09).** The reservation
+is lifted: `_reach_build` mints `{ "kind": "rendezvous",
+"epoch_len": <60..86400>, "hold_query": "/relay/hold_query" }` when
+`CYBERNET_RENDEZVOUS=1` (epoch_len from `CYBERNET_RENDEZVOUS_EPOCH_LEN`,
+fail-closed to the frozen default 3600; only rides with a relay
+strategy — the derived points are held at that relay). The advertised
+epoch_len now drives the meeting math on all four sides: the dialer's
+`_rendezvous_strategy` extraction feeds `_relay_hold_probe` /
+`_relay_open_session` (core.py), the hostd daemon holds under the same
+env value (hold_open.py `_rendezvous_epoch_len`), and the relay
+validates willingness under the epoch_len carried in the register
+body (routes_relay.py — stored per point record, old records read as
+3600). A miscomputed point is still a loud 400 at register; a relay
+too old to know epoch_len keeps working (record defaults to 3600).
+Harness hidden_files/rendezvous-epochlen-test.py 19/19 on the real
+relay app: 600-math registers and answers willing, the same name's
+3600-math point reads held:false, dialer probe finds the held point
+under the advertised math. Note: the frozen spec's `hold_query:
+"/rendezvous/slots"` was written before the relay became the meeting
+surface — the wired path is the relay's `/relay/hold_query`, and the
+descriptor advertises the wired path.

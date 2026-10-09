@@ -105,13 +105,16 @@ def _reap_relay(now: float) -> None:
             _relay_rendezvous.pop(p, None)
 
 
-def _valid_rendezvous(point_id, name_pub) -> tuple[str, str] | None:
+def _valid_rendezvous(point_id, name_pub, epoch_len=None):
     """Shape-proof a register-time rendezvous binding. Returns
-    (point_id, name_pub) when both are well-formed 64-hex AND the point
-    is willing right now (current-or-previous epoch, per the frozen
-    epoch-tolerance spec); None when no binding was offered; raises 400
-    when a binding was offered but is stale or malformed — a hoster that
-    miscomputed its point is told so, never silently mispaired."""
+    (point_id, name_pub, epoch_len) when both are well-formed 64-hex AND
+    the point is willing right now (current-or-previous epoch under the
+    binding's epoch_len, per the frozen epoch-tolerance spec); None when
+    no binding was offered; raises 400 when a binding was offered but is
+    stale or malformed — a hoster that miscomputed its point is told so,
+    never silently mispaired. epoch_len is addition-only (the descriptor
+    advertises it): malformed values refuse the binding, never a default
+    guess — the point math must agree exactly on both sides."""
     if point_id is None and name_pub is None:
         return None
     for v in (point_id, name_pub):
@@ -125,11 +128,48 @@ def _valid_rendezvous(point_id, name_pub) -> tuple[str, str] | None:
             raise HTTPException(
                 status_code=400,
                 detail="rendezvous_point and name_pub must be 64 hex.")
-    if not rendezvous.point_is_current(point_id, time.time(), name_pub):
+    if epoch_len is None:
+        epoch_len = rendezvous.EPOCH_LEN_DEFAULT
+    if not rendezvous._epoch_len_ok(epoch_len):
+        raise HTTPException(
+            status_code=400,
+            detail="epoch_len must be an integer in 60..86400.")
+    if not rendezvous.point_is_current(point_id, time.time(), name_pub,
+                                       epoch_len):
         raise HTTPException(
             status_code=400,
             detail="rendezvous point is not in a willing epoch.")
-    return point_id, name_pub
+    return point_id, name_pub, epoch_len
+
+
+def _resolve_rendezvous_token(point_id) -> str | None:
+    """Resolve a derived rendezvous point to the held routing token for
+    /relay/open. Returns the token only when the point is registered,
+    fresh, still indexed under a live hold-open, AND in a willing epoch
+    (current-or-previous, per the frozen spec). Malformed, unregistered,
+    stale, or old-epoch points resolve to None — the caller answers 404
+    silence, never a 4xx. The mirror pairs hold-opens by the point; it
+    never learns the label."""
+    if not isinstance(point_id, str) or len(point_id) != 64:
+        return None
+    try:
+        bytes.fromhex(point_id)
+    except Exception:
+        return None
+    with _relay_lock:
+        _reap_relay(time.monotonic())
+        prec = _relay_rendezvous.get(point_id)
+        if prec is None:
+            return None
+        token = prec["token"]
+        if token not in _relay_hold_opens:
+            return None
+        if not rendezvous.point_is_current(point_id, time.time(),
+                                           prec["name_pub"],
+                                           prec.get("epoch_len",
+                                                    rendezvous.EPOCH_LEN_DEFAULT)):
+            return None
+        return token
 
 
 @router.post("/relay/register")
@@ -142,15 +182,17 @@ async def relay_register(request: Request, body: dict):
     _relay_belt(request, "register")
     token = _valid_token((body or {}).get("token"))
     bind = _valid_rendezvous((body or {}).get("rendezvous_point"),
-                             (body or {}).get("name_pub"))
+                             (body or {}).get("name_pub"),
+                             (body or {}).get("epoch_len"))
     now = time.monotonic()
     with _relay_lock:
         _reap_relay(now)
         _relay_hold_opens[token] = {"registered": now, "seen": now}
         if bind is not None:
-            point_id, name_pub = bind
+            point_id, name_pub, epoch_len = bind
             _relay_rendezvous[point_id] = {
-                "token": token, "name_pub": name_pub, "seen": now}
+                "token": token, "name_pub": name_pub,
+                "epoch_len": epoch_len, "seen": now}
     return {"ok": True, "ttl": _RELAY_HOLD_TTL}
 
 
@@ -196,7 +238,9 @@ async def relay_hold_query(request: Request, point_id: str = ""):
             if now_mono - prec["seen"] > _RELAY_HOLD_TTL:
                 return {"held": False}
             if not rendezvous.point_is_current(point_id, time.time(),
-                                               prec["name_pub"]):
+                                               prec["name_pub"],
+                                               prec.get("epoch_len",
+                                                        rendezvous.EPOCH_LEN_DEFAULT)):
                 return {"held": False}
             if prec["token"] not in _relay_hold_opens:
                 return {"held": False}
@@ -208,7 +252,10 @@ async def relay_hold_query(request: Request, point_id: str = ""):
 @router.post("/relay/open")
 async def relay_open(request: Request, body: dict):
     """Dialer session-open (part 2, bridging). Looks up the hoster's
-    hold-open by routing token, mints a session + fresh challenge against
+    hold-open by routing token — or, for derived-point rendezvous, by the
+    derived rendezvous_point the dialer computed from the name key (the
+    dialer never learns the token) — mints a session + fresh challenge
+    against
     it, then waits up to _RELAY_ANSWER_WAIT for the hoster to sign the
     challenge through /relay/answer. On an answer, returns 200 with the
     exact pair the dial half verifies:
@@ -222,7 +269,18 @@ async def relay_open(request: Request, body: dict):
     once: a session can answer for one dial, and one dial only."""
     _relay_belt(request, "open")
     payload = body or {}
-    token = _valid_token(payload.get("token"))
+    raw_token = payload.get("token")
+    if isinstance(raw_token, str) and raw_token:
+        token = _valid_token(raw_token)
+    else:
+        # Derived-point rendezvous: resolve the point to the held routing
+        # token. An unresolvable point (malformed, unregistered, stale,
+        # old-epoch) is 404 silence, exactly like an unknown token.
+        # When both are given, the explicit token wins.
+        token = _resolve_rendezvous_token(payload.get("rendezvous_point"))
+        if token is None:
+            raise HTTPException(
+                status_code=404, detail="no hold-open for this point.")
     label = payload.get("name")
     if not isinstance(label, str) or not label or len(label) > 64:
         raise HTTPException(status_code=400, detail="name is required.")

@@ -35,6 +35,7 @@ an unverified answer.
 Never raises across its boundary: every check returns False or a
 count; 429/5xx from the relay are silence, not crashes."""
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -50,6 +51,21 @@ _HOLD_WAIT_TIMEOUT = 40.0
 _KEEPALIVE_EVERY = 240.0
 # Backoff when the relay is silent before retrying the register.
 _BACKOFF_S = 10.0
+
+
+def _rendezvous_epoch_len() -> int:
+    """The epoch_len the daemon holds derived points under — the SAME
+    value core._reach_build advertises in the descriptor's rendezvous
+    kind (CYBERNET_RENDEZVOUS_EPOCH_LEN), so hoster and dialer compute
+    the same meeting math. Fail-closed to the frozen default when the
+    env is missing or out of the 60..86400 bounds."""
+    try:
+        val = int(os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "") or 0)
+        if rendezvous._epoch_len_ok(val):
+            return val
+    except (ValueError, TypeError):
+        pass
+    return rendezvous.EPOCH_LEN_DEFAULT
 
 
 def _post(relay_url: str, path: str, payload: dict,
@@ -85,19 +101,25 @@ def hold_open_register(relay_url: str, token: str) -> bool:
 
 
 def _rendezvous_points_register(relay_url: str, token: str,
-                                name_pub_hex: str) -> int:
+                                name_pub_hex: str,
+                                epoch_len: int = rendezvous.EPOCH_LEN_DEFAULT) -> int:
     """Index the same hold-open token under the derived (E, E-1)
     rendezvous points (docs/RENDEZVOUS.md frozen spec): the dialer
     derives the pair itself, so the relay pairs hold-opens by the point
     and never learns the label. Both points bind the SAME routing token
     the hold-open was registered with — one token, two opaque keys.
-
-    Returns the count accepted (0-2). A 400 from the relay (a point the
-    relay's clock finds unwilling — epoch-boundary clock skew) is
-    silence, not an error: the plain hold-open still stands, and the
-    next epoch roll re-registers the fresh pair. Never raises."""
+    The points are derived under epoch_len — the SAME value the reach
+    descriptor advertises (core._reach_build reads the same env), and
+    the relay validates willingness under the epoch_len carried in the
+    register body. A 400 from the relay (a point the relay's clock finds
+    unwilling — epoch-boundary clock skew) is silence, not an error:
+    the plain hold-open still stands, and the next epoch roll
+    re-registers the fresh pair. Never raises."""
     try:
-        pair = rendezvous.derive_points(time.time(), name_pub_hex)
+        if not rendezvous._epoch_len_ok(epoch_len):
+            epoch_len = rendezvous.EPOCH_LEN_DEFAULT
+        pair = rendezvous.derive_points(time.time(), name_pub_hex,
+                                       epoch_len)
     except Exception:
         return 0
     if pair is None:
@@ -107,7 +129,8 @@ def _rendezvous_points_register(relay_url: str, token: str,
         try:
             if _post(relay_url, "/relay/register",
                      {"token": token, "rendezvous_point": point,
-                      "name_pub": name_pub_hex}, timeout=10.0) is not None:
+                      "name_pub": name_pub_hex, "epoch_len": epoch_len},
+                     timeout=10.0) is not None:
                 accepted += 1
         except Exception:
             pass  # silence per point; the other may still land
@@ -116,23 +139,25 @@ def _rendezvous_points_register(relay_url: str, token: str,
 
 def _rendezvous_hold_maybe(relay_url: str, token: str,
                            name_pub_hex: str | None,
-                           point_epoch: int | None) -> int | None:
+                           point_epoch: int | None,
+                           epoch_len: int = rendezvous.EPOCH_LEN_DEFAULT) -> int | None:
     """Re-register the (E, E-1) point pair when the epoch rolled since
-    point_epoch. Returns the new epoch when (re-)registered, the old
-    point_epoch when nothing needed doing, None when there is no name
-    key to derive from. The relay's keepalive path refreshes the point
-    index's seen timestamps, so a re-register is only needed on an
-    epoch roll — the points themselves go unwilling, never stale. Never
-    raises."""
+    point_epoch, under epoch_len (the advertised value — see
+    _rendezvous_epoch_len). Returns the new epoch when (re-)registered,
+    the old point_epoch when nothing needed doing, None when there is
+    no name key to derive from. The relay's keepalive path refreshes the
+    point index's seen timestamps, so a re-register is only needed on
+    an epoch roll — the points themselves go unwilling, never stale.
+    Never raises."""
     if name_pub_hex is None:
         return point_epoch
     try:
-        epoch = rendezvous.epoch_for(time.time())
+        epoch = rendezvous.epoch_for(time.time(), epoch_len)
     except Exception:
         return point_epoch
     if epoch is None or epoch == point_epoch:
         return point_epoch
-    _rendezvous_points_register(relay_url, token, name_pub_hex)
+    _rendezvous_points_register(relay_url, token, name_pub_hex, epoch_len)
     return epoch
 
 
@@ -219,6 +244,7 @@ def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
         name_pub_hex = None
     if name_pub_hex is None:
         name_pub_hex = _name_pub_from_priv(name_priv_hex)
+    epoch_len = _rendezvous_epoch_len()
     point_epoch: int | None = None
     last_keepalive = 0.0
     while not stop.is_set():
@@ -227,7 +253,7 @@ def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
             continue
         last_keepalive = time.monotonic()
         point_epoch = _rendezvous_hold_maybe(
-            relay_url, token, name_pub_hex, point_epoch)
+            relay_url, token, name_pub_hex, point_epoch, epoch_len)
         while not stop.is_set():
             if time.monotonic() - last_keepalive >= keepalive_every:
                 if _post(relay_url, "/relay/keepalive", {"token": token},
@@ -237,7 +263,7 @@ def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
                 # The keepalive refreshed the point index's seen
                 # timestamps; only an epoch roll needs new points.
                 point_epoch = _rendezvous_hold_maybe(
-                    relay_url, token, name_pub_hex, point_epoch)
+                    relay_url, token, name_pub_hex, point_epoch, epoch_len)
             alive, _ = hold_open_cycle_once(relay_url, token, name_priv_hex)
             if not alive:
                 break  # hold-open lost or relay silent: re-register
