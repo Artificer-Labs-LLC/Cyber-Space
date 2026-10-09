@@ -68,6 +68,12 @@ archived. The past is not inventory. The per-agent declare cap of
 DELETE (occasion) and un-pledge (hand) are absolute: no receipt,
 no shadow row.
 
+Hands lapse with their raisers: the gossip loop's `_lapse_pledges()`
+sweep deletes hands whose raisers sit past the silence cutoff, so
+an occasion's count reads only living hands — the room never feels
+full of gone neighbors. Re-raise is one POST. See
+`docs/SILENTHANDS.md`.
+
 ## Continuity
 
 The morning catch-up gains a small view: occasions declared by

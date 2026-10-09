@@ -107,8 +107,10 @@ the sole writer of its own row.
   about the receiver itself or the sync sender are dropped (the sender's
   own row rides `/fed/announce`, authoritative), retire deltas set
   tombstones that lazy-prune after 7 days (`retire_origin='delta'`;
-  direct `/fed/retire` tombstones are never pruned), and new-row inserts
-  respect the 128-entry roster cap. Rate-limited per sender peer.
+  direct `/fed/retire` tombstones lazy-prune after 90 days (`DIRECT_TOMBSTONE_DAYS` —
+  a long name-burn, not an immortal one: immortal tombstones plus the 128-row cap let
+  Sybil announce+retire cycles permanently brick the directory for genuine newcomers),
+  and new-row inserts respect the 128-entry roster cap. Rate-limited per sender peer.
   Send half is implemented below — the gossip-path producer rides
   the re-announce interval; sync adds no new daemon.
 
@@ -172,6 +174,54 @@ prove — every attestation originates with the row's owner.**
 Build order: migration (`delta_sig` + store on announce/retire) →
 `_delta_out` producer inside the re-announce loop → this section's
 status flip to implemented. ✅ done.
+
+### Name-bindings gossip — design note (receive half ✅ live, send half ✅ implemented)
+The `.cyberspace` registry (`name_bindings` table) is exact-name fetch
+only — never enumerable — so mirrors learn bindings by carrying them.
+One rule governs both halves: **gossip repeats, never originates.**
+Claims stay on the claimant's own `POST /api/v1/names/claim`; a mirror
+that has never seen a binding cannot invent one. And what a node has learned
+is what it answers: the `cybernet-resolver` daemon (`docs/RESOLVER.md`)
+serves the `.cyberspace` zone straight from this registry, so bindings
+carried by gossip become resolvable names on any wired machine — NXDOMAIN
+for anything never claimed, fail-closed to the last binding.
+
+- **Receive half — `POST /fed/names/gossip` ✅ live.** Signed
+  envelope: the recipient must be this node's pubkey,
+  `body.from_node_pub` must equal the sender's verified key, and the
+  sender must be a known, unretired peer (404 otherwise — strangers
+  don't gossip names at us). Per-sender rate limit, 128 bindings per
+  call. Each binding is folded through
+  `core.ingest_gossiped_binding()` — fail-closed re-verification of
+  the *claimant's* signature over the canonical
+  `name|node_pubkey|issued_at|expires_at` bytes, never the peer's word:
+  malformed, unverifiable, or dead-on-arrival bindings drop silently;
+  expired bindings never enter (and an expired incumbent yields to a
+  live one). The deterministic merge (`_name_claim_beats`) tallies
+  `inserted / replaced / kept / dropped` per call; a gossiped name is
+  served live by this node's own `GET /api/v1/names/<name>`, exact-name
+  only, zero host metadata — bindings carry no IPs, no URLs, no
+  operator info, and there is no reverse resolution, ever.
+- **Send half — `_names_gossip_out()` ✅ implemented.** The producer
+  sweeps the registry for unexpired bindings (expired names never
+  gossip — silence, not revocation; revocation stays a
+  gossip-layer question) and POSTs signed
+  `POST /fed/names/gossip` envelopes to every known, unretired,
+  reachable peer via threaded `_post_to_peer_path`.
+  `NAMES_GOSSIP_BATCH_CAP=126` per call (the receiver caps at 128, so
+  nothing is ever clipped). An empty registry stays silent — no noise
+  to the mesh. No per-recipient exclusion lists: the receiver dedupes
+  repeats as `kept`, so convergence needs no watermarks and no new
+  state tables.
+- **Rides the re-announce loop.** Like delta-sync's `_delta_out`,
+  the producer runs inside the re-announce interval — no new daemon,
+  no new peer selection. Direct announcements remain the liveness
+  signal; gossip converges content.
+- **Old-node behavior.** `body.bindings` on
+  `POST /fed/names/gossip` is an unknown field to a pre-names node —
+  skipped, never fatal. Old nodes are gossip sinks for bindings, never
+  sources; the registry's owner-signed claims keep the prove-forward
+  rule intact across a mixed roster.
 
 ### Gossip interop — old and new nodes side by side
 Every attestation-carrying field in this section is an *unknown field*
@@ -302,7 +352,9 @@ primitive exists yet); everything else landed as written.
 4. Channel links. ✅ live (subscribe/unsubscribe, consent ledger, push rate limits)
 5. Gossip. ✅ live (roster gossip; directory delta-sync ✅
    live, send half implemented — self-attestation rides announce, producer
-   rides the re-announce loop)
+   rides the re-announce loop; name-bindings gossip ✅ live, receive half
+   `POST /fed/names/gossip` + `_names_gossip_out()` send half — gossip
+   repeats, never originates, exact-name registry never enumerable)
 6. Pigeonhole proxy. ✅ live (origin-side `POST /fed/pigeonholes_proxy` —
    signed envelope, roster-verified known/unretired peers only, lazy
    origin-side TTL prune, limit 1–100 clamped, signed envelope reply —
