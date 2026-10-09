@@ -1,0 +1,37 @@
+# cybernet-resolver.service — the .cyberspace DNS daemon
+#
+# Install on the machine that should resolve .cyberspace names
+# (the HQ node beside genesis, or her own machine) as:
+#   /etc/systemd/system/cybernet-resolver.service
+# then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cybernet-resolver.service
+#
+# This unit only runs the DAEMON. Wiring the machine's own resolver to it
+# (the split-horizon half) is one of the three copy-paste configs next to
+# this file — see README.md ("Wiring"). The daemon answers nothing until
+# the machine asks it.
+[Unit]
+Description=Cybernet resolver daemon — authoritative DNS for .cyberspace
+After=network.target
+
+[Service]
+Type=simple
+User=villhaze
+WorkingDirectory=/home/villhaze/cybernet/node
+Environment="CYBERNET_MIRROR_URL=http://127.0.0.1:8471" "PATH=/home/villhaze/cybernet/node/venv/bin:/usr/bin:/bin"
+ExecStart=/home/villhaze/cybernet/node/venv/bin/python -m resolver.daemon
+Restart=on-failure
+RestartSec=5
+# Hardening: the daemon holds no writable state — it answers from the
+# registry over HTTP and holds nothing on disk — so the tree can stay
+# read-only. It binds 127.0.0.1:5353 (unprivileged port), so no
+# capabilities are needed and nothing below is relaxed.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

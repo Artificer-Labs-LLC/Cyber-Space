@@ -1,0 +1,16 @@
+# hosts-snippet — /etc/hosts fallback, single pinned name, no daemon needed
+#
+# Use this when running the daemon is overkill: pin ONE name to ONE
+# address by hand. The six-step verification never runs here — you are
+# trusting your own edit, so only pin names whose binding you have
+# already verified through the resolver (smoke.py) or the registry.
+#
+# Append lines like:
+#
+# 203.0.113.10  genesis.cyberspace
+#
+# Notes:
+# - Replace the IP with the A record the daemon returns for the name.
+# - Re-pin when the binding's TTL (<=300s cap) would have expired —
+#   this file does not expire anything.
+# - No AAAA here unless you add one: keep the shape one line per address.
