@@ -17,20 +17,29 @@ liveness window. A rotation dated in the future is not yet in force.
 
 Usage:
   ./venv/bin/python rotate_name.py <label> [--new-key-seed HEX64]
+  ./venv/bin/python rotate_name.py <label> --submit [mirror_url]
   ./venv/bin/python rotate_name.py <label> --promote
 
+  The rotation loop, in order: MINT -> SUBMIT -> PROMOTE.
   Mint mode loads the existing name key from ~/.cyberspace/<label>-name.key
   (the OLD key), mints and self-verifies the rotation record, writes:
     ~/.cyberspace/<label>-rotate.json     the record (publish this)
     ~/.cyberspace/<label>-name.key.next   the NEW key seed (0600)
 
   The old key file is NEVER overwritten by minting — promotion stays a
-  deliberate operator step. Promote mode (--promote) closes the loop AFTER
-  the record is seen in the wild (mirror accept, gossip, handoff):
+  deliberate operator step. Submit mode (--submit) posts the record AND
+  the new binding (signed by the NEW key) to the mirror's
+  /api/v1/names/rotate, then verifies the mirror moved the name:
+  the live binding resolves to the new key AND the rotation hop is in
+  the served chain. Promote mode (--promote) closes the loop AFTER the
+  mirror accepts (submit verified it):
     ~/.cyberspace/<label>-name.key        becomes the NEW key seed (0600)
     ~/.cyberspace/<label>-name.key.prev   keeps the OLD key seed (0600)
   The .next file is consumed atomically; the promotion re-verifies the
   rotation record first (signature + in-force + continuity of both keys).
+  Submit BEFORE promote: the mirror moves the binding under the OLD
+  key's authority, and the operator promotes locally only once the
+  record is seen in the wild.
 
 Exit codes: 0 = done; 1 = refused (reason on stderr); 2 = usage / unreadable.
 """
@@ -39,13 +48,18 @@ import os
 import sys
 import json
 import argparse
-from datetime import datetime, timezone
+import urllib.parse
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign, checkvalid  # noqa: E402
 
 _LABEL_MAX = 63
+_DEFAULT_MIRROR = "http://127.0.0.1:8471"
+_DEFAULT_EXPIRY_DAYS = 730
 
 
 def _valid_label(label: str) -> bool:
@@ -76,6 +90,37 @@ def _rotate_payload(name: str, old_pub: str, new_pub: str,
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _post_form(url: str, fields: dict, timeout: float = 30.0
+               ) -> tuple[int | None, str]:
+    """POST urlencoded form; returns (status, body). status None = no HTTP
+    answer. Twin of mint_name's helper (server decides, client reports)."""
+    data = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _get_json(url: str, timeout: float = 30.0) -> dict | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
@@ -219,12 +264,140 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
                   f"old key kept at {prev_path}")
 
 
+def submit_rotation(label: str, mirror_url: str, home: Path,
+                    expiry_days: int = _DEFAULT_EXPIRY_DAYS
+                    ) -> tuple[bool, str]:
+    """Submit a minted rotation to the mirror — the middle step of the
+    loop (mint -> SUBMIT -> promote).
+
+    Posts the rotation record AND the new binding (a fresh name-claim for
+    the label, signed by the NEW key, issued now so it cannot predate the
+    rotation) to the mirror's /api/v1/names/rotate. Then verifies the
+    mirror actually moved the name: the live binding resolves to the new
+    key AND the rotation hop is in the served chain. Fail-closed on every
+    surprise — a non-200, an unparseable answer, or a resolve-back
+    mismatch refuses, and nothing local is ever touched (promotion stays
+    deliberate; key files are only read).
+
+    Ordering rules, enforced client-side before anything is sent:
+      - the record must verify AND be in force (verify_rotation);
+      - the .next seed must derive the record's new_pubkey;
+      - the current name key must still derive the record's old_pubkey —
+        submit happens BEFORE promote, because the mirror only moves a
+        name under the OLD key's authority. An already-promoted key file
+        refuses here with the ordering spelled out.
+    Returns (True, summary) or (False, reason). Never raises on input.
+    """
+    label = _normalize(label)
+    if not _valid_label(label):
+        return False, f"{label!r} is not a valid .cyberspace label"
+    rec_path = home / f"{label}-rotate.json"
+    next_path = home / f"{label}-name.key.next"
+    key_path = home / f"{label}-name.key"
+    try:
+        record = json.loads(rec_path.read_text())
+    except OSError:
+        return False, (f"rotation record missing at {rec_path} — "
+                       f"mint one first (rotate_name.py {label})")
+    except ValueError:
+        return False, f"rotation record at {rec_path} is not readable JSON"
+    reason = verify_rotation(record)
+    if reason is not None:
+        return False, f"rotation record does not verify: {reason}"
+    try:
+        new_priv = bytes.fromhex(next_path.read_text().strip())
+    except (OSError, ValueError):
+        return False, (f"no pending new key at {next_path} — "
+                       f"mint a rotation first (rotate_name.py {label})")
+    if len(new_priv) != 32:
+        return False, "new key file does not hold a 32-byte seed"
+    new_pub = publickey(new_priv).hex().lower()
+    if new_pub != _normalize(record["new_pubkey"]):
+        return False, ("the .next seed does not derive the record's "
+                       "new_pubkey — stale or foreign key, refuse")
+    try:
+        old_priv = bytes.fromhex(key_path.read_text().strip())
+    except (OSError, ValueError):
+        return False, (f"current name key missing at {key_path} — "
+                       f"continuity broken, refuse")
+    if len(old_priv) != 32:
+        return False, "current name key does not hold a 32-byte seed"
+    old_pub = publickey(old_priv).hex().lower()
+    if old_pub == new_pub:
+        return False, ("the name key is already the NEW key — submit BEFORE "
+                       "promoting; the mirror only moves a name under the "
+                       "old key's authority, nothing was sent")
+    if old_pub != _normalize(record["old_pubkey"]):
+        return False, ("the current name key does not derive the record's "
+                       "old_pubkey — continuity broken, refuse")
+    # Mint the new binding under the NEW key (the next claim). Issued now:
+    # it can never predate the rotation (the record is in force, never
+    # future), and the mirror demands the chain move forward in time.
+    now = datetime.now(timezone.utc)
+    issued_at = _iso(now)
+    expires_at = _iso(now + timedelta(days=max(1, expiry_days)))
+    payload = (b"name-claim|" + label.encode() + b"|" + new_pub.encode()
+               + b"|" + issued_at.encode() + b"|" + expires_at.encode())
+    sig = sign(payload, new_priv, bytes.fromhex(new_pub)).hex().lower()
+    fields = {"name": label, "old_pubkey": old_pub, "new_pubkey": new_pub,
+              "rotation_issued_at": record["issued_at"],
+              "rotation_signature": record["signature"],
+              "binding_issued_at": issued_at,
+              "binding_expires_at": expires_at, "binding_signature": sig}
+    status, body = _post_form(
+        mirror_url.rstrip("/") + "/api/v1/names/rotate", fields)
+    if status is None:
+        return False, f"mirror did not answer: {body[:120]}"
+    if status != 200:
+        return False, f"mirror refused ({status}): {body.strip()[:200]}"
+    try:
+        result = json.loads(body)
+    except ValueError:
+        return False, f"unparseable rotate response: {body[:120]!r}"
+    if result.get("status") != "rotated":
+        return False, f"mirror did not confirm rotation: {body[:120]!r}"
+    # Verify the mirror moved the name, then trust it — never before.
+    resolved = _get_json(mirror_url.rstrip("/") + f"/api/v1/names/{label}")
+    if not resolved or resolved.get("node_pubkey", "").lower() != new_pub:
+        return False, ("mirror accepted the rotation but the name does not "
+                       "resolve to the new key — investigate before "
+                       "promoting")
+    chain = _get_json(
+        mirror_url.rstrip("/") + f"/api/v1/names/{label}/rotations")
+    hop_seen = False
+    if isinstance(chain, dict):
+        for hop in chain.get("rotations") or []:
+            if (_normalize(hop.get("old_pubkey", "")) == old_pub
+                    and _normalize(hop.get("new_pubkey", "")) == new_pub
+                    and _normalize(hop.get("signature", ""))
+                    == _normalize(record["signature"])):
+                hop_seen = True
+                break
+    if not hop_seen:
+        return False, ("mirror accepted the rotation but the hop is not in "
+                       "the served chain — investigate before promoting")
+    return True, (f"submitted {label}.cyberspace rotation to {mirror_url}: "
+                  f"{old_pub[:16]}... -> {new_pub[:16]}...; the name now "
+                  f"resolves to the new key and the hop is in the served "
+                  f"chain — promote the new key when ready "
+                  f"(rotate_name.py {label} --promote)")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="mint a .cyberspace name-key rotation record")
     ap.add_argument("label", help="the .cyberspace label to rotate")
     ap.add_argument("--new-key-seed",
                     help="64-hex seed for the new key (else generated)")
+    ap.add_argument("--submit", nargs="?", const=_DEFAULT_MIRROR,
+                    metavar="MIRROR_URL",
+                    help="submit the minted rotation + new binding to the "
+                         "mirror's /api/v1/names/rotate (default: "
+                         f"{_DEFAULT_MIRROR}), then verify the mirror moved "
+                         "the name")
+    ap.add_argument("--expiry-days", type=int, default=_DEFAULT_EXPIRY_DAYS,
+                    help="liveness window of the new binding on submit "
+                         f"(default {_DEFAULT_EXPIRY_DAYS})")
     ap.add_argument("--promote", action="store_true",
                     help="promote <label>-name.key.next to the name key "
                          "after the record is seen in the wild")
@@ -234,7 +407,17 @@ def main(argv: list[str]) -> int:
         print(f"refused: {label!r} is not a valid .cyberspace label",
               file=sys.stderr)
         return 2
+    if args.submit is not None and args.promote:
+        print("refused: --submit and --promote are separate steps — "
+              "submit first, promote only after the mirror accepts",
+              file=sys.stderr)
+        return 2
     home = Path.home() / ".cyberspace"
+    if args.submit is not None:
+        ok, msg = submit_rotation(label, args.submit, home, args.expiry_days)
+        print(("submitted: " if ok else "refused: ") + msg,
+              file=sys.stderr if not ok else sys.stdout)
+        return 0 if ok else 1
     if args.promote:
         ok, msg = promote_rotation(label, home)
         print(("promoted: " if ok else "refused: ") + msg,
@@ -285,9 +468,10 @@ def main(argv: list[str]) -> int:
     print(f"valid: {label}.cyberspace rotation minted and self-verified")
     print(f"  old key {record['old_pubkey'][:16]}... -> "
           f"new key {record['new_pubkey'][:16]}...")
-    print(f"  record written to {rec_path} — publish it (mirror, gossip, handoff)")
-    print(f"  NEW key seed at {next_path} (0600) — promote it to "
-          f"{label}-name.key only after the record is seen in the wild")
+    print(f"  record written to {rec_path} — submit it to a mirror next")
+    print(f"    (rotate_name.py {label} --submit), then promote the new key")
+    print(f"    only after the mirror accepts (rotate_name.py {label} --promote)")
+    print(f"  NEW key seed at {next_path} (0600)")
     return 0
 
 
