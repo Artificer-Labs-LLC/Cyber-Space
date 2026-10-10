@@ -17,19 +17,22 @@ liveness window. A rotation dated in the future is not yet in force.
 
 Usage:
   ./venv/bin/python rotate_name.py <label> [--new-key-seed HEX64]
+  ./venv/bin/python rotate_name.py <label> --promote
 
-  Loads the existing name key from ~/.cyberspace/<label>-name.key (the
-  OLD key), mints and self-verifies the rotation record, writes:
+  Mint mode loads the existing name key from ~/.cyberspace/<label>-name.key
+  (the OLD key), mints and self-verifies the rotation record, writes:
     ~/.cyberspace/<label>-rotate.json     the record (publish this)
     ~/.cyberspace/<label>-name.key.next   the NEW key seed (0600)
 
-  The old key file is NEVER overwritten — promotion is a deliberate
-  operator step after the record is seen in the wild (mirror accept,
-  gossip, or out-of-band handoff). A tick that teaches the mirror to
-  accept rotation records is the next step, not this one.
+  The old key file is NEVER overwritten by minting — promotion stays a
+  deliberate operator step. Promote mode (--promote) closes the loop AFTER
+  the record is seen in the wild (mirror accept, gossip, handoff):
+    ~/.cyberspace/<label>-name.key        becomes the NEW key seed (0600)
+    ~/.cyberspace/<label>-name.key.prev   keeps the OLD key seed (0600)
+  The .next file is consumed atomically; the promotion re-verifies the
+  rotation record first (signature + in-force + continuity of both keys).
 
-Exit codes: 0 = minted and self-verified; 1 = refused (reason on stderr);
-            2 = usage / unreadable input.
+Exit codes: 0 = done; 1 = refused (reason on stderr); 2 = usage / unreadable.
 """
 
 import os
@@ -148,12 +151,83 @@ def verify_rotation(record: dict) -> str | None:
     return None
 
 
+def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
+    """Promote a minted rotation: .next becomes the name key, atomically.
+
+    The loop-closing half of a rotation. Promotion is deliberate (an
+    explicit CLI flag, never automatic), and it refuses unless EVERY link
+    re-verifies — the record signature, the record in force, and both
+    keys' continuity:
+      - <label>-name.key.next exists (the minted new key seed)
+      - <label>-rotate.json verifies AND is in force (verify_rotation)
+      - the .next seed derives the record's new_pubkey
+      - the CURRENT <label>-name.key still derives the record's
+        old_pubkey (continuity: the operator holds the same old key
+        that vouched for the record — a swapped key file refuses)
+
+    On success: the current key seed moves to <label>-name.key.prev
+    (the old key stays readable for historical verification — a verifier
+    needs old keys to walk the chain), and the .next seed atomically
+    replaces <label>-name.key (os.replace: never a half-written key).
+    Returns (True, summary) or (False, reason). Never raises on input.
+    """
+    label = _normalize(label)
+    if not _valid_label(label):
+        return False, f"{label!r} is not a valid .cyberspace label"
+    rec_path = home / f"{label}-rotate.json"
+    next_path = home / f"{label}-name.key.next"
+    key_path = home / f"{label}-name.key"
+    prev_path = home / f"{label}-name.key.prev"
+    if not next_path.exists():
+        return False, (f"no pending rotation at {next_path} — "
+                       f"mint one first (rotate_name.py {label})")
+    if not rec_path.exists():
+        return False, f"rotation record missing at {rec_path} — refuse"
+    try:
+        record = json.loads(rec_path.read_text())
+    except (OSError, ValueError):
+        return False, f"rotation record at {rec_path} is not readable JSON"
+    reason = verify_rotation(record)
+    if reason is not None:
+        return False, f"rotation record does not verify: {reason}"
+    if not key_path.exists():
+        return False, (f"current name key missing at {key_path} — "
+                       f"continuity broken, refuse")
+    try:
+        new_priv = bytes.fromhex(next_path.read_text().strip())
+        old_priv = bytes.fromhex(key_path.read_text().strip())
+    except (OSError, ValueError):
+        return False, "key files do not hold 32-byte hex seeds"
+    if len(new_priv) != 32 or len(old_priv) != 32:
+        return False, "key files do not hold 32-byte seeds"
+    new_pub = publickey(new_priv).hex().lower()
+    old_pub = publickey(old_priv).hex().lower()
+    if new_pub != _normalize(record["new_pubkey"]):
+        return False, ("the .next seed does not derive the record's "
+                       "new_pubkey — stale or foreign key, refuse")
+    if old_pub != _normalize(record["old_pubkey"]):
+        return False, ("the current name key does not derive the record's "
+                       "old_pubkey — continuity broken, refuse")
+    # Atomic close: old key -> .prev (kept for chain-walking history),
+    # .next -> the name key. os.replace is never a half-written key.
+    prev_path.write_text(old_priv.hex() + "\n")
+    os.chmod(prev_path, 0o600)
+    os.replace(next_path, key_path)
+    os.chmod(key_path, 0o600)
+    return True, (f"promoted {label}.cyberspace: "
+                  f"{old_pub[:16]}... -> {new_pub[:16]}...; "
+                  f"old key kept at {prev_path}")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="mint a .cyberspace name-key rotation record")
     ap.add_argument("label", help="the .cyberspace label to rotate")
     ap.add_argument("--new-key-seed",
                     help="64-hex seed for the new key (else generated)")
+    ap.add_argument("--promote", action="store_true",
+                    help="promote <label>-name.key.next to the name key "
+                         "after the record is seen in the wild")
     args = ap.parse_args(argv)
     label = _normalize(args.label)
     if not _valid_label(label):
@@ -161,6 +235,11 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 2
     home = Path.home() / ".cyberspace"
+    if args.promote:
+        ok, msg = promote_rotation(label, home)
+        print(("promoted: " if ok else "refused: ") + msg,
+              file=sys.stderr if not ok else sys.stdout)
+        return 0 if ok else 1
     key_path = home / f"{label}-name.key"
     if not key_path.exists():
         print(f"refused: no existing name key at {key_path} — "
