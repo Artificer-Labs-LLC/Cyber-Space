@@ -1277,6 +1277,44 @@ async def names_rotate(request: Request):
             "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
 
 
+@router.get("/api/v1/names/{name}/rotations")
+def names_rotations(request: Request, name: str):
+    """.cyberspace depth (primitive 4, identity): the mirror's view of a
+    name's rotation chain — the immutable point-event history from
+    name_rotations, oldest designation first.
+
+    Unlike the live binding, rotation history is never deleted by the
+    mirror: rows survive even after the name's binding expires (dead
+    names still have their chain). Each row is a designation event
+    ("at time T, old_pubkey designated new_pubkey"), signed by the OLD
+    key — anyone who trusted the old binding can follow it to the new
+    key, and verify each signature offline with rotate_name's
+    verify_rotation. Ordered by mirror acceptance time; issued time is
+    inside the signed payload. (Ordering ties on accepted_at — second
+    granularity — are broken by rowid, the mirror's true insertion
+    order, so the chain reads oldest-first even for same-second
+    rotations.)
+
+    No enumeration risk: the name is the lookup key, the same as
+    names_resolve — there is no list endpoint and there never will be.
+    A name with no recorded rotations reads 404 (absence, not emptiness).
+    """
+    _social_read_belt(request, "names")
+    label = (name or "").strip().lower()
+    if not _valid_name_label(label):
+        raise HTTPException(status_code=400, detail="name: first label only — lowercase alnum/hyphen, 1-63 chars, no dots.")
+    with _db_lock, _db() as conn:
+        cur = conn.execute(
+            "SELECT old_pubkey, new_pubkey, issued_at, signature, accepted_at "
+            "FROM name_rotations WHERE name=? ORDER BY accepted_at ASC, rowid ASC", (label,))
+        rows = cur.fetchall()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No rotations recorded for this name.")
+    return {"name": label,
+            "rotations": [{"old_pubkey": r[0], "new_pubkey": r[1], "issued_at": r[2],
+                           "signature": r[3], "accepted_at": r[4]} for r in rows]}
+
+
 @router.get("/api/v1/names/{name}")
 def names_resolve(request: Request, name: str):
     """.cyberspace Phase 1 build item 2: exact-name fetch of a signed
