@@ -19,6 +19,7 @@ from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX
 router = APIRouter()
 
 from routes_social import _social_read_belt
+from rotate_name import verify_rotation as _rotation_verify_record
 
 
 @router.put("/api/v1/rhythms")
@@ -1163,6 +1164,117 @@ async def names_claim(request: Request):
                 (name, node_pubkey, issued_at, expires_at, signature))
             return {**binding, "status": "claimed"}
         raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
+
+
+@router.post("/api/v1/names/rotate")
+async def names_rotate(request: Request):
+    """.cyberspace depth (primitive 4, identity): the mirror accepts a name-key
+    rotation record and moves the live binding to the successor key.
+
+    The rotation record is name-rotate|<label>|<old_pub>|<new_pub>|<issued_at>,
+    signed by the OLD key — the continuity proof, mintable offline with
+    rotate_name.py. The request also carries the new binding, signed by the
+    NEW key (the next claim). The mirror verifies the whole chain before it
+    moves anything:
+
+    1. rotation record verifies (verify_rotation): old key's signature, no
+       future-dated (not yet in force), no self-rotation, prefix-distinct
+       from name-claim so a claim payload can never pass as a rotation;
+    2. the stored binding is live and its node_pubkey == rotation's old_pubkey
+       — the rotation only works on the name the old key actually holds (a
+       rotation for a dead or foreign name is refused, never guessed);
+    3. the new binding is a valid claim (self-certifying, signed by the NEW
+       key, live now), names the same label, and is issued at or after the
+       rotation — the chain must move forward in time;
+    4. no 409 conflict rule here: the old key's signature IS the authority —
+       a designated successor overrides the stored binding, no race.
+
+    The accepted record is kept in name_rotations (immutable point-event
+    history), so anyone can follow the chain from the old key to the new one
+    through the mirror as well as without it. No agent auth: the two
+    signatures ARE the auth. The requester promotes the new key locally
+    (rotate_name.py's <label>-name.key.next -> <label>-name.key) only after
+    the mirror accepts.
+    """
+    form = await read_bounded_form(request)
+    name = (form.get("name") or "").strip().lower()
+    old_pubkey = (form.get("old_pubkey") or "").strip().lower()
+    new_pubkey = (form.get("new_pubkey") or "").strip().lower()
+    rotation_issued_at = (form.get("rotation_issued_at") or "").strip()
+    rotation_signature = (form.get("rotation_signature") or "").strip().lower()
+    binding_issued_at = (form.get("binding_issued_at") or "").strip()
+    binding_expires_at = (form.get("binding_expires_at") or "").strip()
+    binding_signature = (form.get("binding_signature") or "").strip().lower()
+    if not _valid_name_label(name):
+        raise HTTPException(status_code=400, detail="name: first label only — lowercase alnum/hyphen, 1-63 chars, no dots.")
+    for val, want, field in ((old_pubkey, 64, "old_pubkey"),
+                             (new_pubkey, 64, "new_pubkey"),
+                             (rotation_signature, 128, "rotation_signature"),
+                             (binding_signature, 128, "binding_signature")):
+        try:
+            raw = bytes.fromhex(val)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{field} is not hex.")
+        if len(raw) * 2 != want:
+            raise HTTPException(status_code=400, detail=f"{field} must be {want} hex chars.")
+    # 1: the rotation record must verify on its own — the old key vouching
+    # for the new one, not yet in force if future-dated. The payload uses
+    # the raw issued_at string (twin of rotate_name's verify_rotation —
+    # payload bytes are built there, never re-derived here).
+    record = {"name": name, "old_pubkey": old_pubkey, "new_pubkey": new_pubkey,
+              "issued_at": rotation_issued_at, "signature": rotation_signature}
+    reason = _rotation_verify_record(record)
+    if reason is not None:
+        raise HTTPException(status_code=400, detail=f"Rotation record refused: {reason}.")
+    # 3-first: the new binding must be a live, self-certifying claim for the
+    # NEW key under the same label, before the mirror looks anything up.
+    try:
+        rotation_dt = _parse_claim_time(rotation_issued_at)
+        b_issued_dt = _parse_claim_time(binding_issued_at)
+        b_expires_dt = _parse_claim_time(binding_expires_at)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed timestamps.")
+    now_dt = datetime.now(timezone.utc)
+    if b_expires_dt <= now_dt:
+        raise HTTPException(status_code=400, detail="New binding is expired on arrival; only live bindings are stored.")
+    if b_issued_dt > now_dt:
+        raise HTTPException(status_code=400, detail="binding issued_at is in the future; the claim must be signed now.")
+    if b_issued_dt < rotation_dt:
+        raise HTTPException(status_code=400, detail="The new binding cannot predate the rotation that designated its key — the chain must move forward in time.")
+    if not _name_binding_verify(name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature):
+        raise HTTPException(status_code=400, detail="New binding signature does not verify against new_pubkey; rotation refused.")
+    # 2: the old key must actually hold the name, right now. Dead names
+    # read as absent (mirror of names_resolve's contract); a rotation for a
+    # name the old key does not hold is refused — never guessed.
+    with _db_lock, _db() as conn:
+        cur = conn.execute("SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?", (name,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such name.")
+    stored_pub, stored_expires = row
+    try:
+        live = _parse_claim_time(stored_expires) > datetime.now(timezone.utc)
+    except ValueError:
+        live = False
+    if not live:
+        raise HTTPException(status_code=404, detail="No such name.")
+    if stored_pub != old_pubkey:
+        raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
+    accepted_at = _now()
+    with _db_lock, _db() as conn:
+        conn.execute(
+            "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+            "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
+            "expires_at=excluded.expires_at, signature=excluded.signature",
+            (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
+        conn.execute(
+            "INSERT OR IGNORE INTO name_rotations "
+            "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
+    return {"name": name, "status": "rotated",
+            "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
 
 
 @router.get("/api/v1/names/{name}")
