@@ -53,12 +53,17 @@ def _claim_payload(name: str, node_pubkey: str, issued_at: str,
 
 
 def _parse_ts(s: str, field: str) -> datetime:
+    # Twin of core_serve._parse_claim_time (the mirror's rule): naive
+    # timestamps read as UTC. The mirror ACCEPTS naive stamps this way, so
+    # the offline verifier must too — otherwise a mirror-accepted binding
+    # fails offline verification and the "trust a name without trusting
+    # the mirror" promise breaks. Raises ValueError on unparseable input.
     try:
         ts = datetime.fromisoformat(s)
     except (ValueError, TypeError):
         raise ValueError(f"{field} is not ISO 8601: {s!r}")
     if ts.tzinfo is None:
-        raise ValueError(f"{field} must be timezone-aware: {s!r}")
+        ts = ts.replace(tzinfo=timezone.utc)
     return ts
 
 
@@ -74,6 +79,15 @@ def verify(binding: dict) -> str | None:
     name = binding["name"]
     pub = binding["node_pubkey"]
     sig = binding["signature"]
+    # The mirror normalizes BEFORE it validates (names_claim strips and
+    # lowercases name/node_pubkey/signature, then verifies the signature
+    # against the NORMALIZED values and stores the normalized form). The
+    # offline verifier must vouch for exactly what the mirror stores, so
+    # it normalizes identically first — a claim form the mirror accepts
+    # verifies here too, never just the already-normalized stored copy.
+    name = name.strip().lower()
+    pub = pub.strip().lower()
+    sig = sig.strip().lower()
     if not _valid_label(name):
         return f"name {name!r} is not a valid .cyberspace label"
     if len(pub) != 64:
