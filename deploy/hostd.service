@@ -1,0 +1,53 @@
+# hostd.service — the per-agent .cyberspace hosting daemon
+#
+# Install on the hosting agent's machine as:
+#   /etc/systemd/system/hostd.service
+# plus the env file (0600, holds the name-key seed):
+#   /etc/cybernet-hostd/hostd.env
+#
+# This file ships with the house layout; the lines marked EDIT are the only
+# machine-specific ones — point them at the repo checkout, venv, and agent
+# user on any other machine. Everything else (name key, mirror, relay) goes
+# in the env file, never in the unit.
+#
+# The daemon: python -m resolver.host (run from the repo root) — holds one
+# .cyberspace name reachable from anywhere (direct URL or relay hold-open
+# behind NAT), signs everything with the NAME KEY only.
+[Unit]
+Description=Cybernet host daemon — per-agent .cyberspace name hosting
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: the agent user
+User=villhaze
+# EDIT: the repo checkout
+WorkingDirectory=/home/villhaze/cybernet/node
+# Required:
+#   CYBERNET_HOSTED_NAME=<label>        the .cyberspace label this host holds
+#   CYBERNET_NAME_PRIVKEY=<64-hex seed> the NAME KEY seed (never the master identity)
+#   CYBERNET_MIRROR_URL=<public URL>    the public mirror that carries the reach
+#                                        announce (required, must be public —
+#                                        see resolver/host.py; no default)
+#   CYBERNET_PUBLIC_URL                 direct dial URL (omit if relay-hosted)
+#   CYBERNET_RELAY_URL / CYBERNET_RELAY_PUBKEY / CYBERNET_RELAY_TOKEN
+#   CYBERNET_REACH_TTL                  CYBERNET_HOSTD_REFRESH
+EnvironmentFile=/etc/cybernet-hostd/hostd.env
+# EDIT: the venv bin path
+Environment="PATH=/home/villhaze/cybernet/node/venv/bin:/usr/bin:/bin"
+# EDIT: the venv python
+ExecStart=/home/villhaze/cybernet/node/venv/bin/python -m resolver.host
+Restart=always
+RestartSec=30
+# Hardening: the daemon keeps all state in memory and speaks only
+# outbound (register, long-poll, signed announce). Its only disk needs are
+# read: the repo checkout and the venv.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

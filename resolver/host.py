@@ -28,8 +28,13 @@ or the registry — the binding names the key that answers, nothing else.
 Config (environment, bad values degrade to silence, never to a lie):
   CYBERNET_HOSTED_NAME     .cyberspace label hosted (required to run)
   CYBERNET_NAME_PRIVKEY    64-hex name-key seed (required to run)
-  CYBERNET_MIRROR_URL      mirror base URL for the reach announce
-                           (default http://127.0.0.1:8471)
+  CYBERNET_MIRROR_URL      public mirror base URL for the reach announce
+                           (REQUIRED — there is no default. The old
+                           docstring claimed http://127.0.0.1:8471, but
+                           that loopback value never passes the
+                           public-URL gate core._valid_node_url applies;
+                           a mirror is a public node. Unset or invalid
+                           -> the daemon refuses to start, loudly.)
   CYBERNET_PUBLIC_URL      direct dial URL (optional if relay is set)
   CYBERNET_RELAY_URL / CYBERNET_RELAY_PUBKEY / CYBERNET_RELAY_TOKEN
                            relay hold-open (optional if direct is set)
@@ -56,9 +61,6 @@ import urllib.request
 import core
 import hold_open
 
-_DEFAULT_MIRROR = "http://127.0.0.1:8471"
-
-
 def _env_int(name: str, default: int, floor: int = 1) -> int:
     """Bad env values fall back, never crash the daemon."""
     try:
@@ -71,7 +73,12 @@ def _config() -> tuple[str, str, str | None, int, bool]:
     """(name, name_priv_hex, mirror_url, refresh, runnable). runnable is
     False when the daemon has no valid name+key (it refuses to run:
     a hosting daemon without a name is nothing — fail-closed at startup)
-    or no valid mirror to announce to."""
+    or no usable mirror. The mirror is REQUIRED and must be a public URL
+    (core._valid_node_url's gate): there is no loopback default, because
+    the old 127.0.0.1:8471 default could never pass that gate — a mirror
+    is a public node, and a host with nowhere honest to announce simply
+    does not start.
+    """
     name = os.environ.get("CYBERNET_HOSTED_NAME", "").strip().lower()
     name_priv = os.environ.get("CYBERNET_NAME_PRIVKEY", "").strip().lower()
     ok = bool(name) and core._valid_name_label(name) is True
@@ -80,9 +87,9 @@ def _config() -> tuple[str, str, str | None, int, bool]:
             ok = len(bytes.fromhex(name_priv)) == 32
         except Exception:
             ok = False
+    mirror_raw = os.environ.get("CYBERNET_MIRROR_URL", "").strip()
     try:
-        mirror = core._valid_node_url(
-            os.environ.get("CYBERNET_MIRROR_URL", _DEFAULT_MIRROR))
+        mirror = core._valid_node_url(mirror_raw)
     except Exception:
         mirror, ok = None, False
     return name, name_priv, mirror, _env_int("CYBERNET_HOSTD_REFRESH", 600), ok
@@ -193,6 +200,10 @@ def run() -> int:
     a mirror refuses to start — fail-closed). Never raises."""
     name, name_priv, mirror_url, refresh, ok = _config()
     if not ok:
+        if not os.environ.get("CYBERNET_MIRROR_URL", "").strip():
+            print("hostd: CYBERNET_MIRROR_URL is required (a public mirror"
+                  " URL) — refusing to start with nowhere honest to announce",
+                  file=sys.stderr)
         return 2
     stop = threading.Event()
 
