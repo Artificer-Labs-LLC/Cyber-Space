@@ -1,1 +1,86 @@
-IiIiTlNTIGdsdWUgY291cGxpbmcgYmVsdCDigJQgdGhlIHN5c3RlbWQtcmVzb2x2ZWQgZHJvcC1pbiBpcyBvbmx5IGFzIGdvb2QgYXMgaXRzIGNvdXBsaW5nLgoKVGhlIHN0dWItem9uZSBnbHVlIChkZXBsb3kvcmVzb2x2ZXJkLW5zcy5jb25mLCBpbnN0YWxsZWQgYnkgaW5zdGFsbC1hZ2VudC5zaCAtLW5zcykKcm91dGVzICouY3liZXJzcGFjZSBmcm9tIEVWRVJZIHByb2dyYW0gb24gdGhlIGJveCB0byB0aGUgcGVyLWFnZW50IGRhZW1vbi4KRml2ZSBjb3VwbGluZ3MgbXVzdCBob2xkIG9yIHRoZSBnbHVlIGxpZXM6CgogIDEuIGNvbmYgRE5TPSBwb3J0ID09IGRhZW1vbidzIHJlYWwgbGlzdGVuIGRlZmF1bHQgKGRhZW1vbi5fREVGQVVMVF9QT1JUKQogIDIuIGNvbmYgRE5TPSBwb3J0ID09IGNsaWVudCdzIHJlYWwgcXVlcnkgZGVmYXVsdCAoY2xpZW50Ll9kZWZhdWx0X3BvcnQoKSkKICAzLiBjb25mIERvbWFpbnM9IGlzIGEgUk9VVElORyBkb21haW4gKH5jeWJlcnNwYWNlKSDigJQgd2l0aG91dCB0aGUgfiBwcmVmaXgKICAgICByZXNvbHZlZCB0cmVhdHMgaXQgYXMgYSBzZWFyY2ggZG9tYWluIGFuZCB0aGUgZ2x1ZSBzaWxlbnRseSBkb2VzIG5vdGhpbmcKICA0LiBpbnN0YWxsZXIncyBpbnN0YWxsIHBhdGggKyBpbnN0YWxsZWQgZmlsZW5hbWUgbWF0Y2ggd2hhdCB0aGUgY29uZiBkZXNjcmliZXMKICA1LiBpbnN0YWxsZXIgdmVyaWZpZXMgdGhlIHJvdXRlIHBvc3QtaW5zdGFsbCAocmVzb2x2ZWN0bCBkb21haW4gfmN5YmVyc3BhY2UpCiAgICAgYW5kIGlzIGxvdWQgd2hlbiBzeXN0ZW1kLXJlc29sdmVkIGlzbid0IHJ1bm5pbmcgKG1hbnVhbCBzdGVwcyBwcmludGVkKQoKUnVuOiBjZCB+L3dvcmtzcGFjZS9jeWJlcm5ldCAmJiAuL3ZlbnYvYmluL3B5dGhvbiBoaWRkZW5fZmlsZXMvbnNzLWdsdWUtdGVzdC5weQoiIiIKaW1wb3J0IG9zCmltcG9ydCByZQppbXBvcnQgc3lzCgpSRVBPID0gb3MucGF0aC5qb2luKG9zLnBhdGguZGlybmFtZShvcy5wYXRoLmFic3BhdGgoX19maWxlX18pKSwgIi4uIikKc3lzLnBhdGguaW5zZXJ0KDAsIFJFUE8pCgpmcm9tIHJlc29sdmVyIGltcG9ydCBkYWVtb24gICMgbm9xYTogRTQwMgpmcm9tIHJlc29sdmVyIGltcG9ydCBjbGllbnQgICMgbm9xYTogRTQwMgoKQ09ORiA9IG9zLnBhdGguam9pbihSRVBPLCAiZGVwbG95IiwgInJlc29sdmVyZC1uc3MuY29uZiIpCklOU1RBTExFUiA9IG9zLnBhdGguam9pbihSRVBPLCAiZGVwbG95IiwgImluc3RhbGwtYWdlbnQuc2giKQoKcGFzc2VkID0gZmFpbGVkID0gMAoKCmRlZiBjaGVjayhsYWJlbCwgY29uZCk6CiAgICBnbG9iYWwgcGFzc2VkLCBmYWlsZWQKICAgIGlmIGNvbmQ6CiAgICAgICAgcGFzc2VkICs9IDEKICAgICAgICBwcmludChmIiAgb2sgIHtsYWJlbH0iKQogICAgZWxzZToKICAgICAgICBmYWlsZWQgKz0gMQogICAgICAgIHByaW50KGYiIEZBSUwge2xhYmVsfSIpCgoKd2l0aCBvcGVuKENPTkYpIGFzIGY6CiAgICBjb25mID0gZi5yZWFkKCkKd2l0aCBvcGVuKElOU1RBTExFUikgYXMgZjoKICAgIGluc3QgPSBmLnJlYWQoKQoKZGFlbW9uX3BvcnQgPSBkYWVtb24uX0RFRkFVTFRfUE9SVApjbGllbnRfcG9ydCA9IGNsaWVudC5fZGVmYXVsdF9wb3J0KCkKCiMgLS0tIDErMjogcG9ydCB0cmlwbGUgY291cGxpbmcgLS0tCm0gPSByZS5zZWFyY2gociJeRE5TPShcUyspJCIsIGNvbmYsIHJlLk0pCmNoZWNrKCJjb25mIGhhcyBleGFjdGx5IG9uZSBETlM9IGxpbmUiLCBtIGlzIG5vdCBOb25lKQpkbnNfZW50cnkgPSBtLmdyb3VwKDEpIGlmIG0gZWxzZSAiIgptMiA9IHJlLmZ1bGxtYXRjaChyIjEyN1wuMFwuMFwuMTooXGQrKSIsIGRuc19lbnRyeSkKY2hlY2soIkROUz0gaXMgMTI3LjAuMC4xOjxwb3J0PiAocmVzb2x2ZWQgcG9ydC1zdWZmaXggZm9ybSkiLCBtMiBpcyBub3QgTm9uZSkKY29uZl9wb3J0ID0gaW50KG0yLmdyb3VwKDEpKSBpZiBtMiBlbHNlIC0xCmNoZWNrKGYiY29uZiBwb3J0IHtjb25mX3BvcnR9ID09IGRhZW1vbiBkZWZhdWx0IHtkYWVtb25fcG9ydH0iLCBjb25mX3BvcnQgPT0gZGFlbW9uX3BvcnQpCmNoZWNrKGYiY29uZiBwb3J0IHtjb25mX3BvcnR9ID09IGNsaWVudCBkZWZhdWx0IHtjbGllbnRfcG9ydH0iLCBjb25mX3BvcnQgPT0gY2xpZW50X3BvcnQpCmNoZWNrKCJpbnN0YWxsZXIgZG9jdW1lbnRzIHRoZSBzYW1lIGZhY2UgKDEyNy4wLjAuMTo1MzUzKSIsICIxMjcuMC4wLjE6NTM1MyIgaW4gaW5zdCkKCiMgLS0tIDM6IHJvdXRpbmctZG9tYWluIHNlbWFudGljcyAtLS0KbTMgPSByZS5zZWFyY2gociJeRG9tYWlucz0oXFMrKSQiLCBjb25mLCByZS5NKQpjaGVjaygiY29uZiBoYXMgZXhhY3RseSBvbmUgRG9tYWlucz0gbGluZSIsIG0zIGlzIG5vdCBOb25lKQpkb21haW5zID0gbTMuZ3JvdXAoMSkgaWYgbTMgZWxzZSAiIgpjaGVjaygiRG9tYWlucz0gaXMgcm91dGluZy1vbmx5IH5jeWJlcnNwYWNlIChub3QgYSBzZWFyY2ggZG9tYWluKSIsCiAgICAgIGRvbWFpbnMgPT0gIn5jeWJlcnNwYWNlIikKCiMgLS0tIDQ6IGluc3RhbGwgcGF0aCBjb25zaXN0ZW5jeSAtLS0KY2hlY2soImluc3RhbGxlciBpbnN0YWxscyB0aGUgc2hpcHBlZCBjb25mIGZpbGUiLAogICAgICAnIiRSRVBPX0RJUi9kZXBsb3kvcmVzb2x2ZXJkLW5zcy5jb25mIicgaW4gaW5zdCkKY2hlY2soImluc3RhbGxlciBpbnN0YWxscyB0byAvZXRjL3N5c3RlbWQvcmVzb2x2ZWQuY29uZi5kL2N5YmVybmV0LWFnZW50LmNvbmYiLAogICAgICAiL2V0Yy9zeXN0ZW1kL3Jlc29sdmVkLmNvbmYuZC9jeWJlcm5ldC1hZ2VudC5jb25mIiBpbiBpbnN0KQoKIyAtLS0gNTogcG9zdC1pbnN0YWxsIHZlcmlmaWNhdGlvbiArIGxvdWQgZmFsbGJhY2sgLS0tCmNoZWNrKCJpbnN0YWxsZXIgdmVyaWZpZXMgfmN5YmVyc3BhY2UgaW4gcmVzb2x2ZWN0bCBkb21haW4gYWZ0ZXIgaW5zdGFsbCIsCiAgICAgICJyZXNvbHZlY3RsIGRvbWFpbiIgaW4gaW5zdCBhbmQgIn5jeWJlcnNwYWNlIiBpbiBpbnN0KQpjaGVjaygiaW5zdGFsbGVyIHByaW50cyBtYW51YWwgZ2x1ZSBzdGVwcyB3aGVuIHJlc29sdmVkIGlzIGFic2VudCIsCiAgICAgICJjcCAkUkVQT19ESVIvZGVwbG95L3Jlc29sdmVyZC1uc3MuY29uZiIgaW4gaW5zdCkKY2hlY2soImRuc21hc3EgYWx0ZXJuYXRpdmUgaXMgZG9jdW1lbnRlZCIsCiAgICAgICJzZXJ2ZXI9L2N5YmVyc3BhY2UvMTI3LjAuMC4xIzUzNTMiIGluIGluc3QpCmNoZWNrKCJjb25mIGlzIGxvb3BiYWNrLW9ubHkgKG5ldmVyIHdpZGVucyB0aGUgZmFjZSkiLAogICAgICAiMTI3LjAuMC4xIiBpbiBkbnNfZW50cnkgYW5kIG5vdCByZS5zZWFyY2gociJETlM9XFMqKDBcLjBcLjBcLjB8XCo6KSIsIGNvbmYpKQoKcHJpbnQoZiJcbntwYXNzZWR9IHBhc3NlZCwge2ZhaWxlZH0gZmFpbGVkIikKc3lzLmV4aXQoMSBpZiBmYWlsZWQgZWxzZSAwKQo=
+"""NSS glue coupling belt — the systemd-resolved drop-in is only as good as its coupling.
+
+The stub-zone glue (deploy/resolverd-nss.conf, installed by install-agent.sh --nss)
+routes *.cyberspace from EVERY program on the box to the per-agent daemon.
+Five couplings must hold or the glue lies:
+
+  1. conf DNS= port == daemon's real listen default (daemon._DEFAULT_PORT)
+  2. conf DNS= port == client's real query default (client._default_port())
+  3. conf Domains= is a ROUTING domain (~cyberspace) — without the ~ prefix
+     resolved treats it as a search domain and the glue silently does nothing
+  4. installer's install path + installed filename match what the conf describes
+  5. installer verifies the route post-install (resolvectl domain ~cyberspace)
+     and is loud when systemd-resolved isn't running (manual steps printed)
+
+Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/nss-glue-test.py
+"""
+import os
+import re
+import sys
+
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, REPO)
+
+from resolver import daemon  # noqa: E402
+from resolver import client  # noqa: E402
+
+CONF = os.path.join(REPO, "deploy", "resolverd-nss.conf")
+INSTALLER = os.path.join(REPO, "deploy", "install-agent.sh")
+
+passed = failed = 0
+
+
+def check(label, cond):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  ok  {label}")
+    else:
+        failed += 1
+        print(f" FAIL {label}")
+
+
+with open(CONF) as f:
+    conf = f.read()
+with open(INSTALLER) as f:
+    inst = f.read()
+
+daemon_port = daemon._DEFAULT_PORT
+client_port = client._default_port()
+
+# --- 1+2: port triple coupling ---
+m = re.search(r"^DNS=(\S+)$", conf, re.M)
+check("conf has exactly one DNS= line", m is not None)
+dns_entry = m.group(1) if m else ""
+m2 = re.fullmatch(r"127\.0\.0\.1:(\d+)", dns_entry)
+check("DNS= is 127.0.0.1:<port> (resolved port-suffix form)", m2 is not None)
+conf_port = int(m2.group(1)) if m2 else -1
+check(f"conf port {conf_port} == daemon default {daemon_port}", conf_port == daemon_port)
+check(f"conf port {conf_port} == client default {client_port}", conf_port == client_port)
+check("installer documents the same face (127.0.0.1:5353)", "127.0.0.1:5353" in inst)
+
+# --- 3: routing-domain semantics ---
+m3 = re.search(r"^Domains=(\S+)$", conf, re.M)
+check("conf has exactly one Domains= line", m3 is not None)
+domains = m3.group(1) if m3 else ""
+check("Domains= is routing-only ~cyberspace (not a search domain)",
+      domains == "~cyberspace")
+
+# --- 4: install path consistency ---
+check("installer installs the shipped conf file",
+      '"$REPO_DIR/deploy/resolverd-nss.conf"' in inst)
+check("installer installs to /etc/systemd/resolved.conf.d/cybernet-agent.conf",
+      "/etc/systemd/resolved.conf.d/cybernet-agent.conf" in inst)
+
+# --- 5: post-install verification + loud fallback ---
+check("installer verifies ~cyberspace in resolvectl domain after install",
+      "resolvectl domain" in inst and "~cyberspace" in inst)
+check("installer prints manual glue steps when resolved is absent",
+      "cp $REPO_DIR/deploy/resolverd-nss.conf" in inst)
+check("dnsmasq alternative is documented",
+      "server=/cyberspace/127.0.0.1#5353" in inst)
+check("conf is loopback-only (never widens the face)",
+      "127.0.0.1" in dns_entry and not re.search(r"DNS=\S*(0\.0\.0\.0|\*:)", conf))
+
+print(f"\n{passed} passed, {failed} failed")
+sys.exit(1 if failed else 0)
