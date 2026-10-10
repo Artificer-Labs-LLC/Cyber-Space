@@ -33,6 +33,10 @@ Config (environment, bad values degrade to silence, never to a lie):
   CYBERNET_PUBLIC_URL      direct dial URL (optional if relay is set)
   CYBERNET_RELAY_URL / CYBERNET_RELAY_PUBKEY / CYBERNET_RELAY_TOKEN
                            relay hold-open (optional if direct is set)
+                           — all three together or nothing: a
+                           half-filled triple disables the relay and
+                           run() says so loudly on stderr at startup
+                           (nothing set = direct dial, silent by choice)
   CYBERNET_REACH_TTL       descriptor lifetime seconds (default 86400)
   CYBERNET_HOSTD_REFRESH   re-announce cadence seconds (default 600)
 
@@ -43,6 +47,7 @@ import json
 import os
 import random
 import signal
+import sys
 import threading
 import time
 import urllib.error
@@ -94,9 +99,52 @@ def _relay_cfg() -> tuple[str, str, str] | None:
     if not relay_url or not relay_pub or not relay_token:
         return None
     try:
+        if len(relay_pub) != 64:
+            raise ValueError("relay pubkey must be 64 hex chars")
+        bytes.fromhex(relay_pub)  # same gate core._reach_build applies
+        if len(relay_token) > core._RELAY_TOKEN_CAP:
+            raise ValueError("relay token too long")
         return (core._valid_node_url(relay_url), relay_pub, relay_token)
     except Exception:
         return None
+
+
+def _relay_warnings() -> list[str]:
+    """Loud config mistakes, or []. The triple (URL, PUBKEY, TOKEN) is
+    all-or-nothing: nothing set means relay simply not configured (direct
+    dial — silent, a choice). Anything set but unusable is a mistake the
+    daemon would otherwise hide by hosting direct-dial with no hint, so
+    run() prints each of these to stderr. Mirrors the exact rules in
+    core._reach_build; never prints secret VALUES, only which var and
+    why."""
+    url = os.environ.get("CYBERNET_RELAY_URL", "").strip()
+    pub = os.environ.get("CYBERNET_RELAY_PUBKEY", "").strip().lower()
+    tok = os.environ.get("CYBERNET_RELAY_TOKEN", "").strip()
+    if not url and not pub and not tok:
+        return []
+    problems: list[str] = []
+    if not url:
+        problems.append("CYBERNET_RELAY_URL unset")
+    else:
+        try:
+            core._valid_node_url(url)
+        except Exception:
+            problems.append("CYBERNET_RELAY_URL malformed")
+    if not pub:
+        problems.append("CYBERNET_RELAY_PUBKEY unset")
+    elif len(pub) != 64:
+        problems.append("CYBERNET_RELAY_PUBKEY must be 64 hex chars")
+    else:
+        try:
+            bytes.fromhex(pub)
+        except Exception:
+            problems.append("CYBERNET_RELAY_PUBKEY not hex")
+    if not tok:
+        problems.append("CYBERNET_RELAY_TOKEN unset")
+    elif len(tok) > core._RELAY_TOKEN_CAP:
+        problems.append(
+            f"CYBERNET_RELAY_TOKEN too long (> {core._RELAY_TOKEN_CAP} chars)")
+    return problems
 
 
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
@@ -155,7 +203,13 @@ def run() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     relay = _relay_cfg()
-    if relay is not None:
+    if relay is None:
+        # Half-configured relay would otherwise silently degrade to
+        # direct-dial: the operator set the intent but no hold-open will
+        # ever register. Shout it at startup (stderr, no secret values).
+        for warn in _relay_warnings():
+            print(f"hostd: relay disabled: {warn}", file=sys.stderr)
+    else:
         # _relay_cfg returns (relay_url, relay_pub, relay_token): the
         # hold-open registers under the ROUTING token the reach
         # descriptor advertises (core._reach_build), not the relay's
