@@ -13,6 +13,8 @@ checks it end to end, no network.
 Usage:
   ./venv/bin/python verify_name.py binding.json
   ./venv/bin/python verify_name.py -              # read JSON from stdin
+  ./venv/bin/python verify_name.py binding.json --expect-name foo \
+      --expect-pubkey <64hex>   # pin: "is this the binding I meant?"
 
 Exit codes: 0 = binding is valid and live right now
             1 = binding is invalid, expired, or not yet issued (reason on stderr)
@@ -24,6 +26,7 @@ lowercase-hex pub, exact issued/expires strings as signed.
 
 import os
 import sys
+import argparse
 import json
 from datetime import datetime, timezone
 
@@ -67,8 +70,22 @@ def _parse_ts(s: str, field: str) -> datetime:
     return ts
 
 
-def verify(binding: dict) -> str | None:
-    """Return None if the binding verifies, else the reason it does not."""
+def _normalize_expected(s: str) -> str:
+    """Expected names/keys get the same normalize-identically-first
+    treatment the mirror applies to bindings: strip, lowercase."""
+    return s.strip().lower()
+
+
+def verify(binding: dict, expect_name: str | None = None,
+           expect_pubkey: str | None = None) -> str | None:
+    """Return None if the binding verifies, else the reason it does not.
+
+    expect_name / expect_pubkey pin the answer: "is this the binding I
+    meant?" A valid binding for a DIFFERENT name or key fails with a
+    naming-the-sides reason instead of verifying. Expected values are
+    normalized identically to bindings (strip + lowercase) so a caller
+    can pass what the mirror accepted without worrying about case.
+    """
     if not isinstance(binding, dict):
         return "binding is not a JSON object"
     for k in ("name", "node_pubkey", "issued_at", "expires_at", "signature"):
@@ -85,9 +102,18 @@ def verify(binding: dict) -> str | None:
     # offline verifier must vouch for exactly what the mirror stores, so
     # it normalizes identically first — a claim form the mirror accepts
     # verifies here too, never just the already-normalized stored copy.
-    name = name.strip().lower()
-    pub = pub.strip().lower()
-    sig = sig.strip().lower()
+    name = _normalize_expected(name)
+    pub = _normalize_expected(pub)
+    sig = _normalize_expected(sig)
+    if expect_name is not None:
+        exp = _normalize_expected(expect_name)
+        if name != exp:
+            return f"binding is for {name!r}, not the expected {exp!r}"
+    if expect_pubkey is not None:
+        exp = _normalize_expected(expect_pubkey)
+        if pub != exp:
+            return (f"binding is keyed to {pub[:16]}..., not the expected "
+                    f"key {exp[:16]}...")
     if not _valid_label(name):
         return f"name {name!r} is not a valid .cyberspace label"
     if len(pub) != 64:
@@ -121,10 +147,15 @@ def verify(binding: dict) -> str | None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 1:
-        print("usage: verify_name.py <binding.json | ->", file=sys.stderr)
-        return 2
-    src = argv[0]
+    ap = argparse.ArgumentParser(
+        description="verify a .cyberspace name binding offline")
+    ap.add_argument("source", help="binding.json, or - for stdin")
+    ap.add_argument("--expect-name",
+                    help="fail unless the binding is for this label")
+    ap.add_argument("--expect-pubkey",
+                    help="fail unless the binding is keyed to this name key")
+    args = ap.parse_args(argv)
+    src = args.source
     try:
         raw = sys.stdin.read() if src == "-" else open(src, encoding="utf-8").read()
     except OSError as e:
@@ -135,11 +166,16 @@ def main(argv: list[str]) -> int:
     except json.JSONDecodeError as e:
         print(f"refused: not JSON: {e}", file=sys.stderr)
         return 2
-    reason = verify(binding)
+    reason = verify(binding, expect_name=args.expect_name,
+                    expect_pubkey=args.expect_pubkey)
     if reason is not None:
         print(f"invalid: {reason}", file=sys.stderr)
         return 1
-    print(f"valid: {binding['name']}.cyberspace -> {binding['node_pubkey'][:16]}..."
+    # Print the normalized form — exactly what the mirror stores and
+    # vouched for, never the raw casing a claim form happened to carry.
+    nm = _normalize_expected(binding["name"])
+    pk = _normalize_expected(binding["node_pubkey"])
+    print(f"valid: {nm}.cyberspace -> {pk[:16]}..."
           f" (issued {binding['issued_at']}, expires {binding['expires_at']})")
     return 0
 
