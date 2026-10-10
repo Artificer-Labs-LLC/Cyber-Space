@@ -688,6 +688,23 @@ def init_db() -> None:
             signature TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_reach_descriptors_expires ON reach_descriptors(expires_at);
+        -- .cyberspace depth — the rotation chain (primitive 4, identity):
+        -- accepted rotation records, one row per designation event. A
+        -- rotation record (name-rotate|<label>|<old_pub>|<new_pub>|<issued_at>,
+        -- signed by the OLD key) is the continuity proof: anyone who trusted
+        -- the old binding can follow the chain to the new key with no mirror
+        -- involved, and anyone who does want the mirror's view can ask the
+        -- mirror for it. Rows are immutable history (point events), never
+        -- deleted by the mirror — only the live binding moves.
+        CREATE TABLE IF NOT EXISTS name_rotations (
+            name TEXT NOT NULL,
+            old_pubkey TEXT NOT NULL,
+            new_pubkey TEXT NOT NULL,
+            issued_at TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            accepted_at TEXT NOT NULL,
+            PRIMARY KEY (name, old_pubkey, new_pubkey)
+        );
         """)
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")
