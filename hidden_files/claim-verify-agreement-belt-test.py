@@ -252,19 +252,20 @@ check("zulu-ts: verifier accepts the stored form",
       stored is not None and verify_name.verify(stored) is None,
       repr(verify_name.verify(stored) if stored else None))
 
-# --- case 10: non-UTC offset, live -----------------------------------------------
+# --- case 10: non-UTC offset — BOTH refuse (B4: UTC-only) -----------
 sk, pk = _keypair()
 issued = _iso(NOW - timedelta(hours=1), offset=5)
 expires = _iso(NOW + timedelta(days=30), offset=5)
 sig = _sig(sk, "agreeoffset", pk, issued, expires)
-st, _ = _claim({"name": "agreeoffset", "node_pubkey": pk, "issued_at": issued,
+st, _body = _claim({"name": "agreeoffset", "node_pubkey": pk, "issued_at": issued,
                 "expires_at": expires, "signature": sig})
 stored = _stored("agreeoffset")
-check("offset-ts: mirror accepts (chronological, not lexicographic)",
-      st == 200 and stored is not None, f"st={st}")
-check("offset-ts: verifier accepts the stored form",
-      stored is not None and verify_name.verify(stored) is None,
-      repr(verify_name.verify(stored) if stored else None))
+check("offset-ts: mirror refuses (400)", st == 400, f"st={st}")
+check("offset-ts: verifier rejects the refused form",
+      verify_name.verify({"name": "agreeoffset", "node_pubkey": pk,
+                          "issued_at": issued, "expires_at": expires,
+                          "signature": sig}) is not None)
+check("offset-ts: nothing stored", stored is None)
 
 # --- case 11: born dead (issued == expires) ------------------------------------------
 sk, pk = _keypair()
