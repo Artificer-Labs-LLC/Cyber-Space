@@ -28,7 +28,7 @@ import os
 import sys
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import checkvalid  # noqa: E402
@@ -57,19 +57,37 @@ def _claim_payload(name: str, node_pubkey: str, issued_at: str,
 
 def _parse_ts(s: str, field: str) -> datetime:
     # Twin of core_serve._parse_claim_time (the mirror's rule): the stamp
-    # MUST carry an explicit numeric UTC offset. Naive datetimes and
-    # date-only strings are not canonical — they raise ValueError, exactly
-    # like the mirror. The mirror REFUSES naive stamps, so the offline
-    # verifier must too — otherwise a mirror-refused binding would pass
-    # offline verification and the "trust a name without trusting the
-    # mirror" promise breaks. Raises ValueError on unparseable input.
+    # MUST be exactly `YYYY-MM-DDTHH:MM:SS` with an explicit offset
+    # (`Z` or `±HH:MM`). M-2 (v0.6.3 red-team): fromisoformat is NOT used
+    # — on 3.11+ it accepts ~12 spellings and behaves differently across
+    # versions. Strict regex + manual construction keeps the twins in
+    # agreement on every Python. Raises ValueError on unparseable input,
+    # exactly like the mirror — otherwise a mirror-refused binding would
+    # pass offline verification and the "trust a name without trusting the
+    # mirror" promise breaks.
+    import re
+    m = re.match(
+        r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})$", s
+    )
+    if not m:
+        raise ValueError(f"{field} is not canonical UTC timestamp: {s!r}")
+    year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
+    off = m.group(7)
+    if not (1 <= mon <= 12 and 1 <= day <= 31 and hr <= 23
+            and mi <= 59 and se <= 59):
+        raise ValueError(f"{field} out of range: {s!r}")
+    if off == "Z":
+        tz = timezone.utc
+    else:
+        sign = 1 if off[0] == "+" else -1
+        oh, om = int(off[1:3]), int(off[4:6])
+        if oh > 14 or om > 59:
+            raise ValueError(f"{field} bad offset: {s!r}")
+        tz = timezone(sign * timedelta(hours=oh, minutes=om))
     try:
-        ts = datetime.fromisoformat(s)
-    except (ValueError, TypeError):
-        raise ValueError(f"{field} is not ISO 8601: {s!r}")
-    if ts.tzinfo is None:
-        raise ValueError(f"{field} is not canonical UTC (no explicit offset): {s!r}")
-    return ts
+        return datetime(year, mon, day, hr, mi, se, tzinfo=tz)
+    except ValueError:
+        raise ValueError(f"{field} invalid date: {s!r}")
 
 
 def _normalize_expected(s: str) -> str:
