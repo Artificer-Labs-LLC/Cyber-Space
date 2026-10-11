@@ -30,7 +30,20 @@ will call. The belt drives it directly against row dicts.
 """
 
 import hashlib
-from datetime import datetime
+import re
+from datetime import datetime, timezone
+
+# B3 (v0.6.3 red-team follow-up, Bulwark): this filter must reject exactly
+# what the server rejects. The server's strict parser
+# (core_serve._parse_claim_time) is UTC-only since B4; this is its twin —
+# duplicated here (not imported) because this module is standalone and
+# must stay importable without the server's dependency tree. The regex
+# MUST match core_serve._canonical_ts_pattern() exactly: [0-9] classes
+# (B1, not \d), \Z anchor (B2, not $), UTC-only `Z`/`+00:00` (B4).
+_CANONICAL_TS_RE = re.compile(
+    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+    r"([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)\Z"
+)
 
 LEAF_PREFIX = "cyberspace-refused-binding/v1"
 REASONS = ("grammar", "length", "expiry-cap", "not-in-manifest")
@@ -63,15 +76,27 @@ def _grammar_ok(label: str) -> bool:
 
 
 def _canonical_time_ok(s) -> bool:
-    """Floor fix 5 canonical rule: explicit numeric UTC offset required.
-    Naive datetimes, date-only strings, and garbage are unparseable."""
+    """B4 canonical rule: ONLY UTC stamps are canonical —
+    `YYYY-MM-DDTHH:MM:SS` with `Z` or `+00:00`. Naive datetimes,
+    date-only strings, week dates, space separators, fractional
+    seconds, non-UTC offsets, `-00:00`, trailing newlines, Unicode
+    digits, and garbage are NOT canonical — and neither is the old
+    fromisoformat rule, which is why this no longer uses it (B3: the
+    filter must reject exactly what the server rejects)."""
     if not isinstance(s, str) or not s:
         return False
-    try:
-        dt = datetime.fromisoformat(s)
-    except (ValueError, TypeError):
+    m = _CANONICAL_TS_RE.match(s)
+    if not m:
         return False
-    return dt.tzinfo is not None
+    year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
+    if not (1 <= mon <= 12 and 1 <= day <= 31 and hr <= 23
+            and mi <= 59 and se <= 59):
+        return False
+    try:
+        datetime(year, mon, day, hr, mi, se, tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return True
 
 
 def _length_refused(label: str) -> bool:
