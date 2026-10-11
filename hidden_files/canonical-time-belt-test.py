@@ -2,8 +2,8 @@
 """Belt for floor fix 5 (allocation rule v0.6.3, Examiner; primitive 1 naming).
 
 A legacy name row whose issued_at or expires_at does NOT parse as canonical
-UTC (explicit numeric offset; NOT naive datetimes, NOT date-only strings)
-is UNPARSEABLE. An unparseable row:
+UTC (ONLY `Z` or `+00:00` since B4 — non-UTC offsets are unparseable) is
+UNPARSEABLE. An unparseable row:
   1. never wins a comparison and is never live or gossiped — it reads as
      ABSENT in _name_claim_beats, the resolve path, the ingest expiry
      check, and the gossip filter;
@@ -11,7 +11,8 @@ is UNPARSEABLE. An unparseable row:
   3. is refused at intake with reason expiry-cap.
 
 Covers: unparseable issued_at, unparseable expires_at, naive datetime,
-date-only string, valid canonical (+00:00 / Z / +05:00) as control.
+date-only string, non-UTC offset (B4), valid canonical (+00:00 / Z) as
+control.
 
 Runs the REAL claim route + REAL serve route on the REAL app (scratch DB,
 loopback uvicorn), plus in-process ingest_gossiped_binding and
@@ -68,7 +69,7 @@ NOW = datetime.now(timezone.utc)
 CANON = (NOW - timedelta(minutes=5)).isoformat(timespec="seconds")          # +00:00
 CANON_Z = (NOW - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")        # Z
 CANON_OFF = (NOW - timedelta(minutes=5)).astimezone(
-    timezone(timedelta(hours=5))).isoformat(timespec="seconds")              # +05:00
+    timezone(timedelta(hours=5))).isoformat(timespec="seconds")              # +05:00 (B4: NOT canonical)
 CANON_EXP = (NOW + timedelta(days=30)).isoformat(timespec="seconds")
 NAIVE = (NOW - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")           # naive
 NAIVE_EXP = (NOW + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -78,7 +79,8 @@ GARBAGE = "not-a-time"
 print("unit: _parse_claim_time strictness")
 check("canonical +00:00 parses", not raises_ve(lambda: core._parse_claim_time(CANON)))
 check("canonical Z parses", not raises_ve(lambda: core._parse_claim_time(CANON_Z)))
-check("canonical +05:00 parses", not raises_ve(lambda: core._parse_claim_time(CANON_OFF)))
+check("canonical +05:00 raises (B4: UTC-only)",
+      raises_ve(lambda: core._parse_claim_time(CANON_OFF)))
 check("naive datetime raises", raises_ve(lambda: core._parse_claim_time(NAIVE)))
 check("date-only raises", raises_ve(lambda: core._parse_claim_time(DATEONLY)))
 check("garbage raises", raises_ve(lambda: core._parse_claim_time(GARBAGE)))
