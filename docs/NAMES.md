@@ -43,15 +43,18 @@ two are twins, so a mirror-accepted binding always verifies offline.
 ## Time rules
 
 - Timestamps are ISO-8601 and MUST be canonical UTC, in EXACTLY this
-  shape: `YYYY-MM-DDTHH:MM:SS` with an explicit offset (`Z` or
-  `±HH:MM`) — e.g. `2026-10-11T04:00:00+00:00`, `...+05:00`, `...Z`.
+  shape: `YYYY-MM-DDTHH:MM:SS` with a UTC stamp — `Z` or `+00:00`
+  ONLY — e.g. `2026-10-11T04:00:00+00:00`, `2026-10-11T04:00:00Z`.
+  B4 (v0.6.3 red-team follow-up, Villhaze's ruling): `-00:00` and every
+  non-zero offset (`+05:00`, `-05:00`, `+14:00`, ...) are NOT canonical.
   M-2 (v0.6.3 red-team): the parser is a strict regex, not
   `datetime.fromisoformat` — week dates, space separators, basic format,
-  fractional seconds, naive datetimes, date-only strings, and offsets
-  beyond ±14:00 are all **unparseable** (allocation rule v0.6.3, floor
-  fix 5) — they raise in `core_serve._parse_claim_time`, and the offline
-  verifier (`verify_name.py::_parse_ts`) does the same, so the twins
-  still agree on every Python version.
+  fractional seconds, naive datetimes, date-only strings, trailing
+  newlines, Unicode digits, and non-UTC offsets are all **unparseable**
+  (allocation rule v0.6.3, floor fix 5) — they raise in
+  `core_serve._parse_claim_time`, and the offline verifier
+  (`verify_name.py::_parse_ts`) does the same, so the twins still agree
+  on every Python version.
   An unparseable row reads as ABSENT everywhere: it never wins
   `_name_claim_beats`, is never live (resolve/serve), is never gossiped
   (ingest drops it malformed; the gossip send-half skips it), gets no
@@ -139,7 +142,8 @@ name-claim work.
 - `hidden_files/canonical-time-belt-test.py` — 22/22: floor fix 5 —
   unparseable/naive/date-only issued_at and expires_at read as absent in
   `_name_claim_beats`, ingest, claim (400 + `expiry-cap`), and serve
-  (404); canonical `+00:00`/`Z`/`+05:00` still work.
+  (404); canonical `+00:00`/`Z` still work; `+05:00` is now refused
+  (B4 UTC-only).
 - `hidden_files/refused-bindings-belt-test.py` — 62/62: the §7.3.9
   refused-bindings filter — one leaf per refused binding (grammar /
   length / expiry-cap / not-in-manifest), holds only on valid rows,
@@ -149,7 +153,9 @@ name-claim work.
   half compared expiry as a STRING, so a `+05:00`-stamped hours-dead
   binding read as live and would be inserted by gossip while the claim
   route refused it. Now chronological, twin of the claim route;
-  unparseable expiry is malformed (fail-closed). Also verified the
-  repo's live DB untouched, and documented the import-order rule
-  (`import core` first — the app.py order; core_serve-first leaves
-  core with a partial namespace).
+  unparseable expiry is malformed (fail-closed). B4 note: non-UTC
+  offsets are now malformed at intake outright (UTC-only canonical),
+  so the old `+05:00`-string-sort case reads as dropped-malformed.
+  Also verified the repo's live DB untouched, and documented the
+  import-order rule (`import core` first — the app.py order;
+  core_serve-first leaves core with a partial namespace).
