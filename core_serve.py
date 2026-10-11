@@ -882,12 +882,20 @@ _CANONICAL_TS_RE = None
 
 
 def _canonical_ts_pattern():
-    """Compiled strict canonical-timestamp regex (module-level lazy)."""
+    """Compiled strict canonical-timestamp regex (module-level lazy).
+
+    B1 (v0.6.3 red-team, Bulwark): character classes are [0-9], NOT
+    \\d — \\d matches Unicode digits (e.g. Arabic-Indic) on str patterns.
+    B2: the anchor is \\Z, NOT $ — $ matches before a trailing newline,
+    so "...+00:00\\n" would otherwise parse. B4: ONLY UTC spellings —
+    `Z` or `+00:00`. `-00:00` and every non-zero offset are NOT
+    canonical."""
     global _CANONICAL_TS_RE
     if _CANONICAL_TS_RE is None:
         import re
         _CANONICAL_TS_RE = re.compile(
-            r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})$"
+            r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+            r"([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)\Z"
         )
     return _CANONICAL_TS_RE
 
@@ -903,43 +911,41 @@ def _parse_claim_time(s: str) -> datetime:
     as not-future.
 
     M-2 (v0.6.3 red-team, Bulwark): the parser accepts EXACTLY the
-    canonical form — `YYYY-MM-DDTHH:MM:SS` with an explicit offset
-    (`Z` or `±HH:MM`) — and nothing else. `datetime.fromisoformat` is
+    canonical form — `YYYY-MM-DDTHH:MM:SS` with a UTC stamp (`Z` or
+    `+00:00`) — and nothing else. `datetime.fromisoformat` is
     NOT used: on Python 3.11+ it accepts ~12 spellings (week dates,
     space separators, basic format, offsets to +23:59), contradicting
     the wire contract and behaving differently across Python versions
     (pre-3.11 rejects `Z`). The strict regex plus manual construction
     below is version-independent: identical input parses identically
-    on every Python.
+    on every Python. B1/B2: [0-9] classes (not \\d) and a \\Z anchor
+    (not $).
+
+    B4 (ART-29 red-team follow-up, Villhaze's ruling): ONLY UTC is
+    canonical — `Z` or `+00:00`. `-00:00` and every non-zero offset
+    (`+05:00`, `-05:00`, `+14:00`, ...) are NOT canonical. The offset
+    branch and its ±14:00 cap are GONE (the Bulwark "Low" off-by-one on
+    the cap is subsumed: no offset survives to be capped).
 
     Canonical form (allocation rule v0.6.3, floor fix 5): the stamp MUST
-    carry an explicit numeric UTC offset ("+00:00", "Z", "+05:00", ...).
-    Naive datetimes, date-only strings, week dates, space separators,
-    basic-format stamps, fractional seconds, and out-of-range offsets
-    are NOT canonical — they raise ValueError and the row reads as
-    ABSENT everywhere: it never wins a comparison (_name_claim_beats),
-    is never live (resolve, serve), is never gossiped (ingest drops it
-    malformed), gets no hold, and is refused at intake with reason
-    expiry-cap. Raises ValueError on any unparseable input — every caller
-    treats that as refusal/absent."""
+    be UTC. Naive datetimes, date-only strings, week dates, space
+    separators, basic-format stamps, fractional seconds, non-UTC
+    offsets, trailing newlines, and Unicode digits are NOT canonical —
+    they raise ValueError and the row reads as ABSENT everywhere: it
+    never wins a comparison (_name_claim_beats), is never live
+    (resolve, serve), is never gossiped (ingest drops it malformed),
+    gets no hold, and is refused at intake with reason expiry-cap.
+    Raises ValueError on any unparseable input — every caller treats
+    that as refusal/absent."""
     m = _canonical_ts_pattern().match(s)
     if not m:
         raise ValueError(f"not canonical UTC timestamp: {s!r}")
     year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
-    off = m.group(7)
     if not (1 <= mon <= 12 and 1 <= day <= 31 and hr <= 23
             and mi <= 59 and se <= 59):
         raise ValueError(f"not canonical UTC timestamp (out of range): {s!r}")
-    if off == "Z":
-        tz = timezone.utc
-    else:
-        sign = 1 if off[0] == "+" else -1
-        oh, om = int(off[1:3]), int(off[4:6])
-        # Real zone offsets top out at +14:00; anything beyond is not a
-        # spelling of an instant we accept.
-        if oh > 14 or om > 59:
-            raise ValueError(f"not canonical UTC timestamp (bad offset): {s!r}")
-        tz = timezone(sign * timedelta(hours=oh, minutes=om))
+    # B4: the only surviving spellings are UTC — no offset arithmetic.
+    tz = timezone.utc
     try:
         return datetime(year, mon, day, hr, mi, se, tzinfo=tz)
     except ValueError:
