@@ -1165,8 +1165,11 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
 
         # Step 4: the binding must be live — expired names read as absent.
         # Chronological, not lexicographic: see _parse_claim_time.
+        # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
+        # row reads as absent, never live.
         try:
             live = _parse_claim_time(expires_at) > datetime.now(timezone.utc)
+            _parse_claim_time(issued_at)
         except ValueError:
             return None
         if not live:
@@ -1375,9 +1378,12 @@ def ingest_gossiped_binding(binding: dict) -> str:
         # Chronological expiry, twin of the claim route's gate: string
         # comparison would resurrect hours-dead "+05:00" bindings. An
         # unparseable expiry is malformed — fail-closed, never guessed.
+        # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
+        # row reads as absent, never wins, never goes live.
         try:
             if _parse_claim_time(expires_at) <= datetime.now(timezone.utc):
                 return "dropped-expired"
+            _parse_claim_time(issued_at)
         except ValueError:
             return "dropped-malformed"
         new = {"name": name, "node_pubkey": node_pubkey,
@@ -1762,12 +1768,23 @@ def _names_gossip_out() -> int:
         bindings = conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature "
             "FROM name_bindings").fetchall()
-    now = _now()
-    payloads = [
-        {"name": r["name"], "node_pubkey": r["node_pubkey"],
-         "issued_at": r["issued_at"], "expires_at": r["expires_at"],
-         "signature": r["signature"]}
-        for r in bindings if str(r["expires_at"] or "") > now]
+    # Floor fix 5 (v0.6.3): chronological, never lexicographic — a "+05:00"
+    # hours-dead expiry sorts AFTER a "+00:00" now as a string and would be
+    # gossiped as live. Unparseable rows (naive, date-only, garbage) are
+    # never gossiped: they read as absent.
+    now_dt = datetime.now(timezone.utc)
+    payloads = []
+    for r in bindings:
+        try:
+            if _parse_claim_time(str(r["expires_at"])) <= now_dt:
+                continue
+            _parse_claim_time(str(r["issued_at"]))  # validates; unparseable skips
+        except ValueError:
+            continue
+        payloads.append(
+            {"name": r["name"], "node_pubkey": r["node_pubkey"],
+             "issued_at": r["issued_at"], "expires_at": r["expires_at"],
+             "signature": r["signature"]})
     if not payloads:
         return 0
     payloads = payloads[:NAMES_GOSSIP_BATCH_CAP]
