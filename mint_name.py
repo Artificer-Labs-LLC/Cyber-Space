@@ -41,6 +41,35 @@ _LABEL_MAX = 63
 _DEFAULT_EXPIRY_DAYS = 730
 
 
+def _write_secret(path, text, overwrite=False):
+    """Write a secret file that is never world-readable, even briefly.
+
+    write_text() + chmod() leaves a window (default umask) where the
+    file sits at 0644. O_CREAT with mode 0o600 closes it: the file is
+    born with no group/other bits (mode & ~umask can only narrow
+    further, never widen). Without overwrite, O_EXCL refuses an existing
+    path (no half-written secret over a live key). With overwrite, the
+    write lands on a born-600 temp sibling + os.replace, so the live
+    path is never half-written either. Content is the caller's text
+    byte-for-byte.
+    """
+    path = Path(path)
+    if overwrite and path.exists():
+        tmp = Path(str(path) + ".tmp")
+        _write_secret(tmp, text)
+        os.replace(tmp, path)
+        return
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    fd = os.open(path, flags, 0o600)
+    try:
+        data = text.encode("utf-8")
+        written = 0
+        while written < len(data):
+            written += os.write(fd, data[written:])
+    finally:
+        os.close(fd)
+
+
 def _valid_label(label: str) -> bool:
     """Client-side fast check; mirrors core._valid_name_label (server decides)."""
     if not label or len(label) > _LABEL_MAX:
@@ -113,8 +142,7 @@ def main(argv: list[str]) -> int:
         print(f"Loading existing name key from {key_path}")
     else:
         priv = os.urandom(32)
-        key_path.write_text(priv.hex())
-        os.chmod(key_path, 0o600)
+        _write_secret(key_path, priv.hex())
         print(f"Generated name keypair; private key written to {key_path} (0600)")
     pub = publickey(priv)
     pub_hex = pub.hex().lower()
@@ -156,7 +184,8 @@ def main(argv: list[str]) -> int:
     env_dir = Path(opts.get("--env-dir", str(home / "hostd")))
     env_dir.mkdir(parents=True, exist_ok=True)
     env_path = env_dir / f"{label}.env"
-    env_path.write_text(
+    _write_secret(
+        env_path,
         f"# hostd env for {label}.cyberspace — install as /etc/cybernet-hostd/hostd.env (0600)\n"
         f"# Holds the NAME KEY only. Never the master identity. Guard this file.\n"
         f"CYBERNET_HOSTED_NAME={label}\n"
@@ -167,8 +196,8 @@ def main(argv: list[str]) -> int:
         f"# CYBERNET_RELAY_URL=\n"
         f"# CYBERNET_RELAY_PUBKEY=\n"
         f"# CYBERNET_RELAY_TOKEN=\n"
-        f"# CYBERNET_PUBLIC_URL=\n")
-    os.chmod(env_path, 0o600)
+        f"# CYBERNET_PUBLIC_URL=\n",
+        overwrite=True)
     print(f"hostd env written to {env_path} (0600) — "
           f"run: python -m resolver.host  (see deploy/hostd.service)")
     print(f"\n{label}.cyberspace is yours. The namespace grows by one.")

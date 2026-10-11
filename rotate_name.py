@@ -56,6 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign, checkvalid  # noqa: E402
+from mint_name import _write_secret  # noqa: E402  born-600 secret writes
 
 _LABEL_MAX = 63
 _DEFAULT_MIRROR = "http://127.0.0.1:8471"
@@ -255,8 +256,8 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
                        "old_pubkey — continuity broken, refuse")
     # Atomic close: old key -> .prev (kept for chain-walking history),
     # .next -> the name key. os.replace is never a half-written key.
-    prev_path.write_text(old_priv.hex() + "\n")
-    os.chmod(prev_path, 0o600)
+    prev_path = home / f"{label}-name.key.prev"
+    _write_secret(prev_path, old_priv.hex() + "\n")
     os.replace(next_path, key_path)
     os.chmod(key_path, 0o600)
     return True, (f"promoted {label}.cyberspace: "
@@ -463,8 +464,7 @@ def main(argv: list[str]) -> int:
     rec_path = home / f"{label}-rotate.json"
     rec_path.write_text(json.dumps(record, indent=2) + "\n")
     next_path = home / f"{label}-name.key.next"
-    next_path.write_text(new_priv.hex())
-    os.chmod(next_path, 0o600)
+    _write_secret(next_path, new_priv.hex())
     print(f"valid: {label}.cyberspace rotation minted and self-verified")
     print(f"  old key {record['old_pubkey'][:16]}... -> "
           f"new key {record['new_pubkey'][:16]}...")
