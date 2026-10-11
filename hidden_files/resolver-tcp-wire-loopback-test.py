@@ -1,1 +1,262 @@
-IiIicmVzb2x2ZXIgVENQIHdpcmUtbG9vcGJhY2sgdGVzdCDigJQgdGhlIHJlYWwgRE5TLW92ZXItVENQIHdpcmUgcGF0aC4KClRoZSBzaWJsaW5nIFVEUCBoYXJuZXNzIChyZXNvbHZlci13aXJlLWxvb3BiYWNrLXRlc3QucHkpIGlzIERFRkVSUkVEIGluCnRoaXMgc2FuZGJveDogVURQIHNlbmR0byBpcyBibG9ja2VkIGF0IHRoZSBzeXNjYWxsIGxheWVyIChFUEVSTSksIGV2ZW4gb24KbG9vcGJhY2suIFRDUCBpcyBub3QuIFNvIHRoaXMgaGFybmVzcyBkcml2ZXMgdGhlIFJFQUwgZGFlbW9uIGxvb3Ag4oCUCmRhZW1vbi5ydW4oKSBpbiB0aGUgTUFJTiB0aHJlYWQgKGl0IGluc3RhbGxzIFNJR0lOVC9TSUdURVJNIGhhbmRsZXJzLAp3aGljaCBvbmx5IHRoZSBtYWluIHRocmVhZCBtYXkgZG8pIOKAlCB0aGUgUkVBTCBjbGFpbSBlbmRwb2ludCArIHJlc29sdmVyCnZpYSBtaW50X25hbWUsIHRoZSBSRUFMIGhvc3RkIGFubm91bmNlIChob3N0LmFubm91bmNlX29uY2UpLCBhbmQgcmVhbApsZW5ndGgtcHJlZml4ZWQgVENQIEROUyBmcmFtZXMgb24gbG9vcGJhY2s6IHRoZSBzaXgtc3RlcApyZXNvbHZlX2N5YmVyc3BhY2UoKSBydW5uaW5nIGVuZCB0byBlbmQgZm9yIC5jeWJlcnNwYWNlIHF1ZXJpZXMsCmZhaWwtY2xvc2VkIGNhc2VzIG9uIHRoZSB3aXJlLgoKVGhlIGNsaWVudCBjYXNlcyBydW4gaW4gYSB3b3JrZXIgdGhyZWFkOyB3aGVuIHRoZXkgZmluaXNoIGl0IGRlbGl2ZXJzClNJR1RFUk0gdG8gdGhlIHByb2Nlc3MsIGFuZCB0aGUgUkVBTCBzdG9wIGhhbmRsZXIgZW5kcyB0aGUgZGFlbW9uIGxvb3AKZXhhY3RseSBhcyBhIHJlYWwgU0lHVEVSTSB3b3VsZC4KCiAgMS4gd2lyZXRlc3QuY3liZXJzcGFjZSBBICAgICAgLT4gTk9FUlJPUiB3aXRoID49MSBBIGFuc3dlciAocmVhbCBjbGFpbQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICArIHJlYWwgbmFtZS1rZXkgYW5ub3VuY2UgKyBsaXZlIHZlcmlmeSkKICAyLiB6ei1qdW5rLmN5YmVyc3BhY2UgQSAgICAgICAtPiBOWERPTUFJTiwgemVybyBhbnN3ZXJzIChmYWlsLWNsb3NlZCkKICAzLiB3aXJldGVzdC5jeWJlcnNwYWNlIEFBQUEgICAtPiBOT0RBVEEgKHY0LW9ubHkgbm9kZSwgbm8gZ3Vlc3MpCiAgNC4gdHdvIHF1ZXJpZXMsIG9uZSBjb25uZWN0aW9uIC0+IGJvdGggYW5zd2VyZWQgKFJGQyA3NzY2IHJldXNlKQogIDUuIGdhcmJhZ2UgZnJhbWUgICAgICAgICAgICAgIC0+IFNFUlZGQUlMIGVjaG9pbmcgdGhlIHR4aWQgKG5ldmVyIHNpbGVudCkKICA2LiBleGFtcGxlLmNvbSBBIChvZmYtem9uZSkgICAtPiBTRVJWRkFJTCBlY2hvaW5nIHR4aWQgKHVwc3RyZWFtIGRlYWQgaW4KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgc2FuZGJveDsgZGFlbW9uIGZhaWxzIGNsb3NlZCwgbm8gaGFuZykKClRlc3Qtb25seSBhbGxvd2FuY2VzIChzYW1lIGRvY3RyaW5lIGFzIHRoZSBVRFAgaGFybmVzcyk6IHRoZSAxMjcuMC4wLjEKdGVzdCBtaXJyb3Ivbm9kZSBpcyBhbGxvdy1saXN0ZWQgdGhyb3VnaCB0aGUgU1NSRiBnYXRlIGluLXByb2Nlc3MKKGNvcmUuX3JlamVjdF9ub25wdWJsaWNfbm9kZV91cmwgcGF0Y2hlZCksIGFuZCBDWUJFUk5FVF9QVUJMSUNfVVJMIHBvaW50cwphdCB0aGUgdGVzdCBub2RlIHNvIHRoZSBhbm5vdW5jZSBjYXJyaWVzIGhvbmVzdCByZWFjaC4gVGhlIFRDUCBmcmFtZXMsCnRoZSBkYWVtb24gbG9vcCwgdGhlIHNpeC1zdGVwLCBhbmQgdGhlIHNpZ25hbCBoYW5kbGluZyBhcmUgYWxsIHJlYWwuCgpSdW46IGNkIH4vd29ya3NwYWNlL2N5YmVybmV0ICYmIC4vdmVudi9iaW4vcHl0aG9uIGhpZGRlbl9maWxlcy9yZXNvbHZlci10Y3Atd2lyZS1sb29wYmFjay10ZXN0LnB5CiIiIgoKaW1wb3J0IG9zCmltcG9ydCByYW5kb20KaW1wb3J0IHNpZ25hbAppbXBvcnQgc3RydWN0CmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCmltcG9ydCB0aHJlYWRpbmcKaW1wb3J0IHRpbWUKaW1wb3J0IHVybGxpYi5yZXF1ZXN0CgpIT01FID0gdGVtcGZpbGUubWtkdGVtcChwcmVmaXg9IndpcmUtaG9tZS0iKQpvcy5lbnZpcm9uWyJIT01FIl0gPSBIT01FICAgICAgICAgICAgICAgICAgICAgICMgbWludF9uYW1lIHdyaXRlcyB1bmRlciB+Ly5jeWJlcnNwYWNlCm9zLmVudmlyb25bIkNZQkVSTkVUX0RCX0RJUiJdID0gdGVtcGZpbGUubWtkdGVtcChwcmVmaXg9IndpcmUtZGItIikKClJFUE8gPSBvcy5wYXRoLmpvaW4ob3MucGF0aC5kaXJuYW1lKG9zLnBhdGguYWJzcGF0aChfX2ZpbGVfXykpLCAiLi4iKQpzeXMucGF0aC5pbnNlcnQoMCwgUkVQTykKCmltcG9ydCB1dmljb3JuICAjIG5vcWE6IEU0MDIKZnJvbSBhcHAgaW1wb3J0IGFwcCAgIyBub3FhOiBFNDAyCmltcG9ydCBjb3JlICAjIG5vcWE6IEU0MDIKaW1wb3J0IG1pbnRfbmFtZSAgIyBub3FhOiBFNDAyCmZyb20gcmVzb2x2ZXIgaW1wb3J0IGRhZW1vbiAgIyBub3FhOiBFNDAyCmZyb20gcmVzb2x2ZXIgaW1wb3J0IGhvc3QgICMgbm9xYTogRTQwMgoKUE9SVCA9IDE4MzgwCk1JUlJPUiA9IGYiaHR0cDovLzEyNy4wLjAuMTp7UE9SVH0iCkROU19QT1JUID0gNTM2MDAKCiMgdGhlIHRlc3Qtb25seSBTU1JGIGFsbG93YW5jZTogdGhlIDEyNy4wLjAuMSB0ZXN0IG1pcnJvci9ub2RlIG9ubHkKX3JlYWxfZ2F0ZSA9IGNvcmUuX3JlamVjdF9ub25wdWJsaWNfbm9kZV91cmwKCgpkZWYgX3Rlc3RfZ2F0ZSh1cmwpOgogICAgaWYgdXJsLnN0YXJ0c3dpdGgoTUlSUk9SKToKICAgICAgICByZXR1cm4gIjEyNy4wLjAuMSIKICAgIHJldHVybiBfcmVhbF9nYXRlKHVybCkKCgpjb3JlLl9yZWplY3Rfbm9ucHVibGljX25vZGVfdXJsID0gX3Rlc3RfZ2F0ZQoKc2VydmVyID0gdXZpY29ybi5TZXJ2ZXIoCiAgICB1dmljb3JuLkNvbmZpZyhhcHAsIGhvc3Q9IjEyNy4wLjAuMSIsIHBvcnQ9UE9SVCwgbG9nX2xldmVsPSJlcnJvciIpCikKdCA9IHRocmVhZGluZy5UaHJlYWQodGFyZ2V0PXNlcnZlci5ydW4sIGRhZW1vbj1UcnVlKQp0LnN0YXJ0KCkKZm9yIF8gaW4gcmFuZ2UoMTAwKToKICAgIHRyeToKICAgICAgICB1cmxsaWIucmVxdWVzdC51cmxvcGVuKE1JUlJPUiArICIvYXBpL3YxL25vZGUiLCB0aW1lb3V0PTEpCiAgICAgICAgYnJlYWsKICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgdGltZS5zbGVlcCgwLjEpCmVsc2U6CiAgICBzeXMuZXhpdCgidGVzdCBub2RlIG5ldmVyIGNhbWUgdXAiKQoKcGFzc2VkID0gZmFpbGVkID0gMAoKCmRlZiBjaGVjayhuYW1lLCBjb25kLCBleHRyYT0iIik6CiAgICBnbG9iYWwgcGFzc2VkLCBmYWlsZWQKICAgIGlmIGNvbmQ6CiAgICAgICAgcGFzc2VkICs9IDEKICAgICAgICBwcmludChmIiAgb2sgIHtuYW1lfSIpCiAgICBlbHNlOgogICAgICAgIGZhaWxlZCArPSAxCiAgICAgICAgcHJpbnQoZiIgIEZBSUwge25hbWV9IHtleHRyYX0iKQoKCkxBQkVMID0gIndpcmV0ZXN0Igpvcy5lbnZpcm9uWyJDWUJFUk5FVF9QVUJMSUNfVVJMIl0gPSBNSVJST1IgICMgaG9uZXN0IHJlYWNoIGZvciB0aGUgYW5ub3VuY2UKcmMgPSBtaW50X25hbWUubWFpbihbTEFCRUwsIE1JUlJPUiwgIi0tZW52LWRpciIsIHRlbXBmaWxlLm1rZHRlbXAocHJlZml4PSJ3aXJlLWVudi0iKV0pCmNoZWNrKCJtaW50IHdpcmV0ZXN0IG5hbWUgb24gdGhlIHJlYWwgY2xhaW0gZW5kcG9pbnQiLCByYyA9PSAwLCBmInJjPXtyY30iKQppZiByYyAhPSAwOgogICAgcHJpbnQoZiJ7cGFzc2VkfSBwYXNzZWQsIHtmYWlsZWR9IGZhaWxlZCIpCiAgICBzeXMuZXhpdCgxKQoKa2V5X3BhdGggPSBvcy5wYXRoLmpvaW4oSE9NRSwgIi5jeWJlcnNwYWNlIiwgZiJ7TEFCRUx9LW5hbWUua2V5IikKd2l0aCBvcGVuKGtleV9wYXRoKSBhcyBmOgogICAgbmFtZV9wcml2ID0gZi5yZWFkKCkuc3RyaXAoKQphbm5vdW5jZWQgPSBob3N0LmFubm91bmNlX29uY2UoTUlSUk9SLCBMQUJFTCwgbmFtZV9wcml2KQpjaGVjaygibmFtZS1rZXkgcmVhY2ggYW5ub3VuY2UgYWNjZXB0ZWQgYnkgdGhlIG1pcnJvciIsIGFubm91bmNlZCkKCmltcG9ydCBzb2NrZXQgICMgbm9xYTogRTQwMgoKCmRlZiBfYnVpbGRfcXVlcnkobmFtZSwgcXR5cGUpOgogICAgdHhpZCA9IHJhbmRvbS5nZXRyYW5kYml0cygxNikKICAgIGhkciA9IHN0cnVjdC5wYWNrKCI+SEhISEhIIiwgdHhpZCwgMHgwMTAwLCAxLCAwLCAwLCAwKQogICAgcW5hbWUgPSBiIiIuam9pbigKICAgICAgICBieXRlcyhbbGVuKHApXSkgKyBwLmVuY29kZSgiYXNjaWkiKSBmb3IgcCBpbiBuYW1lLnNwbGl0KCIuIikKICAgICkgKyBiIlx4MDAiCiAgICBwa3QgPSBoZHIgKyBxbmFtZSArIHN0cnVjdC5wYWNrKCI+SEgiLCBxdHlwZSwgMSkKICAgIHJldHVybiB0eGlkLCBzdHJ1Y3QucGFjaygiPkgiLCBsZW4ocGt0KSkgKyBwa3QKCgpkZWYgX3JlYWRfcmVwbHkoc29jayk6CiAgICBoZWFkID0gYiIiCiAgICB3aGlsZSBsZW4oaGVhZCkgPCAyOgogICAgICAgIGNodW5rID0gc29jay5yZWN2KDIgLSBsZW4oaGVhZCkpCiAgICAgICAgaWYgbm90IGNodW5rOgogICAgICAgICAgICByYWlzZSBBc3NlcnRpb25FcnJvcigiRU9GIHdhaXRpbmcgZm9yIHJlcGx5IGxlbmd0aCIpCiAgICAgICAgaGVhZCArPSBjaHVuawogICAgKG4sKSA9IHN0cnVjdC51bnBhY2soIj5IIiwgaGVhZCkKICAgIGJvZHkgPSBiIiIKICAgIHdoaWxlIGxlbihib2R5KSA8IG46CiAgICAgICAgY2h1bmsgPSBzb2NrLnJlY3YobiAtIGxlbihib2R5KSkKICAgICAgICBpZiBub3QgY2h1bms6CiAgICAgICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKCJFT0Ygd2FpdGluZyBmb3IgcmVwbHkgYm9keSIpCiAgICAgICAgYm9keSArPSBjaHVuawogICAgcmV0dXJuIGJvZHkKCgpkZWYgX2RlY29kZShyZXNwLCB0eGlkKToKICAgIHJ0eGlkLCBmbGFncywgX3FkLCBhbiwgX25zLCBfYXIgPSBzdHJ1Y3QudW5wYWNrKCI+SEhISEhIIiwgcmVzcFs6MTJdKQogICAgcmV0dXJuIHJ0eGlkLCBmbGFncyAmIDB4MDAwRiwgYW4sIHR4aWQKCgpkZWYgcXVlcnkobmFtZSwgcXR5cGUpOgogICAgIiIiT25lIHF1ZXJ5LCBpdHMgb3duIGNvbm5lY3Rpb24g4oCUIHRoZSBjb21tb24gY2xpZW50IHNoYXBlLiIiIgogICAgdHhpZCwgZnJhbWUgPSBfYnVpbGRfcXVlcnkobmFtZSwgcXR5cGUpCiAgICB3aXRoIHNvY2tldC5jcmVhdGVfY29ubmVjdGlvbigoIjEyNy4wLjAuMSIsIEROU19QT1JUKSwgdGltZW91dD00LjApIGFzIHM6CiAgICAgICAgcy5zZXR0aW1lb3V0KDQuMCkKICAgICAgICBzLnNlbmRhbGwoZnJhbWUpCiAgICAgICAgcmVzcCA9IF9yZWFkX3JlcGx5KHMpCiAgICByZXR1cm4gX2RlY29kZShyZXNwLCB0eGlkKQoKCmRlZiBjYXNlXzEoKToKICAgIHJ0eGlkLCByY29kZSwgYW4sIHR4aWQgPSBxdWVyeShmIntMQUJFTH0uY3liZXJzcGFjZSIsIDEpCiAgICBjaGVjaygid2lyZXRlc3QuY3liZXJzcGFjZSBBIC0+IE5PRVJST1IgKyA+PTEgYW5zd2VyIiwKICAgICAgICAgIHJ0eGlkID09IHR4aWQgYW5kIHJjb2RlID09IDAgYW5kIGFuID49IDEsCiAgICAgICAgICBmInJjb2RlPXtyY29kZX0gYW49e2FufSB0eGlkX29rPXtydHhpZCA9PSB0eGlkfSIpCgoKZGVmIGNhc2VfMigpOgogICAganVuayA9ICJ6ei0iICsgIiIuam9pbihyYW5kb20uY2hvaWNlKCJhYmNkZWZnaGlqIikgZm9yIF8gaW4gcmFuZ2UoMTApKQogICAgcnR4aWQsIHJjb2RlLCBhbiwgdHhpZCA9IHF1ZXJ5KGYie2p1bmt9LmN5YmVyc3BhY2UiLCAxKQogICAgY2hlY2soImp1bmsgbGFiZWwgLT4gTlhET01BSU4gd2l0aCB6ZXJvIGFuc3dlcnMiLAogICAgICAgICAgcnR4aWQgPT0gdHhpZCBhbmQgcmNvZGUgPT0gMyBhbmQgYW4gPT0gMCwKICAgICAgICAgIGYicmNvZGU9e3Jjb2RlfSBhbj17YW59IHR4aWRfb2s9e3J0eGlkID09IHR4aWR9IikKCgpkZWYgY2FzZV8zKCk6CiAgICBydHhpZCwgcmNvZGUsIGFuLCB0eGlkID0gcXVlcnkoZiJ7TEFCRUx9LmN5YmVyc3BhY2UiLCAyOCkKICAgIGNoZWNrKCJ3aXJldGVzdC5jeWJlcnNwYWNlIEFBQUEgLT4gTk9EQVRBIChyY29kZSAwLCBubyBhbnN3ZXJzKSIsCiAgICAgICAgICBydHhpZCA9PSB0eGlkIGFuZCByY29kZSA9PSAwIGFuZCBhbiA9PSAwLAogICAgICAgICAgZiJyY29kZT17cmNvZGV9IGFuPXthbn0gdHhpZF9vaz17cnR4aWQgPT0gdHhpZH0iKQoKCmRlZiBjYXNlXzQoKToKICAgIHR4aWQxLCBmcmFtZTEgPSBfYnVpbGRfcXVlcnkoZiJ7TEFCRUx9LmN5YmVyc3BhY2UiLCAxKQogICAgdHhpZDIsIGZyYW1lMiA9IF9idWlsZF9xdWVyeSgienotanVuazIuY3liZXJzcGFjZSIsIDEpCiAgICB3aXRoIHNvY2tldC5jcmVhdGVfY29ubmVjdGlvbigoIjEyNy4wLjAuMSIsIEROU19QT1JUKSwgdGltZW91dD00LjApIGFzIHM6CiAgICAgICAgcy5zZXR0aW1lb3V0KDQuMCkKICAgICAgICBzLnNlbmRhbGwoZnJhbWUxICsgZnJhbWUyKSAgIyBwaXBlbGluZWQgb24gb25lIGNvbm5lY3Rpb24KICAgICAgICByMSA9IF9yZWFkX3JlcGx5KHMpCiAgICAgICAgcjIgPSBfcmVhZF9yZXBseShzKQogICAgdDEsIHJjMSwgYW4xLCBlMSA9IF9kZWNvZGUocjEsIHR4aWQxKQogICAgdDIsIHJjMiwgYW4yLCBlMiA9IF9kZWNvZGUocjIsIHR4aWQyKQogICAgY2hlY2soInR3byBwaXBlbGluZWQgcXVlcmllcyBvbiBvbmUgVENQIGNvbm5lY3Rpb24gLT4gYm90aCBhbnN3ZXJlZCIsCiAgICAgICAgICB0MSA9PSBlMSBhbmQgcmMxID09IDAgYW5kIGFuMSA+PSAxIGFuZCB0MiA9PSBlMiBhbmQgcmMyID09IDMsCiAgICAgICAgICBmInIxKHJjPXtyYzF9IGFuPXthbjF9KSByMihyYz17cmMyfSkiKQoKCmRlZiBjYXNlXzUoKToKICAgIHdpdGggc29ja2V0LmNyZWF0ZV9jb25uZWN0aW9uKCgiMTI3LjAuMC4xIiwgRE5TX1BPUlQpLCB0aW1lb3V0PTQuMCkgYXMgczoKICAgICAgICBzLnNldHRpbWVvdXQoNC4wKQogICAgICAgIHJhdyA9IGIiXHgxMlx4MzRqdW5rLWJ5dGVzLW5vdC1kbnMiCiAgICAgICAgcy5zZW5kYWxsKHN0cnVjdC5wYWNrKCI+SCIsIGxlbihyYXcpKSArIHJhdykKICAgICAgICByZXNwID0gX3JlYWRfcmVwbHkocykKICAgIHJ0eGlkLCBmbGFncyA9IHN0cnVjdC51bnBhY2soIj5ISCIsIHJlc3BbOjRdKQogICAgY2hlY2soImdhcmJhZ2UgZnJhbWUgLT4gU0VSVkZBSUwgd2l0aCB0eGlkIGVjaG8iLAogICAgICAgICAgcnR4aWQgPT0gMHgxMjM0IGFuZCAoZmxhZ3MgJiAweDAwMEYpID09IDIsIGYidHhpZD17cnR4aWQ6I3h9IikKCgpkZWYgY2FzZV82KCk6CiAgICBydHhpZCwgcmNvZGUsIGFuLCB0eGlkID0gcXVlcnkoImV4YW1wbGUuY29tIiwgMSkKICAgIGNoZWNrKCJvZmYtem9uZSBxdWVyeSAtPiBTRVJWRkFJTCB3aXRoIHR4aWQgZWNobyAoZGVhZCB1cHN0cmVhbSkiLAogICAgICAgICAgcnR4aWQgPT0gdHhpZCBhbmQgcmNvZGUgPT0gMiwgZiJyY29kZT17cmNvZGV9IHR4aWRfb2s9e3J0eGlkID09IHR4aWR9IikKCgpkZWYgY2xpZW50X21haW4oKToKICAgICMgd2FpdCBmb3IgdGhlIGRhZW1vbidzIFRDUCBmYWNlIHRvIGFjY2VwdCwgdGhlbiBydW4gdGhlIHdpcmUgY2FzZXMKICAgIGZvciBfIGluIHJhbmdlKDEwMCk6CiAgICAgICAgdHJ5OgogICAgICAgICAgICBzID0gc29ja2V0LmNyZWF0ZV9jb25uZWN0aW9uKCgiMTI3LjAuMC4xIiwgRE5TX1BPUlQpLCB0aW1lb3V0PTEpCiAgICAgICAgICAgIHMuY2xvc2UoKQogICAgICAgICAgICBicmVhawogICAgICAgIGV4Y2VwdCBPU0Vycm9yOgogICAgICAgICAgICB0aW1lLnNsZWVwKDAuMSkKICAgIGVsc2U6CiAgICAgICAgY2hlY2soImRhZW1vbiBUQ1AgZmFjZSBjYW1lIHVwIiwgRmFsc2UpCiAgICAgICAgb3Mua2lsbChvcy5nZXRwaWQoKSwgc2lnbmFsLlNJR1RFUk0pCiAgICAgICAgcmV0dXJuCiAgICBmb3IgbmFtZSwgZm4gaW4gWygid2lyZXRlc3QuY3liZXJzcGFjZSBBIiwgY2FzZV8xKSwKICAgICAgICAgICAgICAgICAgICAgKCJqdW5rIGxhYmVsIE5YRE9NQUlOIiwgY2FzZV8yKSwKICAgICAgICAgICAgICAgICAgICAgKCJ3aXJldGVzdC5jeWJlcnNwYWNlIEFBQUEiLCBjYXNlXzMpLAogICAgICAgICAgICAgICAgICAgICAoInBpcGVsaW5lZCByZXVzZSIsIGNhc2VfNCksCiAgICAgICAgICAgICAgICAgICAgICgiZ2FyYmFnZSBmcmFtZSIsIGNhc2VfNSksCiAgICAgICAgICAgICAgICAgICAgICgib2ZmLXpvbmUgcXVlcnkiLCBjYXNlXzYpXToKICAgICAgICB0cnk6CiAgICAgICAgICAgIGZuKCkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGV4YzoKICAgICAgICAgICAgY2hlY2sobmFtZSwgRmFsc2UsIGYicmFpc2VkIHtleGMhcn0iKQogICAgb3Mua2lsbChvcy5nZXRwaWQoKSwgc2lnbmFsLlNJR1RFUk0pICAjIHRoZSByZWFsIHN0b3AgcGF0aCBlbmRzIHRoZSBsb29wCgoKb3MuZW52aXJvblsiQ1lCRVJORVRfTUlSUk9SX1VSTCJdID0gTUlSUk9SCm9zLmVudmlyb25bIkNZQkVSTkVUX1JFU09MVkVSX0JJTkQiXSA9ICIxMjcuMC4wLjEiCm9zLmVudmlyb25bIkNZQkVSTkVUX1JFU09MVkVSX1BPUlQiXSA9IHN0cihETlNfUE9SVCkKCmN0ID0gdGhyZWFkaW5nLlRocmVhZCh0YXJnZXQ9Y2xpZW50X21haW4sIGRhZW1vbj1UcnVlKQpjdC5zdGFydCgpCmRhZW1vbi5ydW4oKSAgIyBtYWluIHRocmVhZDogcmVhbCBsb29wLCByZWFsIHNpZ25hbCBoYW5kbGVycywgcmV0dXJucyBvbiBTSUdURVJNCmN0LmpvaW4odGltZW91dD0xMCkKCnByaW50KGYiXG57cGFzc2VkfSBwYXNzZWQsIHtmYWlsZWR9IGZhaWxlZCIpCnN5cy5leGl0KDEgaWYgZmFpbGVkIGVsc2UgMCkK
+"""resolver TCP wire-loopback test — the real DNS-over-TCP wire path.
+
+The sibling UDP harness (resolver-wire-loopback-test.py) is DEFERRED in
+this sandbox: UDP sendto is blocked at the syscall layer (EPERM), even on
+loopback. TCP is not. So this harness drives the REAL daemon loop —
+daemon.run() in the MAIN thread (it installs SIGINT/SIGTERM handlers,
+which only the main thread may do) — the REAL claim endpoint + resolver
+via mint_name, the REAL hostd announce (host.announce_once), and real
+length-prefixed TCP DNS frames on loopback: the six-step
+resolve_cyberspace() running end to end for .cyberspace queries,
+fail-closed cases on the wire.
+
+The client cases run in a worker thread; when they finish it delivers
+SIGTERM to the process, and the REAL stop handler ends the daemon loop
+exactly as a real SIGTERM would.
+
+  1. wiretest.cyberspace A      -> NOERROR with >=1 A answer (real claim
+                                 + real name-key announce + live verify)
+  2. zz-junk.cyberspace A       -> NXDOMAIN, zero answers (fail-closed)
+  3. wiretest.cyberspace AAAA   -> NODATA (v4-only node, no guess)
+  4. two queries, one connection -> both answered (RFC 7766 reuse)
+  5. garbage frame              -> SERVFAIL echoing the txid (never silent)
+  6. example.com A (off-zone)   -> SERVFAIL echoing txid (upstream dead in
+                                 sandbox; daemon fails closed, no hang)
+
+Test-only allowances (same doctrine as the UDP harness): the 127.0.0.1
+test mirror/node is allow-listed through the SSRF gate in-process
+(core._reject_nonpublic_node_url patched), and CYBERNET_PUBLIC_URL points
+at the test node so the announce carries honest reach. The TCP frames,
+the daemon loop, the six-step, and the signal handling are all real.
+
+Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/resolver-tcp-wire-loopback-test.py
+"""
+
+import os
+import random
+import signal
+import struct
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
+
+HOME = tempfile.mkdtemp(prefix="wire-home-")
+os.environ["HOME"] = HOME                      # mint_name writes under ~/.cyberspace
+os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="wire-db-")
+
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, REPO)
+
+import uvicorn  # noqa: E402
+from app import app  # noqa: E402
+import core  # noqa: E402
+import mint_name  # noqa: E402
+from resolver import daemon  # noqa: E402
+from resolver import host  # noqa: E402
+
+PORT = 18380
+MIRROR = f"http://127.0.0.1:{PORT}"
+DNS_PORT = 53600
+
+# the test-only SSRF allowance: the 127.0.0.1 test mirror/node only
+_real_gate = core._reject_nonpublic_node_url
+
+
+def _test_gate(url):
+    if url.startswith(MIRROR):
+        return "127.0.0.1"
+    return _real_gate(url)
+
+
+core._reject_nonpublic_node_url = _test_gate
+
+server = uvicorn.Server(
+    uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="error")
+)
+t = threading.Thread(target=server.run, daemon=True)
+t.start()
+for _ in range(100):
+    try:
+        urllib.request.urlopen(MIRROR + "/api/v1/node", timeout=1)
+        break
+    except Exception:
+        time.sleep(0.1)
+else:
+    sys.exit("test node never came up")
+
+passed = failed = 0
+
+
+def check(name, cond, extra=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  ok  {name}")
+    else:
+        failed += 1
+        print(f"  FAIL {name} {extra}")
+
+
+LABEL = "wiretest"
+os.environ["CYBERNET_PUBLIC_URL"] = MIRROR  # honest reach for the announce
+rc = mint_name.main([LABEL, MIRROR, "--env-dir", tempfile.mkdtemp(prefix="wire-env-")])
+check("mint wiretest name on the real claim endpoint", rc == 0, f"rc={rc}")
+if rc != 0:
+    print(f"{passed} passed, {failed} failed")
+    sys.exit(1)
+
+key_path = os.path.join(HOME, ".cyberspace", f"{LABEL}-name.key")
+with open(key_path) as f:
+    name_priv = f.read().strip()
+announced = host.announce_once(MIRROR, LABEL, name_priv)
+check("name-key reach announce accepted by the mirror", announced)
+
+import socket  # noqa: E402
+
+
+def _build_query(name, qtype):
+    txid = random.getrandbits(16)
+    hdr = struct.pack(">HHHHHH", txid, 0x0100, 1, 0, 0, 0)
+    qname = b"".join(
+        bytes([len(p)]) + p.encode("ascii") for p in name.split(".")
+    ) + b"\x00"
+    pkt = hdr + qname + struct.pack(">HH", qtype, 1)
+    return txid, struct.pack(">H", len(pkt)) + pkt
+
+
+def _read_reply(sock):
+    head = b""
+    while len(head) < 2:
+        chunk = sock.recv(2 - len(head))
+        if not chunk:
+            raise AssertionError("EOF waiting for reply length")
+        head += chunk
+    (n,) = struct.unpack(">H", head)
+    body = b""
+    while len(body) < n:
+        chunk = sock.recv(n - len(body))
+        if not chunk:
+            raise AssertionError("EOF waiting for reply body")
+        body += chunk
+    return body
+
+
+def _decode(resp, txid):
+    rtxid, flags, _qd, an, _ns, _ar = struct.unpack(">HHHHHH", resp[:12])
+    return rtxid, flags & 0x000F, an, txid, bool(flags & 0x0400)
+
+
+def _aa(name, is_aa, extra=""):
+    check(f"{name} — AA bit set (extension contract)", is_aa, extra)
+
+
+def query(name, qtype):
+    """One query, its own connection — the common client shape."""
+    txid, frame = _build_query(name, qtype)
+    with socket.create_connection(("127.0.0.1", DNS_PORT), timeout=4.0) as s:
+        s.settimeout(4.0)
+        s.sendall(frame)
+        resp = _read_reply(s)
+    return _decode(resp, txid)
+
+
+def case_1():
+    rtxid, rcode, an, txid, aa = query(f"{LABEL}.cyberspace", 1)
+    check("wiretest.cyberspace A -> NOERROR + >=1 answer",
+          rtxid == txid and rcode == 0 and an >= 1,
+          f"rcode={rcode} an={an} txid_ok={rtxid == txid}")
+    _aa("wiretest.cyberspace A", aa, f"rcode={rcode}")
+
+
+def case_2():
+    junk = "zz-" + "".join(random.choice("abcdefghij") for _ in range(10))
+    rtxid, rcode, an, txid, aa = query(f"{junk}.cyberspace", 1)
+    check("junk label -> NXDOMAIN with zero answers",
+          rtxid == txid and rcode == 3 and an == 0,
+          f"rcode={rcode} an={an} txid_ok={rtxid == txid}")
+    _aa("junk label NXDOMAIN", aa, f"rcode={rcode}")
+
+
+def case_3():
+    rtxid, rcode, an, txid, aa = query(f"{LABEL}.cyberspace", 28)
+    check("wiretest.cyberspace AAAA -> NODATA (rcode 0, no answers)",
+          rtxid == txid and rcode == 0 and an == 0,
+          f"rcode={rcode} an={an} txid_ok={rtxid == txid}")
+    _aa("wiretest.cyberspace AAAA NODATA", aa, f"rcode={rcode}")
+
+
+def case_4():
+    txid1, frame1 = _build_query(f"{LABEL}.cyberspace", 1)
+    txid2, frame2 = _build_query("zz-junk2.cyberspace", 1)
+    with socket.create_connection(("127.0.0.1", DNS_PORT), timeout=4.0) as s:
+        s.settimeout(4.0)
+        s.sendall(frame1 + frame2)  # pipelined on one connection
+        r1 = _read_reply(s)
+        r2 = _read_reply(s)
+    t1, rc1, an1, e1, aa1 = _decode(r1, txid1)
+    t2, rc2, an2, e2, aa2 = _decode(r2, txid2)
+    check("two pipelined queries on one TCP connection -> both answered",
+          t1 == e1 and rc1 == 0 and an1 >= 1 and t2 == e2 and rc2 == 3,
+          f"r1(rc={rc1} an={an1}) r2(rc={rc2})")
+    _aa("pipelined NOERROR reply", aa1, f"rc={rc1}")
+    _aa("pipelined NXDOMAIN reply", aa2, f"rc={rc2}")
+
+
+def case_5():
+    with socket.create_connection(("127.0.0.1", DNS_PORT), timeout=4.0) as s:
+        s.settimeout(4.0)
+        raw = b"\x12\x34junk-bytes-not-dns"
+        s.sendall(struct.pack(">H", len(raw)) + raw)
+        resp = _read_reply(s)
+    rtxid, flags = struct.unpack(">HH", resp[:4])
+    check("garbage frame -> SERVFAIL with txid echo",
+          rtxid == 0x1234 and (flags & 0x000F) == 2, f"txid={rtxid:#x}")
+    _aa("garbage-frame SERVFAIL", bool(flags & 0x0400), f"txid={rtxid:#x}")
+
+
+def case_6():
+    rtxid, rcode, an, txid, aa = query("example.com", 1)
+    check("off-zone query -> SERVFAIL with txid echo (dead upstream)",
+          rtxid == txid and rcode == 2, f"rcode={rcode} txid_ok={rtxid == txid}")
+    _aa("off-zone SERVFAIL", aa, f"rcode={rcode}")
+
+
+def client_main():
+    # wait for the daemon's TCP face to accept, then run the wire cases
+    for _ in range(100):
+        try:
+            s = socket.create_connection(("127.0.0.1", DNS_PORT), timeout=1)
+            s.close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        check("daemon TCP face came up", False)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return
+    for name, fn in [("wiretest.cyberspace A", case_1),
+                     ("junk label NXDOMAIN", case_2),
+                     ("wiretest.cyberspace AAAA", case_3),
+                     ("pipelined reuse", case_4),
+                     ("garbage frame", case_5),
+                     ("off-zone query", case_6)]:
+        try:
+            fn()
+        except Exception as exc:
+            check(name, False, f"raised {exc!r}")
+    os.kill(os.getpid(), signal.SIGTERM)  # the real stop path ends the loop
+
+
+os.environ["CYBERNET_MIRROR_URL"] = MIRROR
+os.environ["CYBERNET_RESOLVER_BIND"] = "127.0.0.1"
+os.environ["CYBERNET_RESOLVER_PORT"] = str(DNS_PORT)
+
+ct = threading.Thread(target=client_main, daemon=True)
+ct.start()
+daemon.run()  # main thread: real loop, real signal handlers, returns on SIGTERM
+ct.join(timeout=10)
+
+print(f"\n{passed} passed, {failed} failed")
+sys.exit(1 if failed else 0)
