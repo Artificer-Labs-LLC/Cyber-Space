@@ -70,6 +70,19 @@ def _write_secret(path, text, overwrite=False):
         os.close(fd)
 
 
+def _ensure_dir_0700(path):
+    """Create a secret-holding directory at mode 0700, repairing old ones.
+
+    mkdir(exist_ok=True) silently keeps a 0755 dir an older tick created,
+    so chmod is unconditional: the agent home and the hostd env dir must
+    never leak directory metadata (which names an agent holds) to other
+    users. Parents are the operator's: only the leaf we own is touched.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
 def _valid_label(label: str) -> bool:
     """Client-side fast check; mirrors core._valid_name_label (server decides)."""
     if not label or len(label) > _LABEL_MAX:
@@ -132,7 +145,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     home = Path.home() / ".cyberspace"
-    home.mkdir(parents=True, exist_ok=True)
+    _ensure_dir_0700(home)
     key_path = home / f"{label}-name.key"
     if key_path.exists():
         priv = bytes.fromhex(key_path.read_text().strip())
@@ -182,7 +195,7 @@ def main(argv: list[str]) -> int:
     print(f"Verified: {label}.cyberspace resolves to the name key")
 
     env_dir = Path(opts.get("--env-dir", str(home / "hostd")))
-    env_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dir_0700(env_dir)
     env_path = env_dir / f"{label}.env"
     _write_secret(
         env_path,
