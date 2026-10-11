@@ -92,25 +92,31 @@ concentration (the "relay sees the fact of contact" problem) is reduced —
 the point moves every epoch and nobody chose it — but not eliminated.
 Rotating slots and multi-point fan-out stay reserved as the follow-on.
 
-## Frozen descriptor spec (2026-10-09 — fields frozen, code still gated)
+## Frozen descriptor spec (2026-10-09 — fields frozen; code wired, only the public-relay e2e gated)
 
 The derived-point dial strategy, fully specified so code time is pure
-implementation. Rendezvous code still starts only after the relay e2e is
-proven (gate 1); this spec changes no daemon behavior today.
+implementation. The mirror, hoster, dialer, and descriptor halves are
+all WIRED 2026-10-09 (Status below); only the public-relay e2e remains
+gated (gate 1, her call).
 
 Reach entry, name-key-signed in the descriptor:
 
     { "kind": "rendezvous",
       "epoch_len": 3600,
-      "hold_query": "/rendezvous/slots" }
+      "hold_query": "/relay/hold_query" }
 
 - `epoch_len`: seconds per epoch, integer, 60–86400. Default 3600.
   Shorter epochs rotate the point faster (less metadata concentration,
   more hold-open churn); the hoster picks the trade, the client follows.
 - `hold_query`: relative mirror path where a daemon asks a known mirror
-  which derived points it will hold this epoch. GET, query `point`
-  (64 hex point_id); 200 with `{"willing": true, "until": <epoch end>}`
-  or `{"willing": false}`.
+  which derived points are currently held. GET, query `point_id`
+  (64 hex point_id); 200 with `{"held": true}` only for a fresh,
+  registered, still-willing (current-or-previous-epoch) point —
+  everything else reads `{"held": false}`, never a 4xx.
+  (Spec history: the first draft named `/rendezvous/slots` with
+  `{"willing": ...}`; the relay became the meeting surface, so the
+  mirror's `/relay/hold_query` is the frozen path — core.py's
+  `_RENDEZVOUS_HOLD_QUERY` is the canonical reference.)
 
 Point identity, computed identically by hoster and client, no exchange:
 
@@ -144,9 +150,14 @@ Epoch-boundary tolerance (no clock is perfect):
 
 Mirror willingness, interim directory (DHT deferred):
 
-- Mirrors post their willingness as node-info on the node they run:
-  `"rendezvous_willing": true` plus a per-epoch slot cap
-  (`"rendezvous_slots_per_epoch"`, default 256, integer, advertised).
+- Willingness is per-point and epoch-bound, computed by the mirror that
+  holds the points: a point is willing when it is registered (posted with
+  a valid derived `rendezvous_point` + `name_pub` in `POST /relay/register`),
+  still indexed under a live hold-open, and in a willing epoch (current or
+  immediately previous, under the point record's stored `epoch_len`).
+  There is no node-info `rendezvous_willing` flag and no per-epoch slot
+  cap — the interim directory knows the point_id (a bare token) and the
+  fact of contact, never the name. Directory-first, DHT later.
 - A daemon wanting to hold the derived point GETs `hold_query` on the
   mirrors it already knows; the first willing mirror is the meeting
   surface. Both sides hold-open to the same point_id at the same mirror —
@@ -223,7 +234,4 @@ too old to know epoch_len keeps working (record defaults to 3600).
 Harness hidden_files/rendezvous-epochlen-test.py 19/19 on the real
 relay app: 600-math registers and answers willing, the same name's
 3600-math point reads held:false, dialer probe finds the held point
-under the advertised math. Note: the frozen spec's `hold_query:
-"/rendezvous/slots"` was written before the relay became the meeting
-surface — the wired path is the relay's `/relay/hold_query`, and the
-descriptor advertises the wired path.
+under the advertised math.

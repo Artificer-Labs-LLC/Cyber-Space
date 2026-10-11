@@ -51,8 +51,8 @@ the client tries them in order and keeps the first that verifies:
   || epoch_be).hex()`, the name picks before anyone acts; no coordination
   protocol, no trusted third party, fail-closed by the name-key handshake;
   DHT mapping deferred, mirrors publish rendezvous-slot willingness interim
-  (`rendezvous_willing` + slot cap in node info, `hold_query` GET per
-  point_id). WIRED 2026-10-09 (docs/RENDEZVOUS.md): `_reach_build` mints
+  (`hold_query` GET per point_id answers `{"held": true|false}` — per-point
+  epoch willingness, no node-info flag; see docs/RENDEZVOUS.md). WIRED 2026-10-09 (docs/RENDEZVOUS.md): `_reach_build` mints
   the kind when `CYBERNET_RENDEZVOUS=1`; the dialer's `_rendezvous_strategy`
   extracts the hoster's epoch math, `_relay_hold_probe` probes the
   advertised hold_query path under it, and `_relay_open_session` opens the
