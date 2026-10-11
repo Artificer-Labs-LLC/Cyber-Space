@@ -1348,9 +1348,12 @@ def ingest_gossiped_binding(binding: dict) -> str:
     uncontested name is inserted; a contested name goes to
     _name_claim_beats (earlier issued_at wins, ties by lower pubkey,
     same key later re-sign renews). An expired incumbent yields to any
-    valid challenger. Nothing is ever deleted here — expiry is the only
-    garbage collection, and the gossip layer never synthesizes
-    revocations.
+    valid challenger. Expiry is CHRONOLOGICAL (_parse_claim_time), never
+    lexicographic: a "+05:00"-stamped hours-dead binding sorts AFTER a
+    "+00:00" now as a string and would read as live — the claim route
+    already gates this way; the merge half matches it. Nothing is ever
+    deleted here — expiry is the only garbage collection, and the gossip
+    layer never synthesizes revocations.
 
     Returns one of "inserted", "replaced", "kept", "dropped-malformed",
     "dropped-unverifiable", "dropped-expired". Never raises."""
@@ -1369,8 +1372,14 @@ def ingest_gossiped_binding(binding: dict) -> str:
         if not _name_binding_verify(name, node_pubkey, issued_at,
                                     expires_at, signature):
             return "dropped-unverifiable"
-        if expires_at <= _now():
-            return "dropped-expired"
+        # Chronological expiry, twin of the claim route's gate: string
+        # comparison would resurrect hours-dead "+05:00" bindings. An
+        # unparseable expiry is malformed — fail-closed, never guessed.
+        try:
+            if _parse_claim_time(expires_at) <= datetime.now(timezone.utc):
+                return "dropped-expired"
+        except ValueError:
+            return "dropped-malformed"
         new = {"name": name, "node_pubkey": node_pubkey,
                "issued_at": issued_at, "expires_at": expires_at}
         with _db_lock, _db() as conn:
