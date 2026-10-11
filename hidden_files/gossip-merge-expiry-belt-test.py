@@ -2,10 +2,13 @@
 """Belt for the gossip merge-half expiry fix (primitive 1, naming).
 
 ingest_gossiped_binding() compared expiry as a STRING against _now().
-A binding stamped "+05:00" (hours dead) sorts AFTER a "+00:00" now and
-read as live — gossip would INSERT a dead binding the claim route would
-refuse. The fix compares chronologically (_parse_claim_time); unparseable
+The fix compares chronologically (_parse_claim_time); unparseable
 expiry is malformed (fail-closed, never guessed).
+
+B4 note (UTC-only canonical): non-UTC offsets never reach the comparator
+— they are malformed at intake. The old "+05:00 hours-dead string-sorts
+as live" case therefore reads as dropped-malformed; plain-UTC expired
+bindings remain the dropped-expired check.
 
 Runs against a SCRATCH DB (CYBERNET_DB_DIR=tempdir set before import);
 the repo's live cybernet.db is never touched.
@@ -86,16 +89,15 @@ early = mint("belt-contest", k3b, iso_z(NOW - timedelta(hours=5)),
 check("earlier issued_at replaces", core.ingest_gossiped_binding(early),
       "replaced")
 
-# 4: THE BUG CASE — dead binding that string-sorts as live.
-# Chronologically dead (UTC 4.5h ago) but lexicographically AFTER _now():
-# old code returned "inserted"; fixed code must drop-expired.
+# 4: B4 — a non-UTC-offset binding is malformed at intake, never
+# compared. (Old case: "+05:00" hours-dead string-sorted as live;
+# offsets no longer reach the comparator.)
 dead_issued = iso_off(NOW - timedelta(hours=6), 5)
 dead_expires = iso_off(NOW - timedelta(hours=4, minutes=30), 5)
-assert dead_expires > core._now(), "fixture must string-sort as live"
 k4 = os.urandom(32).hex()
-check("hours-dead +05:00 binding dropped-expired",
+check("non-UTC offset binding dropped-malformed (B4)",
       core.ingest_gossiped_binding(mint("belt-dead", k4, dead_issued,
-                                        dead_expires)), "dropped-expired")
+                                        dead_expires)), "dropped-malformed")
 
 # 5: plain dead binding (same shape _now() emits)
 k5 = os.urandom(32).hex()
