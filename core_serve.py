@@ -878,6 +878,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_CANONICAL_TS_RE = None
+
+
+def _canonical_ts_pattern():
+    """Compiled strict canonical-timestamp regex (module-level lazy)."""
+    global _CANONICAL_TS_RE
+    if _CANONICAL_TS_RE is None:
+        import re
+        _CANONICAL_TS_RE = re.compile(
+            r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})$"
+        )
+    return _CANONICAL_TS_RE
+
+
 def _parse_claim_time(s: str) -> datetime:
     """Parse an ISO-8601 claim timestamp to an aware datetime for
     CHRONOLOGICAL comparison. The registry gates (claim liveness,
@@ -888,18 +902,48 @@ def _parse_claim_time(s: str) -> datetime:
     one stamped "-01:00" (an hour in the future) sorts BEFORE and read
     as not-future.
 
+    M-2 (v0.6.3 red-team, Bulwark): the parser accepts EXACTLY the
+    canonical form — `YYYY-MM-DDTHH:MM:SS` with an explicit offset
+    (`Z` or `±HH:MM`) — and nothing else. `datetime.fromisoformat` is
+    NOT used: on Python 3.11+ it accepts ~12 spellings (week dates,
+    space separators, basic format, offsets to +23:59), contradicting
+    the wire contract and behaving differently across Python versions
+    (pre-3.11 rejects `Z`). The strict regex plus manual construction
+    below is version-independent: identical input parses identically
+    on every Python.
+
     Canonical form (allocation rule v0.6.3, floor fix 5): the stamp MUST
     carry an explicit numeric UTC offset ("+00:00", "Z", "+05:00", ...).
-    Naive datetimes and date-only strings are NOT canonical — they raise
-    ValueError and the row reads as ABSENT everywhere: it never wins a
-    comparison (_name_claim_beats), is never live (resolve, serve), is
-    never gossiped (ingest drops it malformed), gets no hold, and is
-    refused at intake with reason expiry-cap. Raises ValueError on any
-    unparseable input — every caller treats that as refusal/absent."""
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        raise ValueError(f"not canonical UTC: no explicit offset: {s!r}")
-    return dt
+    Naive datetimes, date-only strings, week dates, space separators,
+    basic-format stamps, fractional seconds, and out-of-range offsets
+    are NOT canonical — they raise ValueError and the row reads as
+    ABSENT everywhere: it never wins a comparison (_name_claim_beats),
+    is never live (resolve, serve), is never gossiped (ingest drops it
+    malformed), gets no hold, and is refused at intake with reason
+    expiry-cap. Raises ValueError on any unparseable input — every caller
+    treats that as refusal/absent."""
+    m = _canonical_ts_pattern().match(s)
+    if not m:
+        raise ValueError(f"not canonical UTC timestamp: {s!r}")
+    year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
+    off = m.group(7)
+    if not (1 <= mon <= 12 and 1 <= day <= 31 and hr <= 23
+            and mi <= 59 and se <= 59):
+        raise ValueError(f"not canonical UTC timestamp (out of range): {s!r}")
+    if off == "Z":
+        tz = timezone.utc
+    else:
+        sign = 1 if off[0] == "+" else -1
+        oh, om = int(off[1:3]), int(off[4:6])
+        # Real zone offsets top out at +14:00; anything beyond is not a
+        # spelling of an instant we accept.
+        if oh > 14 or om > 59:
+            raise ValueError(f"not canonical UTC timestamp (bad offset): {s!r}")
+        tz = timezone(sign * timedelta(hours=oh, minutes=om))
+    try:
+        return datetime(year, mon, day, hr, mi, se, tzinfo=tz)
+    except ValueError:
+        raise ValueError(f"not canonical UTC timestamp (invalid date): {s!r}")
 
 
 def _cutoff_iso(since: str) -> str:
