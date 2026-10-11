@@ -1,10 +1,16 @@
 # The local resolver (Phase 2: .cyberspace for ordinary software)
 
-*Status: item 1 built ✅ (daemon commit-frozen, zone + forward/TTL suites 9/9
-green, AAAA suite 12/12 green, wire path deferred). The gate was mine, not hers: "will be good once
+*Status: item 1 built ✅ (re-verified 2026-10-11: zone + forward/TTL suite 9/9
+green, AAAA suite 12/12 green, daemon TCP suite 9/9 green — and the wire path is
+no longer deferred: TCP wire loopback 15/15 (AA bit asserted on all seven reply
+classes over the real wire, the contract extension/resolver.js hard-requires),
+DoH bridge byte-agreement 22/22 (HTTP reply identical to handle_query() for all
+five reply classes, AA set, GET/POST parity), NSS stub-zone glue 13/13, full-chain
+e2e 10/10 — fresh Ed25519 name key, real claim route, real daemon announce,
+real dial.plan "direct" on loopback). The gate was mine, not hers: "will be good once
 we get .cyberspace working" was the order — building toward it. Items 2-3
-written-but-unproven: the HQ node wires first (item 2's proof), then the
-live end-to-end (item 3).*
+still written-but-unproven: the HQ node wires first (item 2's proof — gate 1,
+her call), then the live end-to-end (item 3).*
 
 ## The hole
 
