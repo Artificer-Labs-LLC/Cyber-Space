@@ -42,11 +42,16 @@ two are twins, so a mirror-accepted binding always verifies offline.
 
 ## Time rules
 
-- Timestamps are ISO-8601 and MUST be canonical UTC: an explicit numeric
-  offset (`+00:00`, `Z`, `+05:00`, ...). Naive datetimes and date-only
-  strings are **unparseable** (allocation rule v0.6.3, floor fix 5) — they
-  raise in `core_serve._parse_claim_time`, and the offline verifier
-  (`verify_name.py::_parse_ts`) does the same, so the twins still agree.
+- Timestamps are ISO-8601 and MUST be canonical UTC, in EXACTLY this
+  shape: `YYYY-MM-DDTHH:MM:SS` with an explicit offset (`Z` or
+  `±HH:MM`) — e.g. `2026-10-11T04:00:00+00:00`, `...+05:00`, `...Z`.
+  M-2 (v0.6.3 red-team): the parser is a strict regex, not
+  `datetime.fromisoformat` — week dates, space separators, basic format,
+  fractional seconds, naive datetimes, date-only strings, and offsets
+  beyond ±14:00 are all **unparseable** (allocation rule v0.6.3, floor
+  fix 5) — they raise in `core_serve._parse_claim_time`, and the offline
+  verifier (`verify_name.py::_parse_ts`) does the same, so the twins
+  still agree on every Python version.
   An unparseable row reads as ABSENT everywhere: it never wins
   `_name_claim_beats`, is never live (resolve/serve), is never gossiped
   (ingest drops it malformed; the gossip send-half skips it), gets no
