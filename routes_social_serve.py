@@ -1131,9 +1131,15 @@ async def names_claim(request: Request):
         raise HTTPException(status_code=400, detail="node_pubkey must be 64 hex chars, signature 128 hex chars.")
     try:
         bytes.fromhex(node_pubkey); bytes.fromhex(signature)
-        issued_dt = _parse_claim_time(issued_at); expires_dt = _parse_claim_time(expires_at)
     except Exception:
-        raise HTTPException(status_code=400, detail="Malformed key, signature, or timestamps.")
+        raise HTTPException(status_code=400, detail="Malformed key or signature.")
+    try:
+        issued_dt = _parse_claim_time(issued_at); expires_dt = _parse_claim_time(expires_at)
+    except ValueError:
+        # Floor fix 5 (v0.6.3): unparseable timestamps — naive, date-only,
+        # or otherwise not canonical UTC — are refused with reason
+        # expiry-cap (the window-open refusal code, §7.3.9).
+        raise HTTPException(status_code=400, detail="Refused (expiry-cap): issued_at/expires_at must be canonical UTC with an explicit offset.")
     now_dt = datetime.now(timezone.utc)
     # Chronological gates, not string comparison: a "...+05:00" expiry that
     # is hours dead sorts AFTER a "+00:00" now lexicographically and would
@@ -1153,7 +1159,19 @@ async def names_claim(request: Request):
         cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (name,))
         old = cur.fetchone()
         old = dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), old)) if old else None
-        if old is None or _parse_claim_time(old["expires_at"]) <= now_dt or _name_claim_beats(binding, old):
+        # Floor fix 5 (v0.6.3): a stored row with unparseable timestamps
+        # reads as ABSENT — it never wins a comparison. Without this, a
+        # legacy naive/date-only row would 500 here on _parse_claim_time.
+        try:
+            if old is not None:
+                _parse_claim_time(old["issued_at"])  # validate; raises if unparseable
+                _parse_claim_time(old["expires_at"])
+            old_beaten = (old is None
+                          or _parse_claim_time(old["expires_at"]) <= now_dt
+                          or _name_claim_beats(binding, old))
+        except ValueError:
+            old_beaten = True
+        if old_beaten:
             if old is None and not _name_registry_has_room(conn):
                 raise HTTPException(status_code=400, detail="Name registry is full; renewals of known names still merge.")
             conn.execute(
@@ -1333,8 +1351,11 @@ def names_resolve(request: Request, name: str):
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="No such name.")
+    # Floor fix 5 (v0.6.3): both timestamps must parse as canonical UTC —
+    # an unparseable row reads as absent, never live.
     try:
         live = _parse_claim_time(row[3]) > datetime.now(timezone.utc)
+        _parse_claim_time(row[2])
     except ValueError:
         live = False
     if not live:
