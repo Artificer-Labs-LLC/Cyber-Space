@@ -781,11 +781,20 @@ def _name_claim_beats(new: dict, old: dict) -> bool:
     """Deterministic conflict rule — every mirror computes the same answer
     from the same inputs. Same key re-signing (renew/revoke): later
     issued_at supersedes. Different keys: earlier issued_at wins; ties
-    break by lower pubkey bytes. No votes, no auctions, no admin."""
+    break by lower pubkey bytes. No votes, no auctions, no admin.
+
+    M-1 (v0.6.3 red-team, Bulwark): the tiebreak compares PARSED instants,
+    never strings. Two bindings stamped with the same instant in different
+    spellings ("...Z" vs "...+00:00") are a TIE and fall through to the
+    pubkey comparison. String comparison let mirrors diverge: mirror A
+    keeping "Z" and mirror B keeping "+00:00" for the same instant,
+    depending on arrival order."""
     if new["node_pubkey"].lower() == old["node_pubkey"].lower():
         return _parse_claim_time(new["issued_at"]) > _parse_claim_time(old["issued_at"])
-    if new["issued_at"] != old["issued_at"]:
-        return _parse_claim_time(new["issued_at"]) < _parse_claim_time(old["issued_at"])
+    new_t = _parse_claim_time(new["issued_at"])
+    old_t = _parse_claim_time(old["issued_at"])
+    if new_t != old_t:
+        return new_t < old_t
     return new["node_pubkey"].lower() < old["node_pubkey"].lower()
 
 
