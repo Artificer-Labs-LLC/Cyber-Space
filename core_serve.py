@@ -886,12 +886,19 @@ def _parse_claim_time(s: str) -> datetime:
     when every writer emits the exact _now() shape. A binding stamped
     "...+05:00" (hours-dead) sorts AFTER "+00:00" now and read as live;
     one stamped "-01:00" (an hour in the future) sorts BEFORE and read
-    as not-future. Naive values are read as UTC (the node emits +00:00;
-    clients should send an offset or Z). Raises ValueError on
+    as not-future.
+
+    Canonical form (allocation rule v0.6.3, floor fix 5): the stamp MUST
+    carry an explicit numeric UTC offset ("+00:00", "Z", "+05:00", ...).
+    Naive datetimes and date-only strings are NOT canonical — they raise
+    ValueError and the row reads as ABSENT everywhere: it never wins a
+    comparison (_name_claim_beats), is never live (resolve, serve), is
+    never gossiped (ingest drops it malformed), gets no hold, and is
+    refused at intake with reason expiry-cap. Raises ValueError on any
     unparseable input — every caller treats that as refusal/absent."""
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        raise ValueError(f"not canonical UTC: no explicit offset: {s!r}")
     return dt
 
 
