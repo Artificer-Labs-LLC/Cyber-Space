@@ -56,17 +56,19 @@ def _claim_payload(name: str, node_pubkey: str, issued_at: str,
 
 
 def _parse_ts(s: str, field: str) -> datetime:
-    # Twin of core_serve._parse_claim_time (the mirror's rule): naive
-    # timestamps read as UTC. The mirror ACCEPTS naive stamps this way, so
-    # the offline verifier must too — otherwise a mirror-accepted binding
-    # fails offline verification and the "trust a name without trusting
-    # the mirror" promise breaks. Raises ValueError on unparseable input.
+    # Twin of core_serve._parse_claim_time (the mirror's rule): the stamp
+    # MUST carry an explicit numeric UTC offset. Naive datetimes and
+    # date-only strings are not canonical — they raise ValueError, exactly
+    # like the mirror. The mirror REFUSES naive stamps, so the offline
+    # verifier must too — otherwise a mirror-refused binding would pass
+    # offline verification and the "trust a name without trusting the
+    # mirror" promise breaks. Raises ValueError on unparseable input.
     try:
         ts = datetime.fromisoformat(s)
     except (ValueError, TypeError):
         raise ValueError(f"{field} is not ISO 8601: {s!r}")
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        raise ValueError(f"{field} is not canonical UTC (no explicit offset): {s!r}")
     return ts
 
 

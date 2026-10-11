@@ -42,9 +42,15 @@ two are twins, so a mirror-accepted binding always verifies offline.
 
 ## Time rules
 
-- Timestamps are ISO-8601; naive strings read as UTC (house convention
-  in `core_serve._parse_claim_time` — the offline verifier does the same,
-  naive-as-UTC).
+- Timestamps are ISO-8601 and MUST be canonical UTC: an explicit numeric
+  offset (`+00:00`, `Z`, `+05:00`, ...). Naive datetimes and date-only
+  strings are **unparseable** (allocation rule v0.6.3, floor fix 5) — they
+  raise in `core_serve._parse_claim_time`, and the offline verifier
+  (`verify_name.py::_parse_ts`) does the same, so the twins still agree.
+  An unparseable row reads as ABSENT everywhere: it never wins
+  `_name_claim_beats`, is never live (resolve/serve), is never gossiped
+  (ingest drops it malformed; the gossip send-half skips it), gets no
+  hold, and is refused at claim intake with reason `expiry-cap`.
 - The mirror stores only **live** bindings: `expires_at > now` and
   `issued_at <= now`, compared as datetimes (never strings — a
   `+05:00` expiry sorts lexicographically after a dead `+00:00`
@@ -123,8 +129,16 @@ name-claim work.
   field, non-hex pub, stdin path, pin semantics.
 - `hidden_files/claim-verify-agreement-belt-test.py` — 29/29: the REAL
   `/api/v1/names/claim` route on the REAL app against the REAL offline
-  verifier, 13 bindings. Found the naive-timestamp and normalize-first
-  twins the hard way.
+  verifier, 13 bindings. Naive timestamps are refused by both (floor
+  fix 5, v0.6.3 — supersedes the old naive-as-UTC convention).
+- `hidden_files/canonical-time-belt-test.py` — 22/22: floor fix 5 —
+  unparseable/naive/date-only issued_at and expires_at read as absent in
+  `_name_claim_beats`, ingest, claim (400 + `expiry-cap`), and serve
+  (404); canonical `+00:00`/`Z`/`+05:00` still work.
+- `hidden_files/refused-bindings-belt-test.py` — 62/62: the §7.3.9
+  refused-bindings filter — one leaf per refused binding (grammar /
+  length / expiry-cap / not-in-manifest), holds only on valid rows,
+  canonical leaf bytes, sha256 name form for grammar leaves.
 - `hidden_files/gossip-merge-expiry-belt-test.py` — 13/13 on the REAL
   `ingest_gossiped_binding` (scratch DB): found a REAL bug — the merge
   half compared expiry as a STRING, so a `+05:00`-stamped hours-dead

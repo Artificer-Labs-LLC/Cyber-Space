@@ -137,6 +137,8 @@ check("valid: verifier accepts the stored form",
       repr(verify_name.verify(stored) if stored else None))
 
 # --- case 2: naive timestamps (no offset) -----------------------------------
+# Floor fix 5 (allocation rule v0.6.3): naive stamps are NOT canonical —
+# the mirror refuses them (400) and the verifier refuses them too.
 sk, pk = _keypair()
 issued, expires = _iso(NOW - timedelta(hours=1), naive=True), _iso(
     NOW + timedelta(days=30), naive=True)
@@ -144,11 +146,12 @@ sig = _sig(sk, "agreenaive", pk, issued, expires)
 st, _ = _claim({"name": "agreenaive", "node_pubkey": pk, "issued_at": issued,
                 "expires_at": expires, "signature": sig})
 stored = _stored("agreenaive")
-check("naive-ts: mirror accepts (naive reads as UTC)",
-      st == 200 and stored is not None, f"st={st}")
-check("naive-ts: verifier accepts the stored form",
-      stored is not None and verify_name.verify(stored) is None,
-      repr(verify_name.verify(stored) if stored else None))
+check("naive-ts: mirror refuses (not canonical UTC)",
+      st == 400 and stored is None, f"st={st}")
+check("naive-ts: verifier refuses the unstored form",
+      verify_name.verify({"name": "agreenaive", "node_pubkey": pk,
+                          "issued_at": issued, "expires_at": expires,
+                          "signature": sig}) is not None)
 
 # --- case 3: mixed-case name in the claim form -------------------------------
 sk, pk = _keypair()
