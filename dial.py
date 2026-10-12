@@ -107,9 +107,13 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # the plan previewed a dial (exit 0) for a binding the resolver
     # itself reads as no binding at all.
     try:
-        core._parse_claim_time(issued_at)
+        issued_dt = core._parse_claim_time(issued_at)
     except ValueError:
         return 1, ["name-side: malformed binding"]
+    # Same not-yet-issued floor as the resolver's step 4 (verify_name's
+    # wording): a future-dated binding has not begun, however valid.
+    if issued_dt > datetime.now(timezone.utc):
+        return 1, ["name-side: binding not yet issued"]
     try:
         live = core._parse_claim_time(expires_at) > datetime.now(timezone.utc)
     except ValueError:

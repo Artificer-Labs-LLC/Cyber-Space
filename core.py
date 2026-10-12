@@ -1412,11 +1412,15 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
         # row reads as absent, never live.
         try:
-            live = _parse_claim_time(expires_at) > datetime.now(timezone.utc)
-            _parse_claim_time(issued_at)
+            now_utc = datetime.now(timezone.utc)
+            live = _parse_claim_time(expires_at) > now_utc
+            # Not-yet-issued reads as absent too (verify_name's
+            # "binding is not yet issued"): a future-dated issued_at
+            # is a valid signature over a claim that has not begun.
+            issued_ok = _parse_claim_time(issued_at) <= now_utc
         except ValueError:
             return None
-        if not live:
+        if not live or not issued_ok:
             return None
 
         # Step 5: key -> address. The descriptor (reach) half first: a
@@ -1552,11 +1556,15 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                 # Same floor as step 4: the live row's issued_at must
                 # parse too — a signer can sign a garbage issued_at
                 # and pass the signature check above, and step 4 reads
-                # such a row as absent, never live.
-                _parse_claim_time(str(live.get("issued_at", "")))
+                # such a row as absent, never live. And the same
+                # not-yet-issued floor: a future-dated live row has
+                # not begun, however valid its signature.
+                live_issued_ok = _parse_claim_time(
+                    str(live.get("issued_at", ""))
+                ) <= datetime.now(timezone.utc)
             except ValueError:
                 return None
-            if not live_unexpired:
+            if not live_unexpired or not live_issued_ok:
                 return None
 
         result = {"name": label, "node_pubkey": node_pubkey,

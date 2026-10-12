@@ -55,6 +55,7 @@ def _iso(dt):
 now = datetime.now(timezone.utc)
 ISSUED = _iso(now - timedelta(days=1))
 LIVE = _iso(now + timedelta(days=6))
+FUTURE_ISSUED = _iso(now + timedelta(days=1))
 DEAD = _iso(now - timedelta(hours=2))
 
 _name_seed = os.urandom(32)
@@ -189,16 +190,31 @@ def _garbage_issued_binding():
             "issued_at": "not-a-time", "expires_at": LIVE, "signature": sig}
 
 
+def _future_issued_binding():
+    # Same label and key, valid signature, live expiry — but issued
+    # tomorrow. verify_name calls this "not yet issued"; steps 4 and
+    # 6 must read it as absent, never live.
+    sig = _ed.sign(core._name_claim_payload(RLABEL, _name_pub,
+                                            FUTURE_ISSUED, LIVE),
+                   _name_seed, bytes.fromhex(_name_pub)).hex()
+    return {"name": RLABEL, "node_pubkey": _name_pub,
+            "issued_at": FUTURE_ISSUED, "expires_at": LIVE, "signature": sig}
+
+
 def _fake_factory(mode):
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester", {"pong": True})
     hits = {"directory": 0, "reach": 0}
     binding = _rbinding()
     desc = {"descriptor": _rdesc(), "bad-sig": _rdesc(tamper=True),
             "absent": None, "cross-name-live": _rdesc(),
-            "garbage-issued-live": _rdesc()}[mode]
+            "garbage-issued-live": _rdesc(),
+            "future-issued-live": _rdesc(),
+            "future-issued-mirror": _rdesc()}[mode]
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
+            if mode == "future-issued-mirror":
+                return dict(_future_issued_binding())
             return dict(binding)
         if url == MIRROR + "/api/v1/names/" + RLABEL + "/reach":
             hits["reach"] += 1
@@ -213,6 +229,8 @@ def _fake_factory(mode):
                 return dict(_cross_binding())
             if mode == "garbage-issued-live":
                 return dict(_garbage_issued_binding())
+            if mode == "future-issued-live":
+                return dict(_future_issued_binding())
             return dict(_rbinding())
         return None
     return fake, hits
@@ -257,6 +275,25 @@ def part_b():
         core._resolve_memo.clear()
         got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
         check("garbage-issued-live: step 6 refuses unparseable issued_at",
+              got is None, got)
+        # Step 6 future issued_at: valid signature, live expiry, but
+        # the claim has not begun — verify_name's "not yet issued"
+        # floor applies at the live re-fetch too.
+        fake, hits = _fake_factory("future-issued-live")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("future-issued-live: step 6 refuses a not-yet-issued binding",
+              got is None, got)
+        # Step 4 future issued_at: the MIRROR row itself is future-
+        # dated — it reads as absent before any address work.
+        fake, hits = _fake_factory("future-issued-mirror")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("future-issued-mirror: step 4 refuses a not-yet-issued binding",
               got is None, got)
     finally:
         core._resolve_get_json = real
