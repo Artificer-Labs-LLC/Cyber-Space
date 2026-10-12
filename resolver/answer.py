@@ -28,7 +28,7 @@ from .dns import build_response, error_response, parse_query
 
 # Imported late on purpose: core.py is the six-step resolver's home.
 # Its import has no network side effects (threads spawn only on demand).
-from core import CYBERSPACE_SUFFIX, resolve_cyberspace  # noqa: E402
+from core import CYBERSPACE_SUFFIX, _parse_claim_time, resolve_cyberspace  # noqa: E402
 
 QTYPE_A = 1
 QTYPE_AAAA = 28
@@ -40,12 +40,15 @@ def _ttl_for(expires_at: str, cap: int = DEFAULT_TTL_CAP) -> int:
     """TTL = min(seconds until the binding expires, cap), floored at 0.
 
     resolve_cyberspace() already proved expires_at parses and is in the
-    future; the floor is a belt, not a crutch.
+    future; the floor is a belt, not a crutch. The belt speaks the same
+    language as the proof: the strict canonical-UTC parser every other
+    claim-time seat uses. A stamp in any other spelling (date-only,
+    fractional seconds, space separator, non-UTC offset, naive) floors
+    at 0 here too — fromisoformat accepted all of those, and a naive
+    stamp was silently read as UTC.
     """
     try:
-        exp = datetime.fromisoformat(expires_at)
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+        exp = _parse_claim_time(expires_at)
         seconds = int((exp - datetime.now(timezone.utc)).total_seconds())
     except (ValueError, TypeError):
         seconds = 0

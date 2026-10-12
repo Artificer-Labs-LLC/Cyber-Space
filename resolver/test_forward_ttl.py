@@ -148,6 +148,25 @@ def test_ttl_floor():
           answer._ttl_for(past) == 0)
 
 
+def test_ttl_noncanonical():
+    """Non-canonical spellings floor at 0 even when live and future —
+    the TTL belt uses the same strict parser as every claim-time seat."""
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    spellings = [
+        future.strftime("%Y-%m-%d"),                       # date-only
+        future.isoformat(timespec="microseconds"),        # fractional
+        future.strftime("%Y-%m-%d %H:%M:%S+00:00"),        # space sep
+        future.astimezone(timezone(timedelta(hours=5))).isoformat(timespec="seconds"),  # +05:00
+        future.replace(tzinfo=None).isoformat(timespec="seconds"),  # naive
+    ]
+    for s in spellings:
+        check(f"ttl: non-canonical expiry {s!r} floors at 0",
+              answer._ttl_for(s) == 0, f"got {answer._ttl_for(s)}")
+    zulu = future.isoformat(timespec="seconds").replace("+00:00", "Z")
+    check("ttl: canonical Z expiry still gets the cap",
+          answer._ttl_for(zulu) == 300, f"got {answer._ttl_for(zulu)}")
+
+
 # --- 3. NODATA for unhandled qtypes -----------------------------------------
 
 def test_mx_nodata():
@@ -176,6 +195,7 @@ def main():
     test_ttl_cap()
     test_ttl_remaining()
     test_ttl_floor()
+    test_ttl_noncanonical()
     test_mx_nodata()
     print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
