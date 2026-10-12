@@ -392,6 +392,35 @@ r = claimer.post("/api/v1/names/rotate", data={
 check("(d) strong rotate is still accepted",
       r.status_code == 200 and bindings("strongrot")[0] == new_pub, (r.status_code, r.text[:200]))
 
+# A chain created before the claim-side fix can still hold a weak key.
+# Claim would 400 this key, so the binding is seeded directly.
+scalar_old = 0x13579BE1
+old_weak = mixed_pub(scalar_old)
+succ_priv = "46" * 32
+succ_pub = _ed.publickey(bytes.fromhex(succ_priv)).hex()
+old_rot_msg = _rotate_payload("weakold", old_weak, succ_pub, ISSUED)
+old_rot_sig = forge_sig(scalar_old, old_weak, old_rot_msg)
+succ_bind_msg = core._name_claim_payload("weakold", succ_pub, ISSUED, EXPIRES)
+succ_bind_sig = _ed.sign(succ_bind_msg, bytes.fromhex(succ_priv), bytes.fromhex(succ_pub)).hex()
+check("premise: weak old key's rotation passes checkvalid and fails weak_reason",
+      _ed.checkvalid(old_rot_sig, old_rot_msg, bytes.fromhex(old_weak))
+      and wo.weak_reason(old_weak) == "mixed-order" and wo.weak_reason(succ_pub) is None)
+with core._db_lock, core._db() as conn:
+    conn.execute(
+        "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+        "VALUES (?,?,?,?,?)",
+        ("weakold", old_weak, ISSUED, EXPIRES, "00" * 64))
+before_old = bindings("weakold")
+r = claimer.post("/api/v1/names/rotate", data={
+    "name": "weakold", "old_pubkey": old_weak, "new_pubkey": succ_pub,
+    "rotation_issued_at": ISSUED, "rotation_signature": old_rot_sig.hex(),
+    "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
+    "binding_signature": succ_bind_sig})
+real_weak_old = (r.status_code == 400 and "Refused (weak key)" in r.text
+                 and bindings("weakold") == before_old == (old_weak, 0))
+check("(f) weak old_pubkey on rotate is 400 and writes nothing",
+      real_weak_old, (r.status_code, r.text[:240], before_old, bindings("weakold")))
+
 # ---------------------------------------------------------------- (e) witness head
 scalar_w = 0x111111
 wpub = mixed_pub(scalar_w)
@@ -511,6 +540,31 @@ finally:
 record_mutant("weak_reason skipped on rotate",
               "mixed-order rotate is 400 and writes nothing",
               True, mutant_rot)
+
+# 3b. weak_reason on old_pubkey only, turned into a no-op.
+# The new key stays checked, so this is not the whole-function mutant above.
+real_rot_old = rss._rotate_weak_reason
+
+
+def skip_old_only(pub, _real=real_rot_old, _old=old_weak):
+    if pub == _old:
+        return None
+    return _real(pub)
+
+
+rss._rotate_weak_reason = skip_old_only
+try:
+    r = claimer.post("/api/v1/names/rotate", data={
+        "name": "weakold", "old_pubkey": old_weak, "new_pubkey": succ_pub,
+        "rotation_issued_at": ISSUED, "rotation_signature": old_rot_sig.hex(),
+        "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
+        "binding_signature": succ_bind_sig})
+    mutant_old = r.status_code == 200 and bindings("weakold") == (succ_pub, 1)
+finally:
+    rss._rotate_weak_reason = real_rot_old
+record_mutant("weak_reason on old_pubkey is a no-op",
+              "weak old_pubkey on rotate is 400 and writes nothing",
+              real_weak_old, mutant_old)
 
 # 4. proxy headers trusted from an untrusted peer
 reset_hits()
