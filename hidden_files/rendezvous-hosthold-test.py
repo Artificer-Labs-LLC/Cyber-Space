@@ -120,7 +120,10 @@ calls = []
 real_points_register = hold_open._rendezvous_points_register
 real_post = hold_open._post
 real_cycle_once = hold_open.hold_open_cycle_once
-hold_open._rendezvous_points_register = lambda u, tok, pub: calls.append(
+# The stub must accept the epoch_len 4th arg _rendezvous_hold_maybe
+# passes (hold_open.py:160) — a 3-arg stub TypeErrors inside the cycle
+# thread, so no call is ever recorded.
+hold_open._rendezvous_points_register = lambda u, tok, pub, epoch_len=None: calls.append(
     (u, tok, pub)) or 2
 hold_open._post = lambda u, p, payload, timeout: {"ok": True}
 hold_open.hold_open_cycle_once = lambda u, tok, priv: (True, 0)
