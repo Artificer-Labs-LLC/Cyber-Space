@@ -159,25 +159,49 @@ def _reserve_anchor(conn, name, weak_key, max_hops=64):
     return None, "FLAG-VILLHAZE: rotation chain too long"
 
 
+def _history_anchor(conn, name):
+    """Lodestar/Cipher rule (ART-40): if the name's name_rotations history
+    has ANY hop with a weak old_pubkey or new_pubkey, the name is reserved.
+    Hops are ordered by node-side accepted_at (rowid tie-break), never the
+    signer's issued_at. Anchor = the last non-weak key before the EARLIEST
+    weak hop: that hop's old_pubkey if non-weak, else walk back by
+    (name, new_pubkey) via _reserve_anchor. Returns (None, None) when the
+    history has no weak hop; (None, FLAG...) on dead-end/loop/>64 hops."""
+    hops = conn.execute(
+        "SELECT old_pubkey, new_pubkey FROM name_rotations WHERE name=? "
+        "ORDER BY accepted_at ASC, rowid ASC", (name,)).fetchall()
+    for old, new in hops:
+        if is_weak_pubkey(old) or is_weak_pubkey(new):
+            if not is_weak_pubkey(old):
+                return old, None
+            anchor, why = _reserve_anchor(conn, name, old)
+            if anchor:
+                return anchor, None
+            return None, why or "FLAG-VILLHAZE: chain starts on weak key"
+    return None, None
+
+
 def snapshot_bindings(conn):
     """All name_bindings rows (no SQL expires filter). Weak keys are never
-    held. A weak key that is a name_rotations.new_pubkey means a holder K
-    rotated the name onto a dead key: the name is RESERVED for that
-    first non-weak old_pubkey found walking the rotation chain back (K), not
-    freed. Otherwise the weak row is REFUSED (chain dead-ends/loops are
-    refused with a FLAG-VILLHAZE reason appended)."""
+    held. Any name whose rotation history touches a weak key (old or new,
+    any hop) is RESERVED for the last non-weak key before the earliest weak
+    hop - even if the current key is honest (K->Z->K2 reserves for K).
+    Dead-ends, loops and >64-hop chains are REFUSED with FLAG-VILLHAZE.
+    A weak key with no rotation history is REFUSED."""
     held, refused, reserved = [], [], []
     has_rot = _has_table(conn, "name_rotations")
     for row in conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings ORDER BY name"):
-        if not is_weak_pubkey(row[1]):
-            held.append(row)
-            continue
-        anchor, why = (_reserve_anchor(conn, row[0], row[1]) if has_rot else (None, None))
+        anchor, why = _history_anchor(conn, row[0]) if has_rot else (None, None)
         if anchor:
-            reserved.append({"name": row[0], "reserved_for": anchor, "weak_pubkey": row[1]})
+            reserved.append({"name": row[0], "reserved_for": anchor, "current_pubkey": row[1],
+                             "weak_pubkey": row[1] if is_weak_pubkey(row[1]) else None})
+        elif why:
+            refused.append(tuple(row) + (why,))
+        elif is_weak_pubkey(row[1]):
+            refused.append(tuple(row))
         else:
-            refused.append(tuple(row) + ((why,) if why else ()))
+            held.append(row)
     return {"held": held, "refused": refused, "reserved": reserved}
 
 

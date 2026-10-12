@@ -66,7 +66,20 @@ with core._db_lock, core._db() as conn:
     # Examiner: forged hop into "chain" with a backdated-but-newest-looking
     # issued_at and an OLDER node-side accepted_at -> must not win
     conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
-                 ("chain", FORGER, ZERO, "2098-01-01T00:00:00+00:00", "00" * 64, "1999-01-01T00:00:00+00:00"))
+                 ("chain", FORGER, ZERO, "1990-01-01T00:00:00+00:00", "00" * 64, "2003-01-01T00:00:00+00:00"))
+    # Lodestar/Cipher any-weak-hop rule: K->Z->A, K->Z1->A->Z2->B, K->Z->K2
+    A_ = _ed.publickey(bytes.fromhex("aa" * 32)).hex()
+    B_ = _ed.publickey(bytes.fromhex("bb" * 32)).hex()
+    K3 = _ed.publickey(bytes.fromhex("cc" * 32)).hex()
+    HK = [("hza", A_), ("hzazb", B_), ("hzk2", K2)]
+    conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     [(n, p, PAST, FUT, "00" * 64) for n, p in HK])
+    for nm, o, n_, t in (("hza", K3, ZERO, "2001"), ("hza", ZERO, A_, "2002"),
+                         ("hzazb", K3, ZERO, "2001"), ("hzazb", ZERO, A_, "2002"),
+                         ("hzazb", A_, MIXED[8], "2003"), ("hzazb", MIXED[8], B_, "2004"),
+                         ("hzk2", K3, ZERO, "2001"), ("hzk2", ZERO, K2, "2002")):
+        conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                     (nm, o, n_, PAST, "00" * 64, t + "-01-01T00:00:00+00:00"))
     for nm, o, n_, t in (("chain", K, ZERO, "2001"), ("chain", ZERO, MIXED[4], "2002"),
                          ("loop", MIXED[2], IDENT, "2001"), ("loop", IDENT, MIXED[2], "2002")):
         conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
@@ -84,6 +97,10 @@ with core._db_lock, core._db() as conn:
 held = {r[0] for r in snap["held"]}; refused = {r[0] for r in snap["refused"]}
 reserved = {r["name"]: r["reserved_for"] for r in snap["reserved"]}
 check("zero-key claim (no rotation) -> refused", "zeroclaim" in refused, refused)
+check("K->Z->A (honest current) -> reserved for K", reserved.get("hza") == K3, reserved)
+check("K->Z1->A->Z2->B -> reserved for K (earliest weak hop)", reserved.get("hzazb") == K3, reserved)
+check("K->Z->K2 -> reserved for K, not K2", reserved.get("hzk2") == K3, reserved)
+check("honest-current reserved names not held", not held & {"hza", "hzazb", "hzk2"}, held)
 check("two names rotated to Z1: each reserved for its own key", reserved.get("rotzero") == K and reserved.get("rotzero2") == K2, reserved)
 check("forged backdated hop does not change reserved key", reserved.get("chain") == K and FORGER not in reserved.values(), reserved)
 check("chain K->Z1(zero)->Z2(mixed) -> reserved for K", reserved.get("chain") == K, reserved)
