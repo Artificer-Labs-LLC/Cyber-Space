@@ -20,6 +20,7 @@ import base64
 
 from fastapi import APIRouter, Request, Response, HTTPException
 
+import core
 from core import _check_rate
 from resolver.answer import handle_query
 from resolver.dns import error_response
@@ -65,7 +66,7 @@ def _doh_concurrency_gate(request: Request) -> None:
     in a finally block. Raises 429 when the IP or the global bound is hit —
     a DNS client that wants 5 answers at once is a misbehaving one."""
     global _doh_inflight_global
-    ip = request.client.host if request.client else "unknown"
+    ip = core.request_source(request)
     n = _doh_inflight.get(ip, 0)
     if n >= DOH_CONCURRENT_PER_IP or \
             _doh_inflight_global >= DOH_CONCURRENT_GLOBAL:
@@ -81,7 +82,7 @@ def _doh_concurrency_gate(request: Request) -> None:
 
 def _doh_concurrency_release(request: Request) -> None:
     global _doh_inflight_global
-    ip = request.client.host if request.client else "unknown"
+    ip = core.request_source(request)
     n = _doh_inflight.get(ip, 1)
     _doh_inflight[ip] = n - 1
     if _doh_inflight[ip] <= 0:
@@ -90,8 +91,7 @@ def _doh_concurrency_release(request: Request) -> None:
 
 
 def _doh_check_rate(request: Request) -> None:
-    client = request.client
-    ip = client.host if client else "unknown"
+    ip = core.request_source(request)
     _check_rate(f"doh:{ip}", limit=DOH_RATE_LIMIT,
                 window=DOH_RATE_WINDOW)
 

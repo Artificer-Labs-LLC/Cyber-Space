@@ -9,6 +9,26 @@ PY="${1:-./venv/bin/python}"
 export CYBERNET_DB_DIR="$(mktemp -d)"
 trap 'rm -rf "$CYBERNET_DB_DIR"' EXIT
 
+# ART-40: route limiters and ratesrc key on core.request_source.
+# client.host must not appear in those files. The only allowed hit is the
+# peer read inside core.request_source. Deploy keeps --no-proxy-headers.
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+if git -C "$ROOT" grep -n 'client.host' -- 'routes_*.py' ratesrc.py; then
+  echo "FAIL: client.host must not appear in route files or ratesrc.py"
+  exit 1
+fi
+core_hits="$(git -C "$ROOT" grep -n 'client.host' -- core.py || true)"
+core_n="$(printf '%s\n' "$core_hits" | grep -c 'client.host' || true)"
+if [ "$core_n" -ne 1 ] || ! printf '%s\n' "$core_hits" | grep -q 'client_source(request\.client\.host'; then
+  echo "FAIL: the only allowed client.host hit is core.request_source"
+  printf '%s\n' "$core_hits"
+  exit 1
+fi
+if ! grep -q -- '--no-proxy-headers' "$ROOT/deploy/cybernet-node.service"; then
+  echo "FAIL: deploy/cybernet-node.service must keep --no-proxy-headers"
+  exit 1
+fi
+
 TESTS=(
   "test_dial.py"
   "test_name_claim.py"

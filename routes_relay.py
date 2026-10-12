@@ -42,6 +42,7 @@ import threading
 
 from fastapi import APIRouter, HTTPException, Request
 
+import core
 from core import _check_rate, _RELAY_TOKEN_CAP
 import rendezvous
 
@@ -78,8 +79,7 @@ _relay_rendezvous: dict = {}
 
 
 def _relay_belt(request: Request, surface: str) -> None:
-    client = request.client
-    ip = client.host if client else "unknown"
+    ip = core.request_source(request)
     _check_rate(f"relay:{surface}:{ip}", limit=60, window=60.0)
 
 

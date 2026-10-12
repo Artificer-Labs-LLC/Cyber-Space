@@ -16,8 +16,11 @@ name to a key nobody holds.
 1. Legit rotation to a real key -> 200 (positive control).
 2. Rotation to all-zero new_pubkey + zero binding signature -> 400, binding
    and name_rotations unchanged (strict checkvalid).
-3. Same vector with the OLD (0bdb386) checkvalid patched in, if git can
-   produce it -> documents the hole (expected: accepted, 200).
+3. Stale hole, two arms. The loose pre-strict checkvalid (0bdb386, or
+   388afa2^ in this history) still admits the zero key when weak_reason
+   is stubbed out. The real path — that verifier, with weak_reason left
+   in place — is 400 and writes no row. Removing the weak_reason call
+   on rotate makes arm (b) fail.
 4. Per-IP gate on names/rotate runs first: 1..LIMIT -> 400, LIMIT+1 -> 429,
    empty body also 429; limit configurable (CYBERNET_NAME_ROTATE_RATE_LIMIT).
 
@@ -129,13 +132,29 @@ check("no name_rotations row for refused rotation", state("rotz2")[1] == 0, stat
 check("strict checkvalid refuses vector directly",
       not core._name_binding_verify("rotz2", ZERO_PUB, B_ISSUED, B_EXPIRES, ZERO_SIG))
 
-# 3. old (pre-e8fb1fc) verifier, documentation of the hole
-old_src = None
-try:
-    old_src = subprocess.run(["git", "-C", HERE, "show", "0bdb386:fed/ed25519.py"],
-                             capture_output=True, check=True, text=True).stdout
-except Exception:
-    pass
+# 3. stale hole, two arms. 0bdb386 is the historical loose verifier; this
+# history's copy is the parent of the strict-checkvalid commit.
+def _load_old_verifier():
+    for rev in ("0bdb386", "388afa2^", "b858a98"):
+        try:
+            src = subprocess.run(
+                ["git", "-C", HERE, "show", f"{rev}:fed/ed25519.py"],
+                capture_output=True, check=True, text=True).stdout
+        except Exception:
+            continue
+        if "def checkvalid" in src and "_is_small_order" not in src:
+            return rev, src
+    return None, None
+
+
+def restore_rotz2():
+    seed("rotz2", OLD)
+    with core._db_lock, core._db() as conn:
+        conn.execute("DELETE FROM name_rotations WHERE name='rotz2'")
+
+
+old_rev, old_src = _load_old_verifier()
+check("old loose verifier is loadable", old_src is not None, old_rev)
 if old_src:
     d = tempfile.mkdtemp(prefix="oldv-")
     path = os.path.join(d, "ed25519_old.py")
@@ -144,21 +163,47 @@ if old_src:
     old = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(old)
     strict = core._fed_ed25519
+    real_weak = rss._rotate_weak_reason
     core._fed_ed25519 = old
     try:
+        # (a) the hole still reproduces once weak_reason is stubbed out
+        rss._rotate_weak_reason = lambda pub: None
         reset_rate()
-        r_old = client.post("/api/v1/names/rotate", data=vec)
-        after_old = state("rotz2")
+        restore_rotz2()
+        r_a = client.post("/api/v1/names/rotate", data=vec)
+        after_a = state("rotz2")
+        # (b) real path: same loose verifier, weak_reason left in place
+        rss._rotate_weak_reason = real_weak
+        reset_rate()
+        restore_rotz2()
+        before_b = state("rotz2")
+        r_b = client.post("/api/v1/names/rotate", data=vec)
+        after_b = state("rotz2")
+        # Mutant: the weak_reason call on rotate is gone. Arm (b) must fail.
+        rss._rotate_weak_reason = lambda pub: None
+        reset_rate()
+        restore_rotz2()
+        r_m = client.post("/api/v1/names/rotate", data=vec)
+        after_m = state("rotz2")
     finally:
         core._fed_ed25519 = strict
-    print(f"  info OLD verifier on zero-key rotation: {r_old.status_code} binding->{after_old[0][0][:16]}...")
-    check("OLD verifier accepted zero-key rotation (hole reproduced)",
-          r_old.status_code == 200 and after_old[0][0] == ZERO_PUB, (r_old.status_code, r_old.text))
-    seed("rotz2", OLD)
-    with core._db_lock, core._db() as conn:
-        conn.execute("DELETE FROM name_rotations WHERE name='rotz2'")
-else:
-    print("  info git history unavailable; old-verifier vector skipped")
+        rss._rotate_weak_reason = real_weak
+    restore_rotz2()
+    print(f"  info old verifier {old_rev}: arm (a) {r_a.status_code}, arm (b) {r_b.status_code}, mutant {r_m.status_code}")
+    check("(a) old verifier with weak_reason stubbed admits the zero key",
+          r_a.status_code == 200 and after_a[0][0] == ZERO_PUB and after_a[1] == 1,
+          (r_a.status_code, r_a.text, after_a))
+    check("(b) real path refuses the zero key: 400 and no row",
+          r_b.status_code == 400 and "weak key" in r_b.text and after_b == before_b
+          and before_b[1] == 0,
+          (r_b.status_code, r_b.text, before_b, after_b))
+    arm_b_under_mutant = (
+        r_m.status_code == 400 and "weak key" in r_m.text and after_m[1] == 0
+        and after_m[0][0] != ZERO_PUB)
+    check("MUTANT weak_reason removed on rotate: arm (b) fails",
+          r_m.status_code == 200 and after_m[0][0] == ZERO_PUB and after_m[1] == 1
+          and not arm_b_under_mutant,
+          (r_m.status_code, r_m.text, after_m))
 
 # 4. per-IP gate on names/rotate
 reset_rate()

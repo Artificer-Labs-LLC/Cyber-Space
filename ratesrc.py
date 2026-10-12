@@ -6,15 +6,14 @@ source cannot drain a route for everyone.
                       shared with challenge/login once the RC lands
   src:read:<source>   public reads (head, proof, witnessed, observe)
 
-The source is core.request_source() when the client-source code (trusted
-proxies, X-Forwarded-For, IPv6 /64) is present, and the direct peer address
-until then. This module only adapts; it adds nothing to core.
+The source is core.request_source(). This module only adapts; it adds
+nothing to core. Call it directly so an import error fails loudly — there
+is no peer-address fallback.
 
-ART-40 C1: ported together with core.client_source. Alone, source() falls
-back to request.client.host and every client behind Caddy shares one bucket.
-The legacy routes charge their own per-IP / per-log buckets (see
-routes_legacy_witness); they do not use auth() for import-legacy, because
-that bucket is shared across challenge-burning routes and a 1x global.
+ART-40 C1: ported together with core.client_source. The legacy routes
+charge their own per-IP / per-log buckets (see routes_legacy_witness);
+they do not use auth() for import-legacy, because that bucket is shared
+across challenge-burning routes and a 1x global.
 """
 from fastapi import Request
 
@@ -25,10 +24,7 @@ SOURCE_READ_LIMIT = 120
 
 
 def source(request: Request) -> str:
-    rs = getattr(core, "request_source", None)
-    if rs is not None:
-        return rs(request)
-    return request.client.host if request.client else "unknown"
+    return core.request_source(request)
 
 
 def auth(request: Request) -> None:

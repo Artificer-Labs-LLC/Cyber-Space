@@ -30,6 +30,7 @@ core.init_db()
 import app as appmod  # noqa: E402
 import legacy_witness as lw  # noqa: E402
 import ratesrc  # noqa: E402
+import routes_doh  # noqa: E402
 import routes_legacy_witness as rlw  # noqa: E402
 import routes_social_serve as rss  # noqa: E402
 import window_open as wo  # noqa: E402
@@ -392,6 +393,42 @@ r = claimer.post("/api/v1/names/rotate", data={
 check("(d) strong rotate is still accepted",
       r.status_code == 200 and bindings("strongrot")[0] == new_pub, (r.status_code, r.text[:200]))
 
+# weak OLD key: checkvalid accepts the mixed-order holder, weak_reason does not.
+# The rate gate runs first, so the refusal still spends a names-write token.
+scalar_old = 0x97531
+old_weak = mixed_pub(scalar_old)
+weak_new_priv = "77" * 32
+weak_new_pub = _ed.publickey(bytes.fromhex(weak_new_priv)).hex()
+weak_rmsg = _rotate_payload("weakold", old_weak, weak_new_pub, ISSUED)
+weak_rsig = forge_sig(scalar_old, old_weak, weak_rmsg).hex()
+weak_nsig = _ed.sign(core._name_claim_payload("weakold", weak_new_pub, ISSUED, EXPIRES),
+                     bytes.fromhex(weak_new_priv), bytes.fromhex(weak_new_pub)).hex()
+check("premise: weak old rotation passes checkvalid and fails weak_reason",
+      _ed.checkvalid(bytes.fromhex(weak_rsig), weak_rmsg, bytes.fromhex(old_weak))
+      and wo.weak_reason(old_weak) == "mixed-order"
+      and wo.weak_reason(weak_new_pub) is None)
+with core._db_lock, core._db() as conn:
+    conn.execute(
+        "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+        "VALUES (?,?,?,?,?)",
+        ("weakold", old_weak, ISSUED, EXPIRES, "ab" * 64))
+reset_hits()
+weak_ip = "203.0.113.61"
+r = client_at(weak_ip).post("/api/v1/names/rotate", data={
+    "name": "weakold", "old_pubkey": old_weak, "new_pubkey": weak_new_pub,
+    "rotation_issued_at": ISSUED, "rotation_signature": weak_rsig,
+    "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
+    "binding_signature": weak_nsig})
+with core._db_lock:
+    weak_bucket = core._hits.get(f"names-write:{weak_ip}")
+check("rotate with a weak old key is 400",
+      r.status_code == 400 and "weak key" in r.text, (r.status_code, r.text[:240]))
+check("weak old rotate wrote no rotation row and left the binding",
+      bindings("weakold") == (old_weak, 0), bindings("weakold"))
+check("weak old rotate spent a names-write token",
+      weak_bucket is not None and len(weak_bucket) == 1,
+      None if weak_bucket is None else len(weak_bucket))
+
 # ---------------------------------------------------------------- (e) witness head
 scalar_w = 0x111111
 wpub = mixed_pub(scalar_w)
@@ -440,6 +477,82 @@ check("(e) pure small-order witness head fails on the observe route",
 r = client_at("203.0.113.91").post("/api/v1/agents/migrate", json={})
 check("legacy migrate stub is still 409",
       r.status_code == 409 and r.json().get("error") == "legacy_migrate_replaced", r.text[:200])
+
+
+def names_write(c, xff):
+    return c.post("/api/v1/names/claim", data={}, headers={"X-Forwarded-For": xff})
+
+
+def doh_probe(c, xff):
+    return c.post("/dns-query", content=b"", headers={"X-Forwarded-For": xff})
+
+
+def _bucket_keys(prefix):
+    return sorted(k for k in list(core._hits) if k.startswith(prefix))
+
+
+def two_names_write_buckets():
+    """Two XFF clients behind the trusted peer, limit 1 each."""
+    saved = rss.NAME_CLAIM_RATE_LIMIT
+    rss.NAME_CLAIM_RATE_LIMIT = 1
+    try:
+        reset_hits()
+        proxy = client_at("127.0.0.1")
+        a = names_write(proxy, "198.51.100.71")
+        b = names_write(proxy, "198.51.100.72")
+        keys = _bucket_keys("names-write:")
+        ok = (a.status_code == 400 and b.status_code == 400
+              and keys == ["names-write:198.51.100.71", "names-write:198.51.100.72"])
+        return ok, (a.status_code, b.status_code, keys)
+    finally:
+        rss.NAME_CLAIM_RATE_LIMIT = saved
+
+
+def two_doh_buckets():
+    saved = routes_doh.DOH_RATE_LIMIT
+    routes_doh.DOH_RATE_LIMIT = 1
+    try:
+        reset_hits()
+        proxy = client_at("127.0.0.1")
+        a = doh_probe(proxy, "198.51.100.81")
+        b = doh_probe(proxy, "198.51.100.82")
+        keys = _bucket_keys("doh:")
+        ok = (a.status_code == 415 and b.status_code == 415
+              and keys == ["doh:198.51.100.81", "doh:198.51.100.82"])
+        return ok, (a.status_code, b.status_code, keys)
+    finally:
+        routes_doh.DOH_RATE_LIMIT = saved
+
+
+def spoofed_xff_shares_peer():
+    """Untrusted peer. Two spoofed XFF values share that peer's bucket.
+    An IPv6 peer folds to its /64, which a client.host key does not."""
+    saved = rss.NAME_CLAIM_RATE_LIMIT
+    rss.NAME_CLAIM_RATE_LIMIT = 1
+    peer = "2001:db8:abcd:12::5"
+    bucket = core._source_key(peer)
+    try:
+        reset_hits()
+        c = client_at(peer)
+        a = names_write(c, "198.51.100.91")
+        b = names_write(c, "198.51.100.92")
+        keys = _bucket_keys("names-write:")
+        ok = (a.status_code == 400 and b.status_code == 429
+              and keys == [f"names-write:{bucket}"])
+        return ok, (a.status_code, b.status_code, keys, bucket)
+    finally:
+        rss.NAME_CLAIM_RATE_LIMIT = saved
+
+
+names_ok, names_extra = two_names_write_buckets()
+check("two XFF clients behind the trusted peer get two names-write buckets",
+      names_ok, names_extra)
+doh_ok, doh_extra = two_doh_buckets()
+check("two XFF clients behind the trusted peer get two DoH buckets",
+      doh_ok, doh_extra)
+spoof_ok, spoof_extra = spoofed_xff_shares_peer()
+check("spoofed XFF from an untrusted peer shares the peer's bucket",
+      spoof_ok, spoof_extra)
 
 # ---------------------------------------------------------------- mutants
 print("mutants:")
@@ -544,6 +657,35 @@ finally:
 record_mutant("checkvalid only (no small-order component check)",
               "mixed-order witness head is refused",
               True, mutant_verify and mutant_route)
+
+# 6-8. limiters keyed on the direct peer address
+def client_host_source(request):
+    peer = request.client
+    return peer.host if peer else "unknown"
+
+real_source = core.request_source
+core.request_source = client_host_source
+try:
+    names_mut_ok, names_mut_extra = two_names_write_buckets()
+    doh_mut_ok, doh_mut_extra = two_doh_buckets()
+    spoof_mut_ok, spoof_mut_extra = spoofed_xff_shares_peer()
+finally:
+    core.request_source = real_source
+record_mutant("names-write keyed on client.host",
+              "two XFF clients behind the trusted peer get two names-write buckets",
+              names_ok, not names_mut_ok)
+record_mutant("doh keyed on client.host",
+              "two XFF clients behind the trusted peer get two DoH buckets",
+              doh_ok, not doh_mut_ok)
+record_mutant("names-write keyed on client.host (untrusted peer)",
+              "spoofed XFF from an untrusted peer shares the peer's bucket",
+              spoof_ok, not spoof_mut_ok)
+if not names_mut_ok:
+    print(f"  info names-write client.host mutant: {names_mut_extra}")
+if not doh_mut_ok:
+    print(f"  info doh client.host mutant: {doh_mut_extra}")
+if not spoof_mut_ok:
+    print(f"  info spoof client.host mutant: {spoof_mut_extra}")
 
 print("mutant table:")
 print(f"  {'mutant':<52} {'row':<56} real mutant-fails")

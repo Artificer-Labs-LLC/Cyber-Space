@@ -16,6 +16,7 @@ from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX
                     read_bounded_bytes, read_bounded_form, _name_registry_has_room, \
                     _peer_urlopen, _check_rate, _old_binding_beaten, \
                     _incumbent_is_live, _log_name_conflict
+import core
 
 router = APIRouter()
 
@@ -1118,12 +1119,13 @@ NAME_CLAIM_RATE_WINDOW = float(_os.environ.get("CYBERNET_NAME_CLAIM_RATE_WINDOW"
 
 
 def _names_claim_check_rate(request: Request) -> None:
-    client = request.client
-    ip = client.host if client else "unknown"
     # ART-38 (Bulwark BLOCK on 86256ae): claim and rotate share ONE bucket,
     # so alternating the two routes cannot double the per-IP budget.
-    # This bucket stays on request.client.host. ART-40 re-keys the legacy
-    # witness routes, not this names-write bucket.
+    # ART-40: this names-write bucket is keyed on core.request_source, same
+    # as the legacy witness routes. Forwarded headers are trusted only
+    # inside that function, and only for a trusted peer. Deploy keeps
+    # uvicorn --no-proxy-headers so the peer address is the direct peer.
+    ip = core.request_source(request)
     _check_rate(f"names-write:{ip}", limit=NAME_CLAIM_RATE_LIMIT,
                 window=NAME_CLAIM_RATE_WINDOW)
 

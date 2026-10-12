@@ -2476,9 +2476,8 @@ def _seed_bootstrap() -> int:
 from core_serve import *  # noqa: F401,F403,E402
 
 # ---------------- client source (Sybil resistance) ----------------
-# Ported with ratesrc.py (73a08c2). ratesrc.source() calls request_source;
-# alone, it would fall back to request.client.host and every client behind
-# Caddy would share one bucket. Forwarded headers are read only here.
+# Ported with ratesrc.py (73a08c2). ratesrc.source() calls request_source
+# directly; an import error fails loudly. Forwarded headers are read only here.
 
 # Test mutant: honor X-Forwarded-For even when the direct peer is not a
 # trusted proxy. Production stays False.
@@ -2516,9 +2515,8 @@ def client_source(peer: str | None, headers) -> str:
     fallback; then the peer itself.
 
     Requires uvicorn --no-proxy-headers. With proxy headers on, uvicorn
-    rewrites request.client.host from X-Forwarded-For before this runs, the
-    peer is no longer the trusted proxy, and a spoofed address becomes the
-    bucket key."""
+    rewrites the peer from X-Forwarded-For before this runs, the peer is
+    no longer the trusted proxy, and a spoofed address becomes the bucket key."""
     peer = (peer or "").strip()
     trusted = _trusted_proxies()
     if peer and (peer in trusted or _trust_forwarded_always):
