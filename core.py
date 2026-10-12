@@ -2330,10 +2330,17 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
     except ValueError:
         ttl = 86400
     now = datetime.now(timezone.utc)
+    # Canonical UTC, seconds precision (twin of mint_name._iso): raw
+    # .isoformat() carries microseconds, and every descriptor seat
+    # (_reach_descriptor_verify via _parse_claim_time) reads a
+    # fractional-second stamp as malformed — a descriptor minted here
+    # verified False everywhere, so the hosting send half announced
+    # addresses no mirror or dialer could ever accept.
+    _canon = "%Y-%m-%dT%H:%M:%S+00:00"
     desc = _reach_mint(name_priv_hex, name_pub, name,
                        strategies,
-                       now.isoformat(),
-                       (now + timedelta(seconds=ttl)).isoformat())
+                       now.strftime(_canon),
+                       (now + timedelta(seconds=ttl)).strftime(_canon))
     return desc, name_pub
 
 
