@@ -197,16 +197,28 @@ def verify_rotation(record: dict) -> str | None:
     return None
 
 
-def _refresh_hostd_env_text(text: str, old_hex: str, new_hex: str):
+def _refresh_hostd_env_text(text: str, old_hex: str, new_hex: str,
+                            label: str = ""):
     """Swap CYBERNET_NAME_PRIVKEY old->new in a hostd env body.
 
     Returns (new_text, status): "updated" (the active privkey line held
     the OLD seed and now holds the new one — every other line preserved
     byte-for-byte), "foreign" (the line holds a different seed — text
     returned untouched; never clobber a key we cannot account for),
-    "absent" (no active privkey line — text untouched). Pure: the caller
-    decides whether to write.
+    "absent" (no active privkey line — text untouched), "wrong-name"
+    (label given and the env's CYBERNET_HOSTED_NAME names a DIFFERENT
+    name — text untouched regardless of the key: the file is another
+    name's env that happens to sit at this path, and refreshing it
+    would make hostd sign that name with this name's key). Pure: the
+    caller decides whether to write.
     """
+    if label:
+        for line in text.splitlines():
+            if line.startswith("CYBERNET_HOSTED_NAME="):
+                hosted = line.split("=", 1)[1].strip().lower()
+                if hosted != label.lower():
+                    return text, "wrong-name"
+                break
     out, status = [], "absent"
     for line in text.splitlines(keepends=True):
         if line.startswith("CYBERNET_NAME_PRIVKEY="):
@@ -302,7 +314,8 @@ def promote_rotation(label: str, home: Path,
     replaces <label>-name.key (os.replace: never a half-written key).
     The hostd env mint wrote (home/hostd/<label>.env) is refreshed to the
     new seed when it still holds the old one — hostd signs from that env,
-    not from the key file; a foreign/absent privkey line is reported in
+    not from the key file; a foreign/absent privkey line, or an env whose
+    CYBERNET_HOSTED_NAME names a different name, is reported in
     the summary, never overwritten. The INSTALLED env (install-agent.sh's
     copy at /etc/cybernet-hostd/hostd.env, the file hostd.service reads)
     is checked read-only and reported the same way — never written.
@@ -362,10 +375,17 @@ def promote_rotation(label: str, home: Path,
     if env_path.exists():
         try:
             new_text, status = _refresh_hostd_env_text(
-                env_path.read_text(), old_priv.hex(), new_priv.hex())
+                env_path.read_text(), old_priv.hex(), new_priv.hex(),
+                label)
         except OSError:
             status, new_text = "unreadable", None
-        if status == "updated":
+        if status == "wrong-name":
+            env_note = (f"; WARNING: hostd env at {env_path} hosts a "
+                        f"different name (its CYBERNET_HOSTED_NAME is "
+                        f"not {label}) — NOT touched; it is not this "
+                        f"name's env, check its filename/contents "
+                        f"manually or hostd will sign the wrong name")
+        elif status == "updated":
             _write_secret(env_path, new_text, overwrite=True)
             env_note = (f"; hostd env at {env_path} refreshed to the new "
                         f"key — restart hostd to pick it up")

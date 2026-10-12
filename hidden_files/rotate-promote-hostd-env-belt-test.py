@@ -80,6 +80,29 @@ class TestRefreshPure(unittest.TestCase):
         self.assertEqual(status, "absent")
         self.assertEqual(new_text, text)
 
+    def test_wrong_name_old_key_untouched(self):
+        # Filename says <label>.env but the body hosts another name:
+        # key match must NOT trigger a refresh of another name's env.
+        text = mint_name._hostd_env_text("othername", OLD.hex(), MIRROR)
+        new_text, status = rotate_name._refresh_hostd_env_text(
+            text, OLD.hex(), NEW.hex(), LABEL)
+        self.assertEqual(status, "wrong-name")
+        self.assertEqual(new_text, text)
+
+    def test_wrong_name_any_key_untouched(self):
+        text = mint_name._hostd_env_text("othername", NEW.hex(), MIRROR)
+        new_text, status = rotate_name._refresh_hostd_env_text(
+            text, OLD.hex(), NEW.hex(), LABEL)
+        self.assertEqual(status, "wrong-name")
+        self.assertEqual(new_text, text)
+
+    def test_matching_name_with_label_still_updates(self):
+        text = mint_name._hostd_env_text(LABEL, OLD.hex(), MIRROR)
+        new_text, status = rotate_name._refresh_hostd_env_text(
+            text, OLD.hex(), NEW.hex(), LABEL)
+        self.assertEqual(status, "updated")
+        self.assertIn(f"CYBERNET_NAME_PRIVKEY={NEW.hex()}\n", new_text)
+
 
 class TestPromoteRefreshesEnv(unittest.TestCase):
     def test_promote_refreshes_env_and_hostd_agrees(self):
@@ -120,6 +143,19 @@ class TestPromoteRefreshesEnv(unittest.TestCase):
             ok, msg = rotate_name.promote_rotation(LABEL, home)
             self.assertTrue(ok, msg)
             self.assertIn("WARNING", msg)
+            self.assertEqual(
+                (home / "hostd" / f"{LABEL}.env").read_text(), env_text)
+
+    def test_promote_wrong_name_env_warns_and_leaves_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            env_text = mint_name._hostd_env_text(
+                "othername", OLD.hex(), MIRROR)
+            _stage_home(home, env_text)
+            ok, msg = rotate_name.promote_rotation(LABEL, home)
+            self.assertTrue(ok, msg)
+            self.assertIn("hosts a different name", msg)
+            self.assertNotIn("refreshed to the new key", msg)
             self.assertEqual(
                 (home / "hostd" / f"{LABEL}.env").read_text(), env_text)
 
