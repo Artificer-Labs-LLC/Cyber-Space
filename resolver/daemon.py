@@ -27,7 +27,19 @@ Config (environment, bad values fall back to defaults):
                          .cyberspace (default 1.1.1.1:53)
   CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1)
   CYBERNET_RESOLVER_PORT listen port (default 5353, min 1)
+                         — set but not an integer -> _env_int silently
+                         falls back to 5353, below 1 clamps to 1, and
+                         above 65535 is honored by _env_int so the bind
+                         fails; run() warns loudly on stderr at startup
+                         (see _daemon_config_warnings)
   CYBERNET_TTL_CAP       answer TTL cap in seconds (default 300, min 0)
+                         — set but not an integer -> silently 300,
+                         below 0 clamps to 0; run() warns (see
+                         _daemon_config_warnings)
+  CYBERNET_UPSTREAM_DNS  — set but malformed -> _parse_upstream
+                         silently substitutes 1.1.1.1:53, so non-zone
+                         queries go somewhere the operator never chose;
+                         run() warns (see _daemon_config_warnings)
 
 Run from the repo root:  python -m resolver.daemon
 """
@@ -74,6 +86,59 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
     return (host, port_n)
 
 
+def _daemon_config_warnings() -> list[str]:
+    """Loud config mistakes, or []. Unset/empty means the documented
+    default (silent, a choice). Three set-but-ineffective cases the
+    parsers otherwise hide: CYBERNET_RESOLVER_PORT not an integer
+    (falls back to 5353, so the daemon listens somewhere the operator
+    never chose), below 1 (clamped to 1), or above 65535 (honored by
+    _env_int, so the bind then fails); CYBERNET_TTL_CAP not an integer
+    (300) or below 0 (clamped to 0); and CYBERNET_UPSTREAM_DNS set but
+    malformed (_parse_upstream substitutes 1.1.1.1:53, so every
+    non-.cyberspace query is forwarded somewhere unchosen). Mirrors
+    _env_int/_parse_upstream exactly; never prints the values."""
+    problems: list[str] = []
+    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
+    if raw:
+        try:
+            port = int(raw)
+        except (ValueError, TypeError):
+            problems.append(
+                "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
+                "default will be used instead")
+        else:
+            if port < 1:
+                problems.append(
+                    "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 "
+                    "will be used instead")
+            elif port > 65535:
+                problems.append(
+                    "CYBERNET_RESOLVER_PORT is above 65535 — the bind "
+                    "will fail (no valid port can be derived from it)")
+    raw = os.environ.get("CYBERNET_TTL_CAP", "").strip()
+    if raw:
+        try:
+            ttl = int(raw)
+        except (ValueError, TypeError):
+            problems.append(
+                "CYBERNET_TTL_CAP is not an integer — the 300 default "
+                "will be used instead")
+        else:
+            if ttl < 0:
+                problems.append(
+                    "CYBERNET_TTL_CAP is below the 0 floor — 0 will be "
+                    "used instead")
+    raw = os.environ.get("CYBERNET_UPSTREAM_DNS", "").strip()
+    if raw:
+        host, _, port_s = raw.partition(":")
+        port_ok = port_s.strip().isdigit() and 1 <= int(port_s.strip()) <= 65535
+        if not host.strip() or not port_ok:
+            problems.append(
+                "CYBERNET_UPSTREAM_DNS is not a valid host:port — the "
+                "1.1.1.1:53 default will be used instead")
+    return problems
+
+
 def _config() -> tuple[str, int, str, tuple[str, int], int]:
     """(bind_host, port, mirror_url, upstream, ttl_cap)."""
     return (
@@ -88,6 +153,8 @@ def _config() -> tuple[str, int, str, tuple[str, int], int]:
 def run() -> None:
     """Bind (UDP+TCP) and answer until SIGINT/SIGTERM. Returns, never raises."""
     bind_host, port, mirror_url, upstream, ttl_cap = _config()
+    for warn in _daemon_config_warnings():
+        print(f"resolverd: config: {warn}", file=sys.stderr)
     usock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     usock.bind((bind_host, port))
     tsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
