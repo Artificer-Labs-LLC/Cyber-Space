@@ -1669,6 +1669,16 @@ def _name_binding_admission_ok(issued_dt, expires_dt, now_dt):
     return None
 
 
+def _gossip_claim_weak(pub: str):
+    """ART-40 weak-key gate for a gossiped name binding.
+
+    Lazy import: window_open imports core. Returns window_open.weak_reason
+    or None. Patchable by the receive belt. Honest full-order keys return
+    None and leave the merge unchanged."""
+    import window_open
+    return window_open.weak_reason((pub or "").strip().lower())
+
+
 def ingest_gossiped_binding(binding: dict) -> str:
     """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
     gossiped name binding into this mirror's registry. A registry is a
@@ -1692,7 +1702,11 @@ def ingest_gossiped_binding(binding: dict) -> str:
 
     Returns one of "inserted", "replaced", "kept", "conflict",
     "dropped-malformed", "dropped-unverifiable", "dropped-expired",
-    "dropped-stale", "dropped-over-cap", "dropped-full". Never raises."""
+    "dropped-stale", "dropped-over-cap", "dropped-full", "dropped-weak".
+    Never raises. A weak claimant key (window_open.weak_reason) is
+    dropped-weak after the signature and admission gates and before any
+    write, including the conflict log — gossip is not a bypass of the
+    claim route's ART-40 refusal."""
     try:
         if not isinstance(binding, dict):
             return "dropped-malformed"
@@ -1731,6 +1745,13 @@ def ingest_gossiped_binding(binding: dict) -> str:
             if "exceeds 365" in admission_reason:
                 return "dropped-over-cap"
             return "dropped-stale"
+        # ART-40: same refusal the claim route applies after a verifying
+        # signature and before any name_bindings / name_conflicts write.
+        # Admission stays first so a stale or over-cap binding keeps its
+        # existing dropped-* result.
+        why = _gossip_claim_weak(node_pubkey)
+        if why:
+            return "dropped-weak"
         new = {"name": name, "node_pubkey": node_pubkey,
                "issued_at": issued_at, "expires_at": expires_at,
                "signature": signature}
