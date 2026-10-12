@@ -60,7 +60,11 @@ from mint_name import _write_secret  # noqa: E402  born-600 secret writes
 
 _LABEL_MAX = 63
 _DEFAULT_MIRROR = "http://127.0.0.1:8471"
-_DEFAULT_EXPIRY_DAYS = 730
+# A day under the namespace's 365-day binding-lifetime cap
+# (core.NAME_EXPIRY_DAYS): the new binding minted on submit must never
+# be one every admission/verify/resolve seat refuses. Twin of mint_name.
+_DEFAULT_EXPIRY_DAYS = 364
+_EXPIRY_DAYS_CAP = 365
 
 
 def _valid_label(label: str) -> bool:
@@ -463,6 +467,11 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     label = _normalize(label)
     if not _valid_label(label):
         return False, f"{label!r} is not a valid .cyberspace label"
+    if expiry_days > _EXPIRY_DAYS_CAP:
+        return False, (f"--expiry-days={expiry_days} exceeds the namespace's "
+                       f"{_EXPIRY_DAYS_CAP}-day binding-lifetime cap — the "
+                       f"rotate route refuses any binding signed for longer, "
+                       f"so nothing was sent")
     rec_path = home / f"{label}-rotate.json"
     next_path = home / f"{label}-name.key.next"
     key_path = home / f"{label}-name.key"

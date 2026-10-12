@@ -80,7 +80,7 @@ def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
-def _claim(name, priv, expiry_days=730):
+def _claim(name, priv, expiry_days=364):
     """Claim a name at the real mirror; returns True on 200."""
     pub = publickey(priv).hex().lower()
     now = datetime.now(timezone.utc)
@@ -213,6 +213,20 @@ with tempfile.TemporaryDirectory() as td:
     _stage(home, LABEL, OLD_SEED, NEW_SEED)
     ok, msg = rotate_name.submit_rotation(LABEL, "http://127.0.0.1:1", home)
     check("refuses when the mirror does not answer",
+          not ok and "did not answer" in msg, msg)
+
+# 12b. refusal: over-cap expiry refused locally before anything is sent
+# (an unreachable mirror proves the refusal precedes any network use)
+with tempfile.TemporaryDirectory() as td:
+    home = Path(td)
+    _stage(home, LABEL, OLD_SEED, NEW_SEED)
+    ok, msg = rotate_name.submit_rotation(LABEL, "http://127.0.0.1:1", home,
+                                          expiry_days=366)
+    check("refuses over-cap expiry before sending",
+          not ok and "binding-lifetime cap" in msg, msg)
+    ok, msg = rotate_name.submit_rotation(LABEL, "http://127.0.0.1:1", home,
+                                          expiry_days=365)
+    check("at-cap expiry passes the local gate (mirror refusal only)",
           not ok and "did not answer" in msg, msg)
 
 # 13-14. CLI exit codes: success rc=0, --submit+--promote together rc=2
