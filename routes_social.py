@@ -199,7 +199,8 @@ def _proxied_pigeonholes(origin_name: str, limit: int) -> dict:
             status_code=502,
             detail="Closed window: the origin has no live address on this roster.")
     body = {"from_node_pub": _NODE_PUB, "limit": limit}
-    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, origin_pub, body)
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, origin_pub, body,
+                                 kind="pigeonhole")
     try:
         req = urllib.request.Request(
             origin_url + "/fed/pigeonholes_proxy",
@@ -211,7 +212,8 @@ def _proxied_pigeonholes(origin_name: str, limit: int) -> dict:
         raise HTTPException(
             status_code=502,
             detail="Closed window: the origin board is unreachable.")
-    if not isinstance(reply, dict) or not _fed_env.verify_envelope(reply):
+    if not isinstance(reply, dict) or not _fed_env.verify_envelope(
+            reply, expect_kind="pigeonhole-reply"):
         raise HTTPException(
             status_code=502,
             detail="Closed window: the origin's answer did not verify.")

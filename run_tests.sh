@@ -29,6 +29,13 @@ if ! grep -q -- '--no-proxy-headers' "$ROOT/deploy/cybernet-node.service"; then
   exit 1
 fi
 
+# ART-29: name-pin and fork tests are in-process. A live-route hook is closed.
+if grep -nE 'CYBERNET_TEST_HOOK|CYBERNET_LIVE_HOOK|names_gossip_test_hook' \
+    "$ROOT/federation.py" "$ROOT/core.py" "$ROOT/name_fork.py" "$ROOT"/routes_*.py; then
+  echo "FAIL: live-route test hooks are closed"
+  exit 1
+fi
+
 TESTS=(
   "test_dial.py"
   "test_name_claim.py"
@@ -38,6 +45,7 @@ TESTS=(
   "test_window_open_preconditions.py"
   "test_legacy_migrate_stub.py"
   "test_witness_port.py"
+  "test_name_fork_belt.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"

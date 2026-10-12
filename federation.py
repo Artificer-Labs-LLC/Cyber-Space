@@ -58,7 +58,7 @@ def fed_ping():
         "node_pub": _NODE_PUB,
         "genesis": IS_GENESIS,
     }
-    return _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body)
+    return _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body, kind="ping")
 
 
 @router.post("/fed/announce")
@@ -67,7 +67,7 @@ def fed_announce(env: dict):
     and store it as a roster entry (docs/FEDERATION.md primitive 2b).
     Stored as seen-from-peer, never as gospel. Recipient must be
     "federation" (broadcast) or this node's own pubkey (direct)."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="announce"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") not in ("federation", _NODE_PUB):
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -133,7 +133,7 @@ def fed_retire(env: dict):
     when present and verifiable: the tombstone keeps the owner's signature
     so the producer can forward the retirement on the gossip path
     (docs/FEDERATION.md: Gossip v1, delta-sync send half)."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="retire"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -187,7 +187,7 @@ def fed_gossip(env: dict):
     ourselves, the sender itself (already known), entries with no
     reachable node_url, malformed pubs/names, caps over the whitelist.
     Roster capped at 128 entries."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="gossip"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -276,7 +276,7 @@ def fed_directory_delta(env: dict):
     row rides /fed/announce, authoritative); stale/replay deltas count as
     stale, never errors. New-row inserts respect the 128-entry roster cap.
     Rate-limited per sender peer."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="directory-delta"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -427,7 +427,7 @@ async def fed_dm(env: dict):
     envelope, store it in a DM channel against a local pseudo-agent for the
     remote sender, and never forward blind. Recipient must be this node's
     own pubkey (direct delivery only)."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="dm"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -466,7 +466,7 @@ def fed_channel_join(env: dict):
     stores the subscription and future message fan-out will push to the
     peer. Public channels only — DMs stay private. Idempotent: joining
     twice returns the same subscription."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="channel-join"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -509,7 +509,7 @@ def fed_channel_leave(env: dict):
     Idempotent: leaving a subscription that isn't there reports
     removed=false. Unknown local channel is a no-op (no row could exist) —
     never an error, so leave works even after the channel was deleted."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="channel-leave"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -550,7 +550,7 @@ async def fed_channel_push(env: dict):
     feed via POST /api/v1/fed/channels/subscribe. Mere announce is NOT
     consent: an announced stranger that was never subscribed to gets 403.
     Recipient must be this node's own pubkey — never forwarded blind."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="channel-push"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -625,7 +625,8 @@ def fed_subscribe(inp: dict, authorization: str | None = Header(default=None)):
             "VALUES (?,?,?,?)", (node_pub, from_agent, channel, _now()))
     body = {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
             "from_node_name": NODE_NAME, "channel": channel}
-    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body)
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body,
+                                 kind="channel-join")
     try:
         req = urllib.request.Request(
             peer["node_url"] + "/fed/channel/join",
@@ -679,7 +680,8 @@ def fed_unsubscribe(inp: dict, authorization: str | None = Header(default=None))
         leave = _fed_env.make_envelope(
             _NODE_PRIV, _NODE_PUB, node_pub,
             {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
-             "from_node_name": NODE_NAME, "channel": channel})
+             "from_node_name": NODE_NAME, "channel": channel},
+            kind="channel-leave")
         try:
             req = urllib.request.Request(
                 peer["node_url"] + "/fed/channel/leave",
@@ -709,7 +711,7 @@ def fed_pigeonholes_proxy(env: dict):
     attribution) is the requesting node's job. An empty board is returned
     honestly — only an unreachable origin is a closed window (502 on the
     caller's side, never here)."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="pigeonhole"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -741,7 +743,8 @@ def fed_pigeonholes_proxy(env: dict):
              for r in rows]
     reply = {"origin_node": NODE_NAME, "origin_pub": _NODE_PUB,
              "pigeonholes": items, "count": len(items), "limit": limit}
-    return _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, sender_pub, reply)
+    return _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, sender_pub, reply,
+                                 kind="pigeonhole-reply")
 
 @router.post("/fed/workspace_invite")
 def fed_workspace_invite(env: dict):
@@ -763,7 +766,7 @@ def fed_workspace_invite(env: dict):
     nothing workspace-shaped beyond the membership receipt. No new crypto,
     no new daemons: the envelope convention and the roster are the
     pigeonhole proxy's, reused verbatim."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="workspace-invite"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -829,7 +832,7 @@ def fed_workspace_countersign(env: dict):
     row is idempotent success, never an error. No new crypto, no new
     daemons: envelope + roster, the pigeonhole-proxy conventions reused
     verbatim."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="workspace-countersign"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -918,7 +921,7 @@ async def fed_workspace_leave(env: dict):
     same way an unsigned goodbye kills an unsigned invite). On success
     struck_at is set: the membership ends, receipts kept, no
     resurrection. No new crypto, no new daemons."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="workspace-leave"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -994,7 +997,7 @@ def fed_workspace_removed(env: dict):
     already-struck is idempotent 200 (a repeated notice is a no-op, not
     an argument). Receipts kept, no resurrection. No new crypto, no new
     daemons."""
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env, expect_kind="workspace-removed"):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
@@ -1047,4 +1050,42 @@ def fed_workspace_removed(env: dict):
             (_now(), wid, member_key, home_node))
     return {"removed": True, "workspace_id": wid, "node": NODE_NAME,
             "from_node": home_node, "agent_key": member_key}
+
+
+@router.post("/fed/names/gossip")
+def fed_names_gossip(env: dict):
+    """Name-registry gossip receive (F1–F4).
+
+    Rotation certificates ride in body.rotations as first-class objects.
+    Known-peer 404 is raised before the per-sender bucket. More than 128
+    bindings or 128 certificates is a 400, never a silent truncation.
+    Chain depth is never a tiebreak. There is no test hook on this route.
+    """
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(
+            env, expect_kind="names-gossip"):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    if env.get("recipient") != _NODE_PUB:
+        raise HTTPException(status_code=400, detail="not addressed to this node")
+    body = env.get("body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    sender_pub = env.get("sender_pub")
+    if body.get("from_node_pub") != sender_pub:
+        raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    bindings = body.get("bindings") or []
+    rotations = body.get("rotations") or []
+    if not isinstance(bindings, list) or not isinstance(rotations, list):
+        raise HTTPException(
+            status_code=400, detail="bindings and rotations must be lists")
+    if len(bindings) > 128 or len(rotations) > 128:
+        raise HTTPException(status_code=400, detail="too many name records")
+    with _db_lock, _db() as conn:
+        known = conn.execute(
+            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
+            (sender_pub,)).fetchone()
+    if not known:
+        raise HTTPException(status_code=404, detail="unknown peer")
+    _check_rate(f"fednames:{sender_pub}")
+    from core import ingest_names_gossip
+    return ingest_names_gossip(body, sender_pub)
 

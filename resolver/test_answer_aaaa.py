@@ -70,7 +70,7 @@ def _fake_get_json(node_url):
     binding = _binding(_iso(now - timedelta(days=1)),
                        _iso(now + timedelta(days=6)))
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester",
-                              {"pong": True})
+                              {"pong": True}, kind="ping")
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + LABEL:

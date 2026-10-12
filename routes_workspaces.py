@@ -345,7 +345,8 @@ async def workspace_invite(wid: int, request: Request,
     body = {"from_node_pub": _NODE_PUB, "workspace_id": wid,
             "charter_hash": charter_hash, "invitee_agent_key": agent_key,
             "inviter_sig": _invite_mint(wid, charter_hash, agent_key)}
-    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, origin_pub, body)
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, origin_pub, body,
+                                 kind="workspace-invite")
     try:
         req = urllib.request.Request(
             origin_url + "/fed/workspace_invite",
@@ -432,7 +433,8 @@ async def workspace_invite_countersign(wid: int, request: Request, authorization
     body = {"from_node_pub": _NODE_PUB, "workspace_id": wid,
             "charter_hash": charter_hash, "invitee_agent_key": agent_key,
             "countersign_sig": sig}
-    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, home_pub, body)
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, home_pub, body,
+                                 kind="workspace-countersign")
     try:
         req = urllib.request.Request(
             home_url + "/fed/workspace_countersign",
@@ -517,7 +519,8 @@ async def workspace_remote_remove(wid: int, request: Request,
     if peer and peer["node_url"]:
         body = {"from_node_pub": _NODE_PUB, "workspace_id": wid,
                 "member_key": agent_key, "removed_sig": _removed_mint(wid, agent_key)}
-        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, peer["node_pub"], body)
+        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, peer["node_pub"], body,
+                                     kind="workspace-removed")
         threading.Thread(target=_post_to_peer_path,
                          args=(peer["node_url"], "/fed/workspace_removed", env),
                          daemon=True).start()

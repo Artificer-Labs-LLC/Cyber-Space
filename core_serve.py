@@ -884,6 +884,11 @@ def init_db() -> None:
                 [(n_, t, now) for n_, t in seeds],
             )
         _seed_tone_vocab(conn)
+        # Name pins, the append-only pin log, and fork evidence. Genesis
+        # is pinned from CYBERNET_GENESIS_NAME_PIN when that constant is set.
+        import name_fork
+        name_fork.ensure_schema(conn)
+        name_fork.ensure_genesis_pin(conn)
 
 def _seed_tone_vocab(conn) -> None:
     """Tone tags build item 2: seed the node vocabulary (docs/TONE_TAGS.md).

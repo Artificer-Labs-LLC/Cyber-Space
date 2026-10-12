@@ -1197,6 +1197,19 @@ async def names_claim(request: Request):
                "expires_at": expires_at, "signature": signature}
 
     def _verify_claim():
+        # Pin before any signature count (V1). A contested name, or a key
+        # that is not the current pin, is refused here. The check commits
+        # before the refusal so a configured genesis pin is not rolled back.
+        import name_fork
+        with _db_lock, _db() as conn:
+            name_fork.ensure_schema(conn)
+            name_fork.ensure_genesis_pin(conn)
+            pin_refused = name_fork.pin_refuses_before_signature(
+                conn, name, node_pubkey)
+        if pin_refused:
+            raise HTTPException(
+                status_code=400,
+                detail="Refused: name key does not match the pin.")
         # Signature, then weak_reason. Both before any name_bindings write
         # (including the conflict log). ART-40 admission.
         if not _name_binding_verify(name, node_pubkey, issued_at, expires_at, signature):
@@ -1233,6 +1246,10 @@ async def names_claim(request: Request):
                     "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
                     "expires_at=excluded.expires_at, signature=excluded.signature",
                     (name, node_pubkey, issued_at, expires_at, signature))
+                # TOFU: the first admitted key is the pin. A pin already
+                # present is left alone — it moves only through a certificate.
+                import name_fork
+                name_fork.pin_initial(conn, name, node_pubkey)
                 return {**binding, "status": "claimed"}
             raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
 
@@ -1357,19 +1374,36 @@ async def names_rotate(request: Request):
             raise HTTPException(status_code=404, detail="No such name.")
         if stored_pub != old_pubkey:
             raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
+        # Fork rule after the holder check, before the binding write.
+        # A second valid cert for this prior key is stored and the name
+        # is CONTESTED — the local binding is not moved. Chain depth is
+        # never a tiebreak. The verdict commits before the HTTP refusal
+        # so fork evidence is not rolled back with the error.
+        import name_fork
+        cert = {"name": name, "old_pubkey": old_pubkey,
+                "new_pubkey": new_pubkey, "issued_at": rotation_issued_at,
+                "signature": rotation_signature}
         accepted_at = _now()
         with _db_lock, _db() as conn:
-            conn.execute(
-                "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
-                "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-                "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
-                "expires_at=excluded.expires_at, signature=excluded.signature",
-                (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
-            conn.execute(
-                "INSERT OR IGNORE INTO name_rotations "
-                "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
-                "VALUES (?,?,?,?,?,?)",
-                (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
+            verdict = name_fork.consider_rotation(conn, cert)
+            if verdict == "accepted":
+                conn.execute(
+                    "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                    "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
+                    "expires_at=excluded.expires_at, signature=excluded.signature",
+                    (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
+                conn.execute(
+                    "INSERT OR IGNORE INTO name_rotations "
+                    "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
+        if verdict == "contested":
+            raise HTTPException(status_code=409, detail="name contested")
+        if verdict != "accepted":
+            raise HTTPException(
+                status_code=400,
+                detail="rotation is not contiguous with the current pin")
         return {"name": name, "status": "rotated",
                 "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
 
@@ -1428,10 +1462,19 @@ def names_resolve(request: Request, name: str):
     label = (name or "").strip().lower()
     if not _valid_name_label(label):
         raise HTTPException(status_code=404, detail="No such name.")
+    import name_fork
     with _db_lock, _db() as conn:
+        contested = name_fork.is_contested(conn, label)
+        pin = name_fork.current_pin(conn, label)
         cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (label,))
         row = cur.fetchone()
+    # Fail closed. A contested name is not served, including the key this
+    # node accepted first. Winner determination is witness receipts only.
+    if contested:
+        raise HTTPException(status_code=409, detail="name contested")
     if row is None:
+        raise HTTPException(status_code=404, detail="No such name.")
+    if pin is not None and str(row[1]).lower() != pin:
         raise HTTPException(status_code=404, detail="No such name.")
     # Floor fix 5 (v0.6.3): both timestamps must parse as canonical UTC —
     # an unparseable row reads as absent, never live.
@@ -1459,6 +1502,10 @@ def names_reach(request: Request, name: str):
     label = (name or "").strip().lower()
     if not _valid_name_label(label):
         raise HTTPException(status_code=404, detail="No such name.")
+    import name_fork
+    with _db_lock, _db() as conn:
+        if name_fork.is_contested(conn, label):
+            raise HTTPException(status_code=404, detail="No such name.")
     with _db_lock, _db() as conn:
         row = conn.execute(
             "SELECT node_pubkey, reach, issued_at, expires_at, signature "

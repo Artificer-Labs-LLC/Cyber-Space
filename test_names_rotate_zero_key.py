@@ -151,6 +151,14 @@ def restore_rotz2():
     seed("rotz2", OLD)
     with core._db_lock, core._db() as conn:
         conn.execute("DELETE FROM name_rotations WHERE name='rotz2'")
+        # Arm (a) moves the pin. Rewinding the binding has to rewind the
+        # pin log too, or the next arm is refused as non-contiguous.
+        for table in ("name_pins", "name_pin_log", "name_fork_certs",
+                      "name_fork_overflow", "name_contested"):
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE name='rotz2'")
+            except Exception:
+                pass
 
 
 old_rev, old_src = _load_old_verifier()
