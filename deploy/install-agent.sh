@@ -118,6 +118,19 @@ if [[ -z "$HOSTD_ENV" ]]; then
     echo "    $VENV_PY $REPO_DIR/mint_name.py <label> $MIRROR_URL"
     echo "  then re-run with --hostd-env ~/.cyberspace/hostd/<label>.env"
 else
+    # hostd hosts exactly ONE name (the /etc env is a singleton). If the
+    # installed env already hosts a DIFFERENT name, refuse rather than
+    # silently evicting it — re-running to update the SAME name is fine.
+    if [[ -f /etc/cybernet-hostd/hostd.env ]]; then
+        EXISTING_HOSTED="$(grep -E '^CYBERNET_HOSTED_NAME=' /etc/cybernet-hostd/hostd.env | head -n 1 | cut -d= -f2- || true)"
+        NEW_HOSTED="$(grep -E '^CYBERNET_HOSTED_NAME=' "$HOSTD_ENV" | head -n 1 | cut -d= -f2- || true)"
+        if [[ -n "$EXISTING_HOSTED" && -n "$NEW_HOSTED" && "$EXISTING_HOSTED" != "$NEW_HOSTED" ]]; then
+            echo "  ERROR: /etc/cybernet-hostd/hostd.env already hosts $EXISTING_HOSTED.cyberspace" >&2
+            echo "         refusing to overwrite it with $NEW_HOSTED.cyberspace — hostd hosts exactly one name." >&2
+            echo "         Remove the installed env deliberately first if you mean to replace that name." >&2
+            exit 1
+        fi
+    fi
     install -d -m 0700 /etc/cybernet-hostd
     install -m 0600 "$HOSTD_ENV" /etc/cybernet-hostd/hostd.env
     stamp_unit "$REPO_DIR/deploy/hostd.service" /etc/systemd/system/hostd.service
