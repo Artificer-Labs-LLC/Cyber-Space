@@ -52,6 +52,7 @@ TESTS=(
   "test_wok_hopcap.py"
   "test_wok_closure.py"
   "test_wok_nodeb.py"
+  "test_wok_certs.py"
   "test_legacy_migrate_stub.py"
   "test_witness_port.py"
   "resolver/test_answer_aaaa.py"

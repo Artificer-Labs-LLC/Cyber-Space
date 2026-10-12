@@ -89,6 +89,16 @@ def charge_import_source(src: str) -> None:
     core._check_rate(f"import-legacy:{src}", limit=IMPORT_PER_SOURCE)
 
 
+IMPORT_CERTS_PER_SOURCE = 60 * 66 * 4
+
+
+def charge_import_certs(src: str, n: int) -> None:
+    """Per-source bucket scaled by cert count, charged before any per-hop
+    verify (hop_certs.verify_hops calls this with the row count)."""
+    for _ in range(max(1, int(n))):
+        core._check_rate(f"import-legacy:certs:{src}", limit=IMPORT_CERTS_PER_SOURCE)
+
+
 def charge_import_scoped(log_id: str) -> None:
     core._check_rate(f"import-legacy:log:{log_id}", limit=IMPORT_PER_LOG)
     core._check_rate("import-legacy:global", limit=IMPORT_GLOBAL)
@@ -142,6 +152,8 @@ def _signed_view(name: str | None):
     with core._db_lock, core._db() as conn:
         log_id, entries = window_open.export_log(conn)
         hop_rows = window_open.export_hop_rows(conn)
+        leaves = window_open.export_bound_leaves(conn)
+        roots = window_open.head_roots(conn)
     if not entries:
         return None
     if name is not None and not any(e["kind"] == "hold" and e.get("name") == name for e in entries):
@@ -161,13 +173,14 @@ def _signed_view(name: str | None):
         "window_open_seq": o,
         "window_close_seq": c,
         "window_state": state,
+        **roots,
     }
 
     def _sign(msg, sk=core._NODE_PRIV, pk=pub):
         return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
 
     body = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
-            "hops": hop_rows}
+            "hops": hop_rows, "bound": leaves}
     _proof_cache[key] = body
     return body
 
@@ -318,7 +331,8 @@ async def import_legacy(request: Request):
         if why:
             raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
         try:
-            _h, _entries, ident = lw.check_identity(proof, name, wset, pinned_log)
+            _h, _entries, ident = lw.check_identity(proof, name, wset, pinned_log,
+                                                 charge=lambda n: charge_import_certs(src, n))
         except lw.WitnessRefused as e:
             raise HTTPException(status_code=400, detail=str(e))
         if not witnessed_inception_ok(ident, pub):

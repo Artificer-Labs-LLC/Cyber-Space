@@ -254,8 +254,12 @@ def _json_len(x) -> int:
 
 
 MAX_SKELETON_BYTES = _json_len(_worst_entry(False)) + 2   # + ", " list separator
+MAX_ISSUED_AT = 40
 MAX_HOP_ROW_BYTES = _json_len({"name": "\U0001F600" * MAX_NAME_LEN, "i": 10 ** 10 - 1,
-                               "old": "f" * 64, "new": "f" * 64}) + 2
+                               "old": "f" * 64, "new": "f" * 64,
+                               "issued_at": "\U0001F600" * MAX_ISSUED_AT, "sig": "f" * 128,
+                               "v": 2, "seq": 10 ** 10 - 1, "prev_hash": "f" * 64}) + 2
+MAX_LEAF_BYTES = _json_len(["\U0001F600" * MAX_NAME_LEN, "f" * 64]) + 2
 
 
 def max_hop_rows(bindings: int, orphans: int = 0) -> int:
@@ -276,6 +280,7 @@ def proof_max_bytes(accounts: int, bindings: int, orphans: int = 0) -> int:
     return (HEAD_BUDGET + max_log_entries(accounts, bindings, orphans) * MAX_SKELETON_BYTES
             + full_slots * (MAX_FULL_BYTES - MAX_SKELETON_BYTES) + 64
             + max_hop_rows(bindings, orphans) * MAX_HOP_ROW_BYTES
+            + int(bindings) * MAX_LEAF_BYTES + 3 * 96
             + KEY_STATE_BUDGET)
 
 
@@ -397,12 +402,17 @@ def as_schedule(w) -> WitnessSchedule:
     return w if isinstance(w, WitnessSchedule) else WitnessSchedule([(1, w)])
 
 
+# ART-42 hop-row BLOCK: the witnesses sign the three roots node B checks.
+HEAD_ROOT_FIELDS = ("hops_root", "bound_root", "v1_frozen_root")
+
+
 def head_bytes(h: dict) -> bytes:
     return "\n".join([HEAD_FORMAT, f"log_id={h['log_id']}", f"witness_set={h['witness_set']}",
                       f"seq={h['seq']}", f"head_hash={h['head_hash']}",
                       f"window_open_seq={_v(h['window_open_seq'])}",
                       f"window_close_seq={_v(h['window_close_seq'])}",
-                      f"window_state={h['window_state']}"]).encode()
+                      f"window_state={h['window_state']}",
+                      *[f"{k}={h[k]}" for k in HEAD_ROOT_FIELDS]]).encode()
 
 
 def sign_head(h: dict, signers) -> dict:
@@ -423,7 +433,7 @@ def verify_head(signed: dict, wset, log_id: str) -> dict:
     try:
         h, sigs = signed["head"], signed["signatures"]
         fields = ("log_id", "witness_set", "seq", "head_hash", "window_open_seq",
-                  "window_close_seq", "window_state")
+                  "window_close_seq", "window_state") + HEAD_ROOT_FIELDS
         if not isinstance(h, dict) or set(h) != set(fields):
             raise WitnessRefused("head has unexpected fields")
         msg = head_bytes(h)
@@ -433,7 +443,8 @@ def verify_head(signed: dict, wset, log_id: str) -> dict:
         raise WitnessRefused("head is for another log")
     if not _int(h["seq"]) or h["seq"] < 1 or not _hex64(h["head_hash"]) \
             or not _int(h["window_open_seq"], True) or not _int(h["window_close_seq"], True) \
-            or h["window_state"] not in ("unopened", "open", "closed"):
+            or h["window_state"] not in ("unopened", "open", "closed") \
+            or not all(_hex64(h[k]) for k in HEAD_ROOT_FIELDS):
         raise WitnessRefused("bad head field")
     wset = sched.for_seq(h["seq"])
     if h["witness_set"] != wset.id:
@@ -572,12 +583,13 @@ def accept_legacy_identity(proof: dict, name: str, wset: WitnessSet, log_id: str
         raise WitnessRefused(f"malformed proof ({type(e).__name__})") from None
 
 
-def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str) -> tuple:
+def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str,
+                   charge=None) -> tuple:
     """The 4a rules without touching any store: -> (head, entries, identity).
     Callers that persist the head (node B's import) use this, then run
     their own store check and commit inside their transaction."""
     try:
-        return _rules(proof, name, wset, log_id)
+        return _rules(proof, name, wset, log_id, charge=charge)
     except WitnessRefused:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as e:
@@ -645,7 +657,8 @@ _ROW_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
 
 def hop_row_hash(row: dict) -> str:
     """Hash of one committed hop row {name, i, old, new}."""
-    body = json.dumps([row["name"], row["i"], row["old"], row["new"]],
+    import hop_certs
+    body = json.dumps([row[k] for k in hop_certs.ROW_FIELDS],
                       separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(HOPS_ROOT_DOMAIN + body.encode("ascii")).hexdigest()
 
@@ -659,9 +672,8 @@ def hops_root(rows) -> str:
 
 
 def _hop_row_ok(r) -> bool:
-    return (isinstance(r, dict) and set(r) == {"name", "i", "old", "new"}
-            and isinstance(r["name"], str) and type(r["i"]) is int and r["i"] >= 0
-            and isinstance(r["old"], str) and isinstance(r["new"], str))
+    import hop_certs
+    return hop_certs.row_ok(r)
 
 
 def verify_rows_root(entries: list, hops: list | None = None, log_id: str | None = None) -> tuple:
@@ -707,6 +719,8 @@ def _hops_by_name(hops: list) -> tuple:
     for name, rs in by.items():
         idx = [r["i"] for r in rs]
         k = len(rs)
+        if k > HOP_ROWS_PER_NAME:
+            raise WitnessRefused(f"hop rows for {name!r} exceed {HOP_ROWS_PER_NAME}")
         if idx != list(range(k)):
             k -= 1
             if k != PER_NAME_HOP_CAP + 1 or idx[:k] != list(range(k)) or idx[-1] <= k - 1:
@@ -758,6 +772,30 @@ def rederive_refusals(entries: list, hops: list | None = None) -> tuple:
     return True, refused
 
 
+def check_hop_certs(proof, h, entries, log_id, pins, charge=None) -> None:
+    """Fourth check: the head's roots match the shipped rows and leaves,
+    then every hop cert re-verifies (hop_certs.verify_hops)."""
+    import hop_certs
+    hop_rows = proof.get("hops", [])
+    leaves = proof.get("bound", [])
+    if not all(isinstance(x, list) and len(x) == 2 and all(isinstance(v, str) for v in x)
+               for x in leaves):
+        raise WitnessRefused("bound leaves malformed")
+    if h["hops_root"] != hops_root(hop_rows):
+        raise WitnessRefused("head hops_root does not match the hop rows")
+    if h["bound_root"] != hop_certs.bound_root(leaves):
+        raise WitnessRefused("head bound_root does not match the bound leaves")
+    if h["v1_frozen_root"] != hop_certs.v1_frozen_root(hop_rows):
+        raise WitnessRefused("head v1_frozen_root does not match the v1 certs")
+    view = rebuild_window_kinds(entries)
+    exempt = {r["name"] for k in ("reserve-hold", "name-refused") for r in view[k]}
+    ok, why = hop_certs.verify_hops(hop_rows, leaves, exempt, pins,
+                                    cache_key=(log_id, h["head_hash"], h["hops_root"]),
+                                    charge=charge)
+    if not ok:
+        raise WitnessRefused(f"hop certs: {why}")
+
+
 def pinned_sizing() -> tuple | None:
     """(accounts, bindings, orphans) the operator pinned for this log, or
     None. Orphans default to 0 when unset (Loom: third pin still open)."""
@@ -784,6 +822,9 @@ def check_size_limits(proof: dict, pins) -> None:
     hop_rows = proof.get("hops", [])
     if not isinstance(hop_rows, list) or len(hop_rows) > max_hop_rows(bindings, orphans):
         raise WitnessRefused("hop rows exceed the pinned ceiling")
+    leaves = proof.get("bound", [])
+    if not isinstance(leaves, list) or len(leaves) > int(bindings):
+        raise WitnessRefused("bound leaves exceed the pinned bindings")
     if len(json.dumps(proof).encode()) > proof_max_bytes(accounts, bindings, orphans):
         raise WitnessRefused("proof exceeds proof_max_bytes")
 
@@ -795,12 +836,13 @@ def _accept(proof, name, wset, log_id, store) -> dict:
     return ident
 
 
-def _rules(proof, name, wset, log_id, pins=None) -> tuple:
+def _rules(proof, name, wset, log_id, pins=None, charge=None) -> tuple:
     if not isinstance(proof, dict):
         raise WitnessRefused("proof is not an object")
     # ART-42 node B order: size limits, then verify_rows_root, then
     # rederive_refusals. Size first, before any entry or row is hashed.
-    check_size_limits(proof, pinned_sizing() if pins is None else pins)
+    pins = pinned_sizing() if pins is None else pins
+    check_size_limits(proof, pins)
     h = verify_head(proof.get("head") or {}, wset, log_id)
     if h["window_state"] != "closed" or h["window_close_seq"] is None:
         raise WitnessRefused("head is before window-close; a legacy identity stays pending")
@@ -819,6 +861,7 @@ def _rules(proof, name, wset, log_id, pins=None) -> tuple:
     ok, why = rederive_refusals(entries, hop_rows)
     if not ok:
         raise WitnessRefused(f"hop-cap refusals do not re-derive: {why}")
+    check_hop_certs(proof, h, entries, log_id, pins, charge)
     o, c = h["window_open_seq"], h["window_close_seq"]
     kinds = [e["kind"] for e in entries]
     if kinds.count("window-open") != 1 or kinds.count("window-close") != 1 \

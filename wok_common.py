@@ -26,9 +26,30 @@ ZERO = "00" * 32
 SIG = "00" * 64
 KINDS_IN = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
 
-K = _ed.publickey(bytes.fromhex("71" * 32)).hex()
-X = _ed.publickey(bytes.fromhex("72" * 32)).hex()
-PLAIN = _ed.publickey(bytes.fromhex("73" * 32)).hex()
+import hop_certs  # noqa: E402
+import nacl.signing  # noqa: E402
+
+SEEDS = {}
+
+
+def keypair(seed: bytes) -> str:
+    pub = nacl.signing.SigningKey(seed).verify_key.encode().hex()
+    SEEDS[pub] = seed
+    return pub
+
+
+def sign_with(pub: str, msg: bytes) -> str:
+    """Real Ed25519 (libsodium) signature by a test key; zeros for keys the
+    belt holds no seed for (weak keys cannot sign)."""
+    seed = SEEDS.get(pub.strip().lower())
+    if seed is None:
+        return SIG
+    return nacl.signing.SigningKey(seed).sign(msg).signature.hex()
+
+
+K = keypair(bytes.fromhex("71" * 32))
+X = keypair(bytes.fromhex("72" * 32))
+PLAIN = keypair(bytes.fromhex("73" * 32))
 K_UP = K.upper()
 
 _state = {"pass": 0, "fail": 0, "mutants": [], "t0": time.monotonic()}
@@ -63,7 +84,7 @@ def wipe():
     with core._db_lock, core._db() as conn:
         wo.init_schema(conn)
         for table in ("window_open_log", "window_refused_bindings", "window_kind_source",
-                      "window_hop_rows", "legacy_migration_log", "legacy_log_meta",
+                      "window_hop_rows", "window_bound_leaves", "legacy_migration_log", "legacy_log_meta",
                       "name_bindings", "name_rotations", "window_close_log", "legacy_migrations"):
             conn.execute(f"DELETE FROM {table}")
 
@@ -76,10 +97,13 @@ def bind(conn, name, pub, exp=PAST):
 
 
 def rot(conn, name, old, new, at=PAST):
+    """One stored v1 rotation cert, signed by the old key when the belt
+    holds its seed."""
+    sig = sign_with(old, hop_certs.v1_payload(name, old, new, PAST))
     conn.execute(
         "INSERT INTO name_rotations "
         "(name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
-        (name, old, new, PAST, SIG, at))
+        (name, old, new, PAST, sig, at))
 
 
 def reap():
@@ -127,7 +151,7 @@ def for_name(view, kind, name):
 
 
 # A pool of real prime-order keys, so every clean hop is genuinely clean.
-POOL = [_ed.publickey(bytes([0x10 + (i % 200)]) * 31 + bytes([i])).hex() for i in range(90)]
+POOL = [keypair(bytes([0x10 + (i % 200)]) * 31 + bytes([i])) for i in range(90)]
 assert all(not wo.is_weak_pubkey(k) for k in POOL)
 
 
@@ -199,27 +223,31 @@ def b_proof():
     """(proof, wset, log_id) exactly as node B receives it: signed head,
     full span, hop rows. Round-tripped through JSON."""
     log_id, entries = exported()
+    with core._db_lock, core._db() as conn:
+        roots = wo.head_roots(conn)
+        leaves = wo.export_bound_leaves(conn)
     pub = core._NODE_PUB.lower()
     wset = lw.WitnessSet(1, [pub])
     kinds = [e["kind"] for e in entries]
     head = {"log_id": log_id, "witness_set": wset.id, "seq": len(entries),
             "head_hash": entries[-1]["entry_hash"],
             "window_open_seq": kinds.index("window-open") + 1,
-            "window_close_seq": kinds.index("window-close") + 1, "window_state": "closed"}
+            "window_close_seq": kinds.index("window-close") + 1, "window_state": "closed",
+            **roots}
 
     def _sign(msg, sk=core._NODE_PRIV, pk=pub):
         return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
 
     proof = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
-             "hops": exported_hops()}
+             "hops": exported_hops(), "bound": leaves}
     return json.loads(json.dumps(proof)), wset, log_id
 
 
-B_PINS = (1, 200, 0)
-
-
-def b_accepts(proof, wset, log_id, pins=B_PINS):
-    """(accepted, ident-or-reason) through node B's real _rules."""
+def b_accepts(proof, wset, log_id, pins=None, orphans=0):
+    """(accepted, ident-or-reason) through node B's real _rules. Default
+    pins: one account, bindings = the shipped leaf count, orphans 0."""
+    if pins is None:
+        pins = (1, len(proof.get("bound", [])), orphans)
     try:
         return True, lw._rules(proof, IMP_NAME, wset, log_id, pins)[2]
     except lw.WitnessRefused as e:

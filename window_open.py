@@ -92,9 +92,12 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS window_hop_rows (
         name TEXT NOT NULL,
         i INTEGER NOT NULL,
-        old_pubkey TEXT NOT NULL,
-        new_pubkey TEXT NOT NULL,
+        row_json TEXT NOT NULL,
         PRIMARY KEY (name, i))""",
+    # bound_root leaves frozen at open: every name_bindings row.
+    """CREATE TABLE IF NOT EXISTS window_bound_leaves (
+        name TEXT PRIMARY KEY,
+        bound_pub TEXT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS window_close_log (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         closed_at TEXT NOT NULL,
@@ -147,6 +150,14 @@ _SCHEMA = (
 def init_schema(conn) -> None:
     for s in _SCHEMA:
         conn.execute(s)
+    if _has_table(conn, "name_rotations"):
+        have = _cols(conn, "name_rotations")
+        # v2 rotation certs (hop_certs.py): version, seq, prev_hash. v1 rows
+        # keep cert_v=1 and NULL seq/prev_hash.
+        for col, ddl in (("cert_v", "INTEGER NOT NULL DEFAULT 1"), ("cert_seq", "INTEGER"),
+                         ("prev_hash", "TEXT")):
+            if col not in have:
+                conn.execute(f"ALTER TABLE name_rotations ADD COLUMN {col} {ddl}")
     if _has_table(conn, "window_open_log") and "orphan_count" not in _cols(conn, "window_open_log"):
         conn.execute(
             "ALTER TABLE window_open_log ADD COLUMN orphan_count INTEGER NOT NULL DEFAULT 0")
@@ -250,18 +261,40 @@ def counted_hops(hops) -> int:
     return 0 if i is None else i + 1
 
 
-def committed_hop_rows(name, hops) -> list:
-    """Hop rows node B re-derives this name from with counted_hops: the
-    first SNAPSHOT_PER_NAME + 1 hops of the history (clean or not), plus
-    the earliest weak hop at its real index when it lies beyond them. On
-    these rows counted_hops is the true count up to the cap, and stays over
-    the cap for any name truly over it. Bounded at SNAPSHOT_PER_NAME + 2."""
+def committed_hop_rows(name, hops, certs=None) -> list:
+    """Hop rows node B re-derives and re-verifies this name from: the first
+    SNAPSHOT_PER_NAME + 1 hops, plus one row beyond them at its real index:
+    the earliest weak hop if it lies beyond, else the last hop when the
+    history is longer (so a clean chain still proves into bound_root).
+    Each row carries the stored rotation cert (hop_certs.ROW_FIELDS).
+    Bounded at SNAPSHOT_PER_NAME + 2 (legacy_witness.HOP_ROWS_PER_NAME)."""
     k = min(len(hops), SNAPSHOT_PER_NAME + 1)
     idx = list(range(k))
     wi = earliest_weak_index(hops)
     if wi is not None and wi >= k:
         idx.append(wi)
-    return [{"name": name, "i": i, "old": hops[i][0], "new": hops[i][1]} for i in idx]
+    elif len(hops) > k:
+        idx.append(len(hops) - 1)
+    out = []
+    for i in idx:
+        c = certs[i] if certs else {}
+        v = int(c.get("cert_v") or 1)
+        out.append({"name": name, "i": i, "old": hops[i][0], "new": hops[i][1],
+                    "issued_at": c.get("issued_at", ""), "sig": c.get("signature", ""),
+                    "v": v, "seq": c.get("cert_seq") if v == 2 else None,
+                    "prev_hash": c.get("prev_hash") if v == 2 else None})
+    return out
+
+
+def _all_certs(conn):
+    """{name: [cert dict]} in the same order as _all_histories."""
+    out = {}
+    for name, iss, sig, v, seq, prev in conn.execute(
+            "SELECT name, issued_at, signature, cert_v, cert_seq, prev_hash FROM name_rotations "
+            "ORDER BY name ASC, accepted_at ASC, rowid ASC"):
+        out.setdefault(name, []).append({"issued_at": iss, "signature": sig, "cert_v": v,
+                                         "cert_seq": seq, "prev_hash": prev})
+    return out
 
 
 def _all_histories(conn):
@@ -348,6 +381,7 @@ def snapshot_bindings(conn):
     open_window must not scan again to decide what to write."""
     held, refused, reserved, kind_source = [], [], [], []
     hist = _all_histories(conn) if _has_table(conn, "name_rotations") else {}
+    certs = _all_certs(conn) if hist else {}
     seen = set()
     for row in conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings ORDER BY name"):
@@ -395,7 +429,10 @@ def snapshot_bindings(conn):
         "orphan_count": len(orphan_names),
         # Only the hops an admission reads (ART-42 392140b7).
         "hops_per_name": {name: counted_hops(hops) for name, hops in hist.items()},
-        "hop_rows": [r for name in sorted(hist) for r in committed_hop_rows(name, hist[name])],
+        "hop_rows": [r for name in sorted(hist)
+                     for r in committed_hop_rows(name, hist[name], certs.get(name))],
+        "bound_leaves": [[r[0], (r[1] or "").strip().lower()] for r in conn.execute(
+            "SELECT name, node_pubkey FROM name_bindings ORDER BY name")],
     }
 
 
@@ -534,15 +571,36 @@ def _save_kind_source(conn, rows) -> None:
 
 def _save_hop_rows(conn, hop_rows) -> None:
     conn.executemany(
-        "INSERT INTO window_hop_rows (name, i, old_pubkey, new_pubkey) VALUES (?,?,?,?)",
-        [(r["name"], r["i"], r["old"], r["new"]) for r in hop_rows])
+        "INSERT INTO window_hop_rows (name, i, row_json) VALUES (?,?,?)",
+        [(r["name"], r["i"], json.dumps(r, sort_keys=True)) for r in hop_rows])
+
+
+def _save_bound_leaves(conn, leaves) -> None:
+    conn.executemany("INSERT INTO window_bound_leaves (name, bound_pub) VALUES (?,?)",
+                     [(n, p) for n, p in leaves])
 
 
 def export_hop_rows(conn) -> list:
-    """Hop rows in (name, i) order, the order hops_root commits."""
+    """Hop rows in the order hops_root commits (written order)."""
     init_schema(conn)
-    return [{"name": r[0], "i": r[1], "old": r[2], "new": r[3]} for r in conn.execute(
-        "SELECT name, i, old_pubkey, new_pubkey FROM window_hop_rows ORDER BY name, i")]
+    return [json.loads(r[0]) for r in conn.execute(
+        "SELECT row_json FROM window_hop_rows ORDER BY rowid")]
+
+
+def export_bound_leaves(conn) -> list:
+    init_schema(conn)
+    return [[r[0], r[1]] for r in conn.execute(
+        "SELECT name, bound_pub FROM window_bound_leaves ORDER BY name")]
+
+
+def head_roots(conn) -> dict:
+    """The three roots the witnessed head carries (legacy_witness.HEAD_ROOT_FIELDS)."""
+    import hop_certs
+    import legacy_witness as lw
+    rows = export_hop_rows(conn)
+    return {"hops_root": lw.hops_root(rows),
+            "bound_root": hop_certs.bound_root(export_bound_leaves(conn)),
+            "v1_frozen_root": hop_certs.v1_frozen_root(rows)}
 
 
 def _append_kind_entries(conn, rows) -> list:
@@ -651,6 +709,7 @@ def open_window(opened_by: str) -> dict:
         kinds_n = len(hashes)
         hop_rows = snap["hop_rows"]
         _save_hop_rows(conn, hop_rows)
+        _save_bound_leaves(conn, snap["bound_leaves"])
         _append_hold_closure(conn, rows, lw.rows_root(hashes), kinds_n,
                              lw.hops_root(hop_rows), len(hop_rows))
     return {"id": 1, "opened_at": opened_at, "opened_by": opened_by,

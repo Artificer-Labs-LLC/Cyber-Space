@@ -21,7 +21,7 @@ os.environ.pop("CYBERNET_GENESIS_WITNESSES", None)
 os.environ.pop("CYBERNET_GENESIS_LOG_ID", None)
 # ART-42 node B wiring: _rules checks the pinned sizing first.
 os.environ["CYBERNET_GENESIS_LEGACY_ACCOUNTS"] = "1000"
-os.environ["CYBERNET_GENESIS_LIVE_BINDINGS"] = "1000"
+os.environ["CYBERNET_GENESIS_LIVE_BINDINGS"] = "0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import core  # noqa: E402
 core.init_db()
 import app as appmod  # noqa: E402
+import hop_certs  # noqa: E402
 import legacy_witness as lw  # noqa: E402
 import ratesrc  # noqa: E402
 import routes_doh  # noqa: E402
@@ -152,12 +153,17 @@ class Builder:
             "log_id": self.log_id, "witness_set": wset.id, "seq": len(es),
             "head_hash": lw.entry_hash(es[-1], self.log_id),
             "window_open_seq": o, "window_close_seq": c, "window_state": "closed",
+            **EMPTY_ROOTS,
         }
         span = [
             lw.full(e) if (e["agent_id"] == full_for or e["agent_id"] is None) else lw.skeleton(e)
             for e in es
         ]
         return {"head": lw.sign_head(h, signers), "span": span}
+
+
+EMPTY_ROOTS = {"hops_root": lw.hops_root([]), "bound_root": hop_certs.bound_root([]),
+               "v1_frozen_root": hop_certs.v1_frozen_root([])}
 
 
 def add_closure(b):
@@ -452,6 +458,7 @@ OW = lw.WitnessSet(1, [wpub])
 head = {
     "log_id": olog, "witness_set": OW.id, "seq": 1, "head_hash": "ab" * 32,
     "window_open_seq": None, "window_close_seq": None, "window_state": "unopened",
+    **EMPTY_ROOTS,
 }
 wmsg = lw.head_bytes(head)
 wsig = forge_sig(scalar_w, wpub, wmsg)
