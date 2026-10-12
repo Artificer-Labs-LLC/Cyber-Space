@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Belt for Bulwark's HIGH (ART-29): gossip ingest enforces the route's
-admission gates — freshness (24h) and the 365-day cap.
+admission gates — the 365-day cap. Freshness (24h) is NOT checked on
+ingest (r3): gossip is propagation, not origination — late-arriving
+valid bindings must merge, or mirrors split.
 
-Before the fix, ingest_gossiped_binding checked signature, parse, and
-not-expired only. A fresh key signing issued_at=2001, expires_at=2027 was
-refused by the route but REPLACED any live incumbent via gossip
-(Lodestar's backdating hole, open on the second path).
+r3 (ART-29): live foreign incumbent is ALWAYS kept on ingest. A
+challenger signing issued_at = incumbent - 1s (or 2001) passes the
+route's freshness gate but must not steal a live name via gossip. The
+rejected claim is logged to name_conflicts and ingest returns
+"conflict" — not a silent "kept".
 
 Also covers Bulwark's MEDIUM: ingest now loads the old row WITH expires_at
 and calls _old_binding_beaten (the route's conflict rule), so expired rows
@@ -60,10 +63,12 @@ NOW = datetime.now(timezone.utc)
 live_issued = iso_z(NOW - timedelta(minutes=5))
 live_expires = iso_z(NOW + timedelta(days=30))
 
-# --- HIGH 1: backdated gossip binding (issued_at=2001) is refused ---
-# A live incumbent exists; attacker gossips a backdated binding from a
-# fresh key. _name_claim_beats would let earlier-issued_at win — the
-# freshness gate must drop it first.
+# --- HIGH 1: backdated gossip binding (issued_at=2001) vs live incumbent ---
+# r3: a 2001-issued binding with a future expiry has a >365d lifetime, so
+# it is dropped as over-cap before reaching conflict logic. The key point:
+# the live incumbent is NOT replaced. (A 2001 binding with a ≤365d
+# lifetime would already be expired — also dropped. Backdating cannot
+# reach the merge.)
 k_inc = os.urandom(32).hex()
 check("incumbent inserts",
       core.ingest_gossiped_binding(
@@ -73,8 +78,8 @@ k_atk = os.urandom(32).hex()
 backdated = mint("belt-backdate", k_atk,
                  "2001-01-01T00:00:00+00:00",
                  iso_z(NOW + timedelta(days=30)))
-check("backdated (2001) gossip refused",
-      core.ingest_gossiped_binding(backdated), "dropped-stale")
+check("backdated (2001) gossip dropped, incumbent safe",
+      core.ingest_gossiped_binding(backdated), "dropped-over-cap")
 # Incumbent still holds the name
 with core._db_lock, core._db() as conn:
     row = conn.execute(
@@ -82,6 +87,36 @@ with core._db_lock, core._db() as conn:
         ("belt-backdate",)).fetchone()
 check("incumbent untouched after backdate attempt",
       row[0], _ed.publickey(bytes.fromhex(k_inc)).hex())
+
+# --- HIGH 1b: T-1s steal attempt (freshness-passing backdate) ---
+# The attack Bulwark flagged: challenger signs issued_at = incumbent - 1s,
+# which PASSES the 24h freshness gate on both paths. Incumbent must win.
+k_inc2 = os.urandom(32).hex()
+inc_issued = iso_z(NOW - timedelta(minutes=5))
+check("t-1s incumbent inserts",
+      core.ingest_gossiped_binding(
+          mint("belt-tminus1", k_inc2, inc_issued, live_expires)),
+      "inserted")
+k_atk2 = os.urandom(32).hex()
+atk_issued = iso_z(datetime.fromisoformat(inc_issued) - timedelta(seconds=1))
+check("T-1s challenger -> conflict, incumbent kept",
+      core.ingest_gossiped_binding(
+          mint("belt-tminus1", k_atk2, atk_issued, live_expires)),
+      "conflict")
+with core._db_lock, core._db() as conn:
+    row = conn.execute(
+        "SELECT node_pubkey FROM name_bindings WHERE name=?",
+        ("belt-tminus1",)).fetchone()
+check("incumbent untouched after T-1s attempt",
+      row[0], _ed.publickey(bytes.fromhex(k_inc2)).hex())
+# Conflict record was written with the challenger's key and reason
+with core._db_lock, core._db() as conn:
+    crow = conn.execute(
+        "SELECT challenger_pubkey, reason FROM name_conflicts WHERE name=?",
+        ("belt-tminus1",)).fetchone()
+check("conflict record logged for T-1s",
+      (crow[0], crow[1]),
+      (_ed.publickey(bytes.fromhex(k_atk2)).hex(), "live-foreign-incumbent"))
 
 # --- HIGH 2: over-cap gossip binding (>365d lifetime) is refused ---
 k_cap = os.urandom(32).hex()
@@ -113,6 +148,42 @@ check("fresh valid gossip accepted",
       core.ingest_gossiped_binding(
           mint("belt-fresh", k_fresh, live_issued, live_expires)),
       "inserted")
+
+# --- HIGH 6 (r3): late arrival merges — no freshness drop on ingest ---
+# A binding signed 25h ago (stale by the route's 24h gate) arrives via
+# gossip for an EXPIRED incumbent. r3: ingest skips freshness — the
+# binding merges instead of splitting mirrors as "dropped-stale".
+k_late_old = os.urandom(32).hex()
+check("late-arrival incumbent inserts",
+      core.ingest_gossiped_binding(
+          mint("belt-late", k_late_old, live_issued, live_expires)),
+      "inserted")
+with core._db_lock, core._db() as conn:
+    conn.execute(
+        "UPDATE name_bindings SET expires_at=? WHERE name=?",
+        (iso_z(NOW - timedelta(hours=1)), "belt-late"))
+k_late = os.urandom(32).hex()
+late_issued = iso_z(NOW - timedelta(hours=25))  # stale by route's 24h gate
+check("late (25h old) gossip replaces expired incumbent",
+      core.ingest_gossiped_binding(
+          mint("belt-late", k_late, late_issued,
+               iso_z(NOW + timedelta(days=30)))),
+      "replaced")
+
+# --- HIGH 7 (r3): same-key renewal via gossip is not a conflict ---
+# A renewal from the SAME key (later issued_at) flows through
+# _old_binding_beaten, not the incumbent-protection rule.
+k_ren = os.urandom(32).hex()
+ren_issued = iso_z(NOW - timedelta(minutes=10))
+check("renewal incumbent inserts",
+      core.ingest_gossiped_binding(
+          mint("belt-renew", k_ren, ren_issued, live_expires)),
+      "inserted")
+check("same-key renewal replaces (not conflict)",
+      core.ingest_gossiped_binding(
+          mint("belt-renew", k_ren, iso_z(NOW),
+               iso_z(NOW + timedelta(days=30)))),
+      "replaced")
 
 # --- MEDIUM: expired incumbent is freed on the gossip path ---
 # Insert a live binding, expire it directly in the DB, then gossip a
