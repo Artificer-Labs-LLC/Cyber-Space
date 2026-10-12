@@ -42,7 +42,9 @@ def _mint(name="testbind", pub=None, issued=None, expires=None):
     pub = publickey(priv) if pub is None else pub
     now = datetime.now(timezone.utc)
     issued = issued or _iso(now - timedelta(hours=1))
-    expires = expires or _iso(now + timedelta(days=365))
+    # Lifetime must stay under the 365-day cap: issued -1h + expires
+    # +365d would be 365d1h — over the cap verify_name now enforces.
+    expires = expires or _iso(now + timedelta(days=364))
     pub_hex = pub.hex().lower()
     payload = (b"name-claim|" + name.encode() + b"|" + pub_hex.encode()
                + b"|" + issued.encode() + b"|" + expires.encode())
