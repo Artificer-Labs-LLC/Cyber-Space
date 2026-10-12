@@ -1660,17 +1660,32 @@ def ingest_gossiped_binding(binding: dict) -> str:
             # let mirrors keep expired foreign rows HQ had replaced.
             old = {"name": name, "node_pubkey": row[0],
                    "issued_at": row[1], "expires_at": row[2]}
-            # r3 (Bulwark High, ART-29): live foreign incumbent is ALWAYS
-            # kept. A challenger signing issued_at = incumbent - 1s passes
-            # freshness but must not steal a live name. The rejected claim
-            # is logged as a conflict — an audit trail, not a silent keep.
+            # r3 (Bulwark High, ART-29): mirror convergence requires the
+            # deterministic rule (_name_claim_beats) on the ingest path.
+            # A live foreign incumbent does NOT block a challenger that
+            # beats it by earlier issued_at (or tie-break); otherwise
+            # mirrors receiving claims in different orders would diverge
+            # permanently. The 365-day cap (above) already blocks 2001-style
+            # backdates; the route's 24h freshness + live-incumbent 409
+            # remain the origination-time defenses. When a live incumbent
+            # IS displaced by an earlier foreign claim, the event is logged
+            # as a conflict for audit — convergence with a trail, not a
+            # silent steal.
             # Same-key updates (renewals) flow through _old_binding_beaten.
-            if (_incumbent_is_live(old, now_dt)
+            beaten = _old_binding_beaten(old, new, node_pubkey, now_dt)
+            if (not beaten and _incumbent_is_live(old, now_dt)
                     and old["node_pubkey"].lower() != node_pubkey.lower()):
                 _log_name_conflict(conn, name, old, new,
                                    "live-foreign-incumbent")
                 return "conflict"
-            if _old_binding_beaten(old, new, node_pubkey, now_dt):
+            if beaten:
+                # Audit: a live foreign incumbent displaced by the
+                # deterministic rule (earlier issued_at) is logged — the
+                # mirrors converge, but the handover leaves a trail.
+                if (_incumbent_is_live(old, now_dt)
+                        and old["node_pubkey"].lower() != node_pubkey.lower()):
+                    _log_name_conflict(conn, name, old, new,
+                                       "displaced-by-earlier-claim")
                 conn.execute(
                     "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
                     " expires_at=?, signature=? WHERE name=?",

@@ -88,9 +88,14 @@ with core._db_lock, core._db() as conn:
 check("incumbent untouched after backdate attempt",
       row[0], _ed.publickey(bytes.fromhex(k_inc)).hex())
 
-# --- HIGH 1b: T-1s steal attempt (freshness-passing backdate) ---
-# The attack Bulwark flagged: challenger signs issued_at = incumbent - 1s,
-# which PASSES the 24h freshness gate on both paths. Incumbent must win.
+# --- HIGH 1b: T-1s earlier claim (deterministic rule) ---
+# Mirror convergence (ART-29 r3 gap): a challenger with an EARLIER issued_at
+# beats the incumbent by the deterministic rule (_name_claim_beats), even on
+# the ingest path. This is what lets two mirrors receiving claims in opposite
+# orders converge on the same winner (see mirror-order-belt-test.py).
+# The 2001-style backdate is blocked by the 365-day cap (HIGH 1/2 above);
+# the route's 24h freshness + live-incumbent 409 remain the origination-time
+# defenses. The displacement is logged as a conflict for audit.
 k_inc2 = os.urandom(32).hex()
 inc_issued = iso_z(NOW - timedelta(minutes=5))
 check("t-1s incumbent inserts",
@@ -99,24 +104,24 @@ check("t-1s incumbent inserts",
       "inserted")
 k_atk2 = os.urandom(32).hex()
 atk_issued = iso_z(datetime.fromisoformat(inc_issued) - timedelta(seconds=1))
-check("T-1s challenger -> conflict, incumbent kept",
+check("T-1s earlier challenger replaces (deterministic rule)",
       core.ingest_gossiped_binding(
           mint("belt-tminus1", k_atk2, atk_issued, live_expires)),
-      "conflict")
+      "replaced")
 with core._db_lock, core._db() as conn:
     row = conn.execute(
         "SELECT node_pubkey FROM name_bindings WHERE name=?",
         ("belt-tminus1",)).fetchone()
-check("incumbent untouched after T-1s attempt",
-      row[0], _ed.publickey(bytes.fromhex(k_inc2)).hex())
-# Conflict record was written with the challenger's key and reason
+check("earlier challenger now holds the name",
+      row[0], _ed.publickey(bytes.fromhex(k_atk2)).hex())
+# Displacement of a live incumbent is logged with the challenger's key
 with core._db_lock, core._db() as conn:
     crow = conn.execute(
         "SELECT challenger_pubkey, reason FROM name_conflicts WHERE name=?",
         ("belt-tminus1",)).fetchone()
-check("conflict record logged for T-1s",
+check("displacement logged for T-1s",
       (crow[0], crow[1]),
-      (_ed.publickey(bytes.fromhex(k_atk2)).hex(), "live-foreign-incumbent"))
+      (_ed.publickey(bytes.fromhex(k_atk2)).hex(), "displaced-by-earlier-claim"))
 
 # --- HIGH 2: over-cap gossip binding (>365d lifetime) is refused ---
 k_cap = os.urandom(32).hex()
