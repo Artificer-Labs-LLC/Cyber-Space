@@ -798,6 +798,129 @@ def _name_claim_beats(new: dict, old: dict) -> bool:
     return new["node_pubkey"].lower() < old["node_pubkey"].lower()
 
 
+def _old_binding_beaten(old, binding, node_pubkey, now_dt):
+    """Q1 fix (Examiner's block, ART-29): decide if a new claim may overwrite
+    the stored row for a name.
+
+    Returns True if the new claim beats the old row (may overwrite),
+    False if the claim must be refused with 409.
+
+    Rules:
+    - No old row: beaten (fresh claim lands).
+    - Old row expired: beaten (free to any valid claim).
+    - Old row live and parseable: beaten iff _name_claim_beats says so
+      (deterministic conflict rule).
+    - Old row unparseable: beaten iff the claimant holds the SAME
+      node_pubkey (the owner re-claiming its own row). A foreign key
+      can NEVER overwrite an unparseable row — it is refused, not
+      silently replaced. The row stays until refused-bindings releases
+      it at window-open.
+    """
+    try:
+        if old is not None:
+            _parse_claim_time(old["issued_at"])  # validate; raises if unparseable
+            _parse_claim_time(old["expires_at"])
+        return (old is None
+                or _parse_claim_time(old["expires_at"]) <= now_dt
+                or _name_claim_beats(binding, old))
+    except ValueError:
+        # Examiner's block: unparseable stored row — same key only.
+        return old is not None and old["node_pubkey"].lower() == node_pubkey.lower()
+
+
+def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
+                                  binding_issued_at) -> bool:
+    """Primitive 4 (identity) — the gossip-merge twin of the rotate-accept
+    route's authority rule (rule 4): the stored key's own signature IS the
+    authority — a designated successor overrides the M-1 earlier-wins
+    rule, no race. Without a valid designation the M-1 rule governs
+    unchanged, so this can never become a squat vector.
+
+    The proof rides as binding["rotation"], attached by the sending
+    mirror's gossip-out half from its name_rotations table. Returns True
+    only when EVERY link holds:
+      - the record verifies (old key's signature, shapes, label, and not
+        future-dated — the same verify_rotation the route and CLI use);
+      - it names this label;
+      - its old_pubkey IS the key this mirror currently stores for the
+        name (only the holder designates — a record for a foreign or
+        dead name designates nothing here);
+      - its new_pubkey IS the gossiped binding's key;
+      - it was issued at or before the binding (the chain moves forward
+        in time, twin of the route's rule 3).
+    Fail-closed on every surprise: a missing, malformed, or failed proof
+    reads as no proof."""
+    if not isinstance(record, dict):
+        return False
+    if _verify_rotation_record(record) is not None:
+        return False
+    if record["name"].strip().lower() != name:
+        return False
+    if record["old_pubkey"].strip().lower() != stored_pubkey.lower():
+        return False
+    if record["new_pubkey"].strip().lower() != new_pubkey.lower():
+        return False
+    try:
+        if _parse_claim_time(record["issued_at"]) > _parse_claim_time(binding_issued_at):
+            return False
+    except ValueError:
+        return False
+    return True
+
+
+def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
+                                        new_pubkey,
+                                        binding_issued_at) -> bool:
+    """Primitive 4 (identity) — the multi-hop twin of
+    _gossiped_rotation_designates: a chain of rotation records
+    [a->b, b->c, ...] vouches the gossiped binding's key as the
+    successor of a mirror holding ANY earlier key in the chain, not
+    just the immediately previous one. Returns True only when EVERY
+    link holds:
+      - every hop verifies (old key's signature, shapes, label, not
+        future-dated — the same verify_rotation the route uses);
+      - every hop names this label;
+      - linkage: hop[0].old IS the mirror's stored key, and each later
+        hop's old == the previous hop's new (a gap is a broken lineage,
+        fail-closed);
+      - the tail hop's new IS the gossiped binding's key;
+      - every hop was issued at or before the binding (the chain moves
+        forward in time, twin of the single-hop rule).
+    Fail-closed on every surprise: a missing, malformed, unlinked, or
+    failed chain reads as no proof — the single-hop rule below still
+    gets its chance, then M-1 governs unchanged. A forged multi-hop
+    jump is impossible: every hop must carry the old key's own
+    signature, so a forger needs every intermediate private key."""
+    if not isinstance(chain, list) or not chain:
+        return False
+    if len(chain) > _ROTATION_CHAIN_CAP:
+        return False
+    prev_new = None
+    for i, rec in enumerate(chain):
+        if not isinstance(rec, dict):
+            return False
+        if _verify_rotation_record(rec) is not None:
+            return False
+        if rec["name"].strip().lower() != name:
+            return False
+        try:
+            if _parse_claim_time(rec["issued_at"]) > _parse_claim_time(binding_issued_at):
+                return False
+        except ValueError:
+            return False
+        old = rec["old_pubkey"].strip().lower()
+        new = rec["new_pubkey"].strip().lower()
+        if i == 0:
+            if old != stored_pubkey.lower():
+                return False
+        elif old != prev_new:
+            return False
+        prev_new = new
+    if prev_new != new_pubkey.lower():
+        return False
+    return True
+
+
 CYBERSPACE_SUFFIX = ".cyberspace"
 _RESOLVE_TIMEOUT = 8  # seconds — same outbound budget as the rest of core.py
 
