@@ -17,9 +17,14 @@ Usage:
   python resolver/wiring/smoke.py [--name genesis.cyberspace]
                                   [--server 127.0.0.1] [--port 5353]
                                   [--tcp]
+
+--server may be an IPv6 literal, bare ("::1") or bracketed ("[::1]",
+the form copied out of a URL) — the same forms the daemon binds and
+the resolver client dials; see _server_host/_server_family.
 """
 
 import argparse
+import ipaddress
 import random
 import socket
 import struct
@@ -42,13 +47,43 @@ def _build_query(name: str, qtype: int) -> tuple[bytes, int]:
     return header + question, txid
 
 
+def _server_host(server: str) -> str:
+    """Host to dial for a --server value, brackets stripped.
+
+    Mirrors resolver/client._server_host and daemon._bind_family
+    exactly: an operator who bound the daemon with the bracketed form
+    copied out of a URL ("[::1]") will naturally pass that same form
+    here, but sendto and create_connection both want the bare literal
+    — the bracketed form died in transport (gaierror) for a daemon
+    that was listening fine. Brackets are stripped when they wrap the
+    whole value; anything else is returned unchanged."""
+    host = server.strip()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1].strip()
+    return host
+
+
+def _server_family(host: str) -> int:
+    """Socket family for a (bare) server host: AF_INET6 for an IPv6
+    literal, AF_INET otherwise. The UDP wire hardcoded AF_INET, so a
+    daemon bound to ::1 — a bind the daemon itself now accepts — could
+    never be smoked at all, however the address was written."""
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            return socket.AF_INET6
+    except ValueError:
+        pass
+    return socket.AF_INET
+
+
 def _query(name: str, qtype: int, server: str, port: int,
            timeout: float = 3.0) -> tuple[int, int, int]:
     """Return (rcode, ancount, txid_echoed). Raises on transport failure."""
     packet, txid = _build_query(name, qtype)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    host = _server_host(server)
+    with socket.socket(_server_family(host), socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
-        sock.sendto(packet, (server, port))
+        sock.sendto(packet, (host, port))
         resp, _ = sock.recvfrom(512)
     if len(resp) < 12:
         raise ValueError("truncated DNS response")
@@ -79,7 +114,8 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     """
     packet, txid = _build_query(name, qtype)
     frame = struct.pack(">H", len(packet)) + packet
-    with socket.create_connection((server, port), timeout=timeout) as sock:
+    with socket.create_connection((_server_host(server), port),
+                                  timeout=timeout) as sock:
         sock.settimeout(timeout)
         sock.sendall(frame)
         (rlen,) = struct.unpack(">H", _read_exact(sock, 2, timeout))

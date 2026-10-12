@@ -131,6 +131,50 @@ def _test_tcp_flag_routes():
     check("--tcp wire is labeled", "[tcp]" in out, repr(out[:120]))
 
 
+# 5c. IPv6 server forms: brackets stripped, family follows the literal,
+#     and the bracketed form actually completes a TCP wire to ::1
+def _test_ipv6_server_forms():
+    check("bracketed v6 host stripped", smoke._server_host("[::1]") == "::1")
+    check("bare v6 host unchanged", smoke._server_host("::1") == "::1")
+    check("v4 host unchanged", smoke._server_host("127.0.0.1") == "127.0.0.1")
+    check("hostname unchanged", smoke._server_host("localhost") == "localhost")
+    import socket as _socket
+    check("v6 literal -> AF_INET6", smoke._server_family("::1") == _socket.AF_INET6)
+    check("v4 literal -> AF_INET", smoke._server_family("127.0.0.1") == _socket.AF_INET)
+    check("hostname -> AF_INET", smoke._server_family("localhost") == _socket.AF_INET)
+
+    # live wire: a one-shot TCP DNS server on ::1 answering NXDOMAIN;
+    # before the fix the bracketed form died in create_connection
+    import threading
+    srv = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    srv.bind(("::1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def _serve_once():
+        conn, _ = srv.accept()
+        with conn:
+            head = conn.recv(2)
+            (ln,) = struct.unpack(">H", head)
+            q = b""
+            while len(q) < ln:
+                q += conn.recv(ln - len(q))
+            (txid,) = struct.unpack(">H", q[:2])
+            resp = struct.pack(">HHHHHH", txid, 0x8503, 0, 0, 0, 0)
+            conn.sendall(struct.pack(">H", len(resp)) + resp)
+        srv.close()
+
+    threading.Thread(target=_serve_once, daemon=True).start()
+    try:
+        rcode, an, _ = smoke._query_tcp("zz-junk.cyberspace", 1, "[::1]",
+                                        port, timeout=2.0)
+        check("bracketed [::1] TCP wire answers NXDOMAIN",
+              rcode == 3 and an == 0, f"rcode={rcode} an={an}")
+    except Exception as exc:
+        check("bracketed [::1] TCP wire answers NXDOMAIN", False, repr(exc))
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -152,6 +196,7 @@ if __name__ == "__main__":
     _test_happy_path()
     _test_junk_not_nxdomain()
     _test_tcp_flag_routes()
+    _test_ipv6_server_forms()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
