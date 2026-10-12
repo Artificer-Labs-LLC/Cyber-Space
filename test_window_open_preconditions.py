@@ -71,13 +71,15 @@ with core._db_lock, core._db() as conn:
     A_ = _ed.publickey(bytes.fromhex("aa" * 32)).hex()
     B_ = _ed.publickey(bytes.fromhex("bb" * 32)).hex()
     K3 = _ed.publickey(bytes.fromhex("cc" * 32)).hex()
-    HK = [("hza", A_), ("hzazb", B_), ("hzk2", K2)]
+    HK = [("hza", A_), ("hzazb", B_), ("hzk2", K2), ("pocz1", ZERO)]
+    XATK = _ed.publickey(bytes.fromhex("dd" * 32)).hex()
     conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
                      [(n, p, PAST, FUT, "00" * 64) for n, p in HK])
     for nm, o, n_, t in (("hza", K3, ZERO, "2001"), ("hza", ZERO, A_, "2002"),
                          ("hzazb", K3, ZERO, "2001"), ("hzazb", ZERO, A_, "2002"),
                          ("hzazb", A_, MIXED[8], "2003"), ("hzazb", MIXED[8], B_, "2004"),
-                         ("hzk2", K3, ZERO, "2001"), ("hzk2", ZERO, K2, "2002")):
+                         ("hzk2", K3, ZERO, "2001"), ("hzk2", ZERO, K2, "2002"),
+                         ("pocz1", ZERO, XATK, "2001"), ("pocz1", XATK, ZERO, "2002")):
         conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
                      (nm, o, n_, PAST, "00" * 64, t + "-01-01T00:00:00+00:00"))
     for nm, o, n_, t in (("chain", K, ZERO, "2001"), ("chain", ZERO, MIXED[4], "2002"),
@@ -105,8 +107,11 @@ check("two names rotated to Z1: each reserved for its own key", reserved.get("ro
 check("forged backdated hop does not change reserved key", reserved.get("chain") == K and FORGER not in reserved.values(), reserved)
 check("chain K->Z1(zero)->Z2(mixed) -> reserved for K", reserved.get("chain") == K, reserved)
 lp = [r for r in snap["refused"] if r[0] == "loop"]
-check("loop chain -> refused + FLAG-VILLHAZE", lp and "loops" in lp[0][-1], lp)
-check("refused set exactly {zeroclaim, loop}", refused == {"zeroclaim", "loop"}, refused)
+check("loop chain (starts weak) -> refused + FLAG-VILLHAZE", lp and "starts on weak key" in lp[0][-1], lp)
+poc = [r for r in snap["refused"] if r[0] == "pocz1"]
+check("PoC Z1->X->Z1 -> refused, FLAG starts on weak key", poc and "starts on weak key" in poc[0][-1], poc)
+check("PoC Z1->X->Z1 not reserved (not for attacker X)", "pocz1" not in reserved, reserved)
+check("refused set exactly {zeroclaim, loop, pocz1}", refused == {"zeroclaim", "loop", "pocz1"}, refused)
 check("zero-key rotation from real K -> reserved for K", reserved.get("rotzero") == K, reserved)
 check("mixed-order rotation from real K -> reserved for K", reserved.get("rotmixed") == K, reserved)
 check("no weak key held", not held & ({"zeroclaim", "rotzero", "rotmixed"}), held)
@@ -132,7 +137,7 @@ check("pre-open refusal wrote no row", rows_for("early") == 0, rows_for("early")
 wo._now_hook = lambda: "2026-10-12T16:00:00+00:00"
 e = wo.open_window("villhaze")
 check("open_window records anchor", e["opened_at"] == "2026-10-12T16:00:00+00:00" and not e["already_open"], e)
-check("open_window records 8 refused rows (6 bindings, 1 conflict, 1 agent)", e["refused_recorded"] == 8, e)
+check("open_window records 9 refused rows (7 bindings, 1 conflict, 1 agent)", e["refused_recorded"] == 9, e)
 check("open_window idempotent", wo.open_window("someone")["already_open"])
 with core._db_lock, core._db() as conn:
     srcs = {r[0] for r in conn.execute("SELECT source FROM window_refused_bindings")}

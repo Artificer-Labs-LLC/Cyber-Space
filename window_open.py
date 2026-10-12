@@ -135,49 +135,23 @@ def is_prerecorded_refusal(conn, source, row_key, pubkey) -> bool:
         (source, str(row_key), pubkey)).fetchone() is not None
 
 
-def _reserve_anchor(conn, name, weak_key, max_hops=64):
-    """Loom (ART-40): walk name_rotations backward by new_pubkey until the
-    first old_pubkey that passes weak_reason. Returns (key, None), or
-    (None, flag) when there is no rotation, the chain never reaches a
-    non-weak key, or it loops; flagged rows are refused for Villhaze.
-    Examiner: every step keys on (name, new_pubkey), never new_pubkey alone,
-    and picks the latest by node-side accepted_at (rowid as tie-break),
-    never the signer-supplied issued_at."""
-    seen, cur = {weak_key}, weak_key
-    for _ in range(max_hops):
-        r = conn.execute(
-            "SELECT old_pubkey FROM name_rotations WHERE name=? AND new_pubkey=? "
-            "ORDER BY accepted_at DESC, rowid DESC LIMIT 1", (name, cur)).fetchone()
-        if r is None:
-            return None, (None if cur == weak_key else "FLAG-VILLHAZE: chain ends on weak key")
-        old = r[0]
-        if not is_weak_pubkey(old):
-            return old, None
-        if old in seen:
-            return None, "FLAG-VILLHAZE: rotation chain loops"
-        seen.add(old); cur = old
-    return None, "FLAG-VILLHAZE: rotation chain too long"
-
-
 def _history_anchor(conn, name):
     """Lodestar/Cipher rule (ART-40): if the name's name_rotations history
-    has ANY hop with a weak old_pubkey or new_pubkey, the name is reserved.
+    has ANY hop with a weak old_pubkey or new_pubkey, the name is reserved
+    for the earliest weak hop's old_pubkey - only if that key is non-weak.
     Hops are ordered by node-side accepted_at (rowid tie-break), never the
-    signer's issued_at. Anchor = the last non-weak key before the EARLIEST
-    weak hop: that hop's old_pubkey if non-weak, else walk back by
-    (name, new_pubkey) via _reserve_anchor. Returns (None, None) when the
-    history has no weak hop; (None, FLAG...) on dead-end/loop/>64 hops."""
+    signer's issued_at. If the earliest weak hop STARTS on a weak key, the
+    name is refused outright (no backward walk: the Z1->X->Z1 PoC showed a
+    walk lets an attacker X anchor a name first bound to a weak key).
+    Returns (None, None) when the history has no weak hop."""
     hops = conn.execute(
         "SELECT old_pubkey, new_pubkey FROM name_rotations WHERE name=? "
         "ORDER BY accepted_at ASC, rowid ASC", (name,)).fetchall()
     for old, new in hops:
         if is_weak_pubkey(old) or is_weak_pubkey(new):
-            if not is_weak_pubkey(old):
-                return old, None
-            anchor, why = _reserve_anchor(conn, name, old)
-            if anchor:
-                return anchor, None
-            return None, why or "FLAG-VILLHAZE: chain starts on weak key"
+            if is_weak_pubkey(old):
+                return None, "FLAG-VILLHAZE: chain starts on weak key"
+            return old, None
     return None, None
 
 
@@ -186,7 +160,8 @@ def snapshot_bindings(conn):
     held. Any name whose rotation history touches a weak key (old or new,
     any hop) is RESERVED for the last non-weak key before the earliest weak
     hop - even if the current key is honest (K->Z->K2 reserves for K).
-    Dead-ends, loops and >64-hop chains are REFUSED with FLAG-VILLHAZE.
+    A history whose earliest weak hop starts on a weak key is REFUSED with
+    FLAG-VILLHAZE (no backward walk, so no loop/dead-end/hop-cap paths).
     A weak key with no rotation history is REFUSED."""
     held, refused, reserved = [], [], []
     has_rot = _has_table(conn, "name_rotations")
