@@ -161,6 +161,46 @@ class ClientTests(unittest.TestCase):
         addrs = client.resolve("node.cyberspace", _udp_sock=_Echo())
         self.assertEqual(addrs, ["10.9.8.7"])
 
+    def test_udp_response_from_stranger_address_refused(self):
+        """A flawless packet from the wrong source IP is not the daemon's
+        answer: UDP is connectionless, so source IS the authentication
+        the wire offers. Refused -> TCP fallback answers instead."""
+        class _Stranger(_FakeUdpSock):
+            def sendto(self, data, addr):
+                parsed = dns.parse_query(data)
+                self.canned = dns.build_response(
+                    parsed, [(1, 120, socket.inet_aton("10.1.1.1"))], rcode=0
+                )
+                return len(data)
+
+            def recvfrom(self, n):
+                return self.canned, ("192.0.2.1", 5353)
+
+        server = _tcp_server(_a_response)
+        addrs = client.resolve(
+            "node.cyberspace", _udp_sock=_Stranger(), _tcp_sock=server
+        )
+        self.assertEqual(addrs, ["10.9.8.7"])
+
+    def test_udp_response_from_wrong_port_refused(self):
+        """Right host, wrong port: still not the daemon that was asked."""
+        class _WrongPort(_FakeUdpSock):
+            def sendto(self, data, addr):
+                parsed = dns.parse_query(data)
+                self.canned = dns.build_response(
+                    parsed, [(1, 120, socket.inet_aton("10.1.1.1"))], rcode=0
+                )
+                return len(data)
+
+            def recvfrom(self, n):
+                return self.canned, ("127.0.0.1", 9999)
+
+        server = _tcp_server(_a_response)
+        addrs = client.resolve(
+            "node.cyberspace", _udp_sock=_WrongPort(), _tcp_sock=server
+        )
+        self.assertEqual(addrs, ["10.9.8.7"])
+
     def test_udp_failure_falls_back_to_tcp(self):
         """UDP OSError -> the TCP wire answers, addrs still returned."""
         dead = _FakeUdpSock(exc=OSError("sandbox EPERM"))

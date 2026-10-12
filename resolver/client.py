@@ -225,14 +225,26 @@ def _query_udp(
     qname: str | None = None,
     qtype: int | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
-    """One UDP round trip. Raises ResolveError on failure or truncation."""
+    """One UDP round trip. Raises ResolveError on failure or truncation.
+
+    The datagram's SOURCE is part of the transaction: UDP has no
+    connection, so a reply is only the daemon's if it arrives from the
+    exact (address, port) the query was sent to. Anything else — even
+    a perfectly formed packet with the right txid, question, and
+    owner — came from a stranger who reached the ephemeral port, and
+    is refused rather than parsed.
+    """
     s = sock
     try:
         if s is None:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         s.sendto(packet, (server, port))
-        data, _ = s.recvfrom(4096)
+        data, source = s.recvfrom(4096)
+        if (source[0], source[1]) != (socket.gethostbyname(server), port):
+            raise ResolveError("udp response from an unexpected source")
+    except ResolveError:
+        raise
     except OSError as exc:
         raise ResolveError(f"udp transport failed: {exc}") from exc
     finally:
