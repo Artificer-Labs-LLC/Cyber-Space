@@ -9,6 +9,8 @@ port above 65535 is honored and the bind fails with no hint why.
 CYBERNET_MIRROR_URL is worse: _env_str passes it through verbatim,
 so a scheme-less or host-less mirror is never fetched and every
 .cyberspace query answers NXDOMAIN while the daemon looks healthy.
+CYBERNET_RESOLVER_BIND is passed through the same way, and an
+unbindable value raises in run() before the daemon serves anything.
 _daemon_config_warnings names each mistake at startup: unset/empty
 and valid values are silent, and no warning echoes the value.
 
@@ -24,7 +26,7 @@ sys.path.insert(0, REPO)
 from resolver import daemon  # noqa: E402
 
 _VARS = ("CYBERNET_RESOLVER_PORT", "CYBERNET_TTL_CAP", "CYBERNET_UPSTREAM_DNS",
-         "CYBERNET_MIRROR_URL")
+         "CYBERNET_MIRROR_URL", "CYBERNET_RESOLVER_BIND")
 
 
 class TestDaemonConfigWarnings(unittest.TestCase):
@@ -134,6 +136,38 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         warns = self._warns(CYBERNET_MIRROR_URL="http://")
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+
+    def test_bind_ipv4_and_wildcard_are_silent(self):
+        self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="127.0.0.1"), [])
+        self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="0.0.0.0"), [])
+
+    def test_bind_hostnames_are_silent(self):
+        self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="localhost"), [])
+        self.assertEqual(
+            self._warns(CYBERNET_RESOLVER_BIND="resolver-1.example"), [])
+
+    def test_bind_bad_hostname_warns_no_echo(self):
+        warns = self._warns(CYBERNET_RESOLVER_BIND="bad host!")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
+        self.assertIn("bind will fail", warns[0])
+        self.assertNotIn("bad host!", warns[0])
+
+    def test_bind_invalid_dotted_quad_warns(self):
+        warns = self._warns(CYBERNET_RESOLVER_BIND="999.999.1.1")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
+        self.assertNotIn("999.999.1.1", warns[0])
+
+    def test_bind_ipv6_warns_af_inet_cannot_bind_it(self):
+        warns = self._warns(CYBERNET_RESOLVER_BIND="::1")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
+
+    def test_bind_underscore_warns(self):
+        warns = self._warns(CYBERNET_RESOLVER_BIND="bad_host")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
 
     def test_run_wires_the_warning(self):
         src = open(os.path.join(REPO, "resolver", "daemon.py")).read()

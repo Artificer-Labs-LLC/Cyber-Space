@@ -32,6 +32,12 @@ Config (environment, bad values fall back to defaults):
   CYBERNET_UPSTREAM_DNS  "host:port" upstream for everything outside
                          .cyberspace (default 1.1.1.1:53)
   CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1)
+                         — set but not a bindable IPv4 address or
+                         hostname -> _env_str passes it through
+                         verbatim and the AF_INET bind in run()
+                         raises, killing the daemon before it serves
+                         anything; run() warns loudly on stderr at
+                         startup (see _daemon_config_warnings)
   CYBERNET_RESOLVER_PORT listen port (default 5353, min 1)
                          — set but not an integer -> _env_int silently
                          falls back to 5353, below 1 clamps to 1, and
@@ -50,6 +56,7 @@ Config (environment, bad values fall back to defaults):
 Run from the repo root:  python -m resolver.daemon
 """
 
+import ipaddress
 import os
 import select
 import signal
@@ -95,7 +102,7 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
 
 def _daemon_config_warnings() -> list[str]:
     """Loud config mistakes, or []. Unset/empty means the documented
-    default (silent, a choice). Four set-but-ineffective cases the
+    default (silent, a choice). Five set-but-ineffective cases the
     parsers otherwise hide: CYBERNET_RESOLVER_PORT not an integer
     (falls back to 5353, so the daemon listens somewhere the operator
     never chose), below 1 (clamped to 1), or above 65535 (honored by
@@ -108,8 +115,17 @@ def _daemon_config_warnings() -> list[str]:
     never fetch it, so every .cyberspace query answers NXDOMAIN
     while the daemon looks healthy — a loopback mirror is honest
     here, so unlike a node_url this gate is shape only, no
-    public-address check). Mirrors _env_int/_parse_upstream and the
-    fetch's scheme/host need exactly; never prints the values."""
+    public-address check); and CYBERNET_RESOLVER_BIND set but not a
+    bindable address (_env_str passes it through verbatim and the
+    AF_INET bind raises, so the daemon dies before serving anything
+    despite run()'s never-raises contract — shape only, offline:
+    an IPv4 literal or a syntactically valid hostname passes, an
+    IPv6 literal cannot bind an AF_INET socket, a dotted all-numeric
+    value that is not a valid IPv4 literal can never resolve as
+    written, and a syntactically valid but unresolvable hostname is
+    beyond what an offline check can prove). Mirrors
+    _env_int/_parse_upstream and the fetch's scheme/host need
+    exactly; never prints the values."""
     problems: list[str] = []
     raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
     if raw:
@@ -161,6 +177,29 @@ def _daemon_config_warnings() -> list[str]:
                 "CYBERNET_MIRROR_URL is not a valid http(s) URL with a "
                 "host — no mirror can be fetched at it, so every "
                 ".cyberspace query will answer NXDOMAIN")
+    raw = os.environ.get("CYBERNET_RESOLVER_BIND", "").strip()
+    if raw:
+        bind_ok = True
+        try:
+            addr = ipaddress.ip_address(raw)
+            bind_ok = addr.version == 4
+        except ValueError:
+            if all(c.isdigit() or c == "." for c in raw):
+                bind_ok = False  # dotted-numeric, but not a valid IPv4
+            else:
+                labels = raw.rstrip(".").split(".")
+                bind_ok = len(raw) <= 253 and all(
+                    1 <= len(label) <= 63
+                    and not label.startswith("-")
+                    and not label.endswith("-")
+                    and all(c.isascii() and (c.isalnum() or c == "-")
+                            for c in label)
+                    for label in labels)
+        if not bind_ok:
+            problems.append(
+                "CYBERNET_RESOLVER_BIND is not a bindable IPv4 address "
+                "or hostname — the bind will fail and the daemon will "
+                "not start")
     return problems
 
 
