@@ -191,13 +191,32 @@ def test_integrity_error_silently_ignored():
         f"IntegrityError must not touch counter (before={before}, "
         f"after={after})")
 
-    # Still exactly one row.
+    # Still exactly one row for the name ...
     n = real.execute(
         "SELECT COUNT(*) FROM name_conflicts WHERE name='dupname'"
     ).fetchone()[0]
     assert n == 1, f"expected 1 row, got {n}"
+
+    # ... the TOTAL audit-trail row count is unchanged (the duplicate
+    # attempt must not leak a second row anywhere), and the overflow
+    # counter is untouched (dupname must have zero rows in the overflow
+    # table — nothing spilled, nothing counted).
+    # Loom's check (d), Examiner follow-up, ART-29.
+    total_before = 1  # one row landed via the real conn, above
+    total_after = real.execute(
+        "SELECT COUNT(*) FROM name_conflicts"
+    ).fetchone()[0]
+    assert total_after == total_before, (
+        f"total audit rows changed {total_before} -> {total_after}")
+    overflow = real.execute(
+        "SELECT COALESCE((SELECT overflow_count FROM name_conflict_overflow"
+        " WHERE name='dupname'), 0)"
+    ).fetchone()[0]
+    assert overflow == 0, (
+        f"overflow_count moved for 'dupname': {overflow}")
     print("PASS: function's own except IntegrityError branch, "
-          "silently ignored, counter untouched")
+          "silently ignored, counter untouched, total rows and overflow "
+          "unchanged")
 
 
 if __name__ == "__main__":
