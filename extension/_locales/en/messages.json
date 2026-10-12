@@ -53,6 +53,10 @@
     "description": "Taxonomy hint: the Go path resolve failed on the name itself (spelling or registration).",
     "message": " — check the spelling, or claim it on the genesis node"
   },
+  "hintBindingRefused": {
+    "description": "Taxonomy hint: the name's signed binding (fetched from the bridge origin) was missing, tampered, wrong-key, or expired, so the DoH address was refused.",
+    "message": " — the name's signed binding did not verify, so the address was not used"
+  },
   "hintNameNoAddress": {
     "description": "Taxonomy hint: the bridge answered authoritatively but the name carries no address records.",
     "message": " — the name has no address records on the bridge"
