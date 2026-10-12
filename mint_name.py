@@ -10,8 +10,13 @@ turns an agent into a hostable .cyberspace name:
      signed by the name key itself, and POSTs it to the mirror's
      /api/v1/names/claim. First-claim wins; 409 means the name is taken.
   3. Verifies the name resolves back to the name key at the mirror.
-  4. Writes the hostd env file (CYBERNET_HOSTED_NAME + CYBERNET_NAME_PRIVKEY,
-     0600) that deploy/hostd.service expects at /etc/cybernet-hostd/hostd.env.
+  4. Writes the hostd env file (CYBERNET_HOSTED_NAME + CYBERNET_NAME_PRIVKEY
+     + CYBERNET_MIRROR_URL, 0600) that deploy/hostd.service expects at
+     /etc/cybernet-hostd/hostd.env. The mirror line is ACTIVE, not a
+     comment: resolver.host refuses to start without it, so a minted
+     env installed as-is must already carry the mirror it claimed at.
+     (Hostd still applies its public-URL gate — a loopback mint mirror
+     is written faithfully and hostd refuses it loudly, by design.)
 
 Usage: ./venv/bin/python mint_name.py <label> [mirror_url] [--env-dir DIR]
   mirror_url defaults to http://127.0.0.1:8471 (the local node).
@@ -68,6 +73,27 @@ def _write_secret(path, text, overwrite=False):
             written += os.write(fd, data[written:])
     finally:
         os.close(fd)
+
+
+def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
+    """The hostd env file body. The three ACTIVE lines are exactly the
+    required config resolver.host._config reads (name, name key, mirror);
+    relay/public-URL lines stay commented — they are optional, unknown
+    at mint time, and a half-filled relay triple is read as direct-dial
+    only. Agreement with hostd is pinned by
+    hidden_files/mint-env-hostd-agreement-belt-test.py."""
+    return (
+        f"# hostd env for {label}.cyberspace — install as /etc/cybernet-hostd/hostd.env (0600)\n"
+        f"# Holds the NAME KEY only. Never the master identity. Guard this file.\n"
+        f"CYBERNET_HOSTED_NAME={label}\n"
+        f"CYBERNET_NAME_PRIVKEY={priv_hex}\n"
+        f"CYBERNET_MIRROR_URL={mirror.rstrip('/')}\n"
+        f"# Relay hold-open (NAT-hidden hosting): uncomment ALL THREE together —\n"
+        f"# a half-filled relay config is read as direct-dial only (fail-closed).\n"
+        f"# CYBERNET_RELAY_URL=\n"
+        f"# CYBERNET_RELAY_PUBKEY=\n"
+        f"# CYBERNET_RELAY_TOKEN=\n"
+        f"# CYBERNET_PUBLIC_URL=\n")
 
 
 def _valid_label(label: str) -> bool:
@@ -189,17 +215,7 @@ def main(argv: list[str]) -> int:
     env_path = env_dir / f"{label}.env"
     _write_secret(
         env_path,
-        f"# hostd env for {label}.cyberspace — install as /etc/cybernet-hostd/hostd.env (0600)\n"
-        f"# Holds the NAME KEY only. Never the master identity. Guard this file.\n"
-        f"CYBERNET_HOSTED_NAME={label}\n"
-        f"CYBERNET_NAME_PRIVKEY={priv.hex()}\n"
-        f"# CYBERNET_MIRROR_URL={mirror.rstrip('/')}\n"
-        f"# Relay hold-open (NAT-hidden hosting): uncomment ALL THREE together —\n"
-        f"# a half-filled relay config is read as direct-dial only (fail-closed).\n"
-        f"# CYBERNET_RELAY_URL=\n"
-        f"# CYBERNET_RELAY_PUBKEY=\n"
-        f"# CYBERNET_RELAY_TOKEN=\n"
-        f"# CYBERNET_PUBLIC_URL=\n",
+        _hostd_env_text(label, priv.hex(), mirror),
         overwrite=True)
     print(f"hostd env written to {env_path} (0600) — "
           f"run: python -m resolver.host  (see deploy/hostd.service)")
