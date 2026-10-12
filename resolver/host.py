@@ -62,6 +62,12 @@ Config (environment, bad values degrade to silence, never to a lie):
                            warns loudly on stderr at startup for both
                            (see _reach_ttl_warnings)
   CYBERNET_HOSTD_REFRESH   re-announce cadence seconds (default 600)
+                           — set but not an integer -> _env_int silently
+                           falls back to 600, and an integer below 1 is
+                           silently clamped to 1 (a near-continuous
+                           announce loop); run() warns loudly on stderr
+                           at startup for both (see
+                           _hostd_refresh_warnings)
 
 Run from the repo root:  python -m resolver.host
 """
@@ -311,6 +317,30 @@ def _reach_ttl_warnings() -> list[str]:
     return []
 
 
+def _hostd_refresh_warnings() -> list[str]:
+    """Loud refresh-cadence config mistakes, or []. Unset/empty means
+    the 600 default (silent, a choice). Two set-but-ineffective cases
+    _env_int otherwise hides: a non-integer value falls back to 600,
+    and an integer below the floor of 1 is clamped to 1 — an operator
+    who set 0 believing re-announce was disabled instead gets a
+    near-continuous announce loop against the mirror. Mirrors
+    _env_int("CYBERNET_HOSTD_REFRESH", 600) exactly (max(1, int(...))
+    / ValueError -> 600); never prints the value itself."""
+    raw = os.environ.get("CYBERNET_HOSTD_REFRESH", "").strip()
+    if not raw:
+        return []
+    try:
+        refresh = int(raw)
+    except (ValueError, TypeError):
+        return ["CYBERNET_HOSTD_REFRESH is not an integer — the 600 "
+                "default will be used instead"]
+    if refresh < 1:
+        return ["CYBERNET_HOSTD_REFRESH is below the 1 floor — 1 "
+                "will be used instead (re-announce is never disabled "
+                "by this value)"]
+    return []
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
     """Signed POST to the mirror. True on HTTP 200; anything else
     (4xx/5xx/timeout) is silence, never a crash. Never raises."""
@@ -425,6 +455,9 @@ def run() -> int:
 
     for warn in _reach_ttl_warnings():
         print(f"hostd: reach ttl: {warn}", file=sys.stderr)
+
+    for warn in _hostd_refresh_warnings():
+        print(f"hostd: refresh: {warn}", file=sys.stderr)
 
     last_ok: bool | None = None
     while not stop.is_set():
