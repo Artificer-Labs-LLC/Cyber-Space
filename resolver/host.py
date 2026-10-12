@@ -359,14 +359,15 @@ def _rendezvous_warnings() -> list[str]:
 
 def _reach_ttl_warnings() -> list[str]:
     """Loud reach-TTL config mistakes, or []. Unset/empty means the
-    86400 default (silent, a choice). Two set-but-ineffective cases
+    86400 default (silent, a choice). Three set-but-ineffective cases
     core._reach_build otherwise hides: a non-integer value falls back
-    to 86400, and an integer below 600 is clamped to 600 — an operator
-    who set 60 expecting a one-minute descriptor (or typed a unit
-    suffix) gets a different lifetime than configured, with the name
-    staying resolvable long after they believed it expired. Mirrors
-    _reach_build exactly (max(600, int(...)) / ValueError -> 86400);
-    never prints the value itself."""
+    to 86400, an integer below 600 is clamped to 600, and an integer
+    over the 365-day descriptor lifetime cap is clamped to 31536000
+    — an operator who set 60 expecting a one-minute descriptor (or
+    typed a unit suffix) gets a different lifetime than configured,
+    with the name staying resolvable long after they believed it
+    expired. Mirrors _reach_build exactly (min(365d, max(600,
+    int(...))) / ValueError -> 86400); never prints the value itself."""
     raw = os.environ.get("CYBERNET_REACH_TTL", "").strip()
     if not raw:
         return []
@@ -378,6 +379,9 @@ def _reach_ttl_warnings() -> list[str]:
     if ttl < 600:
         return ["CYBERNET_REACH_TTL is below the 600 floor — 600 "
                 "will be advertised instead"]
+    if ttl > 365 * 86400:
+        return ["CYBERNET_REACH_TTL exceeds the 365-day descriptor "
+                "lifetime cap — 31536000 will be advertised instead"]
     return []
 
 

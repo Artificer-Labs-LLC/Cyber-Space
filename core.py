@@ -2329,6 +2329,12 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
         ttl = max(600, int(os.environ.get("CYBERNET_REACH_TTL", "86400") or 86400))
     except ValueError:
         ttl = 86400
+    # Upper clamp, twin of the descriptor lifetime cap in
+    # _reach_descriptor_verify: a TTL over NAME_EXPIRY_DAYS minted a
+    # descriptor every seat refused as overlong — the hoster announced
+    # reach that verified False everywhere. At-cap passes (the seat
+    # refuses only strictly over), so clamp to the cap exactly.
+    ttl = min(ttl, NAME_EXPIRY_DAYS * 86400)
     now = datetime.now(timezone.utc)
     # Canonical UTC, seconds precision (twin of mint_name._iso): raw
     # .isoformat() carries microseconds, and every descriptor seat

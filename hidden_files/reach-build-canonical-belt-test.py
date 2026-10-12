@@ -73,5 +73,33 @@ if parse_ok:
           (expires_dt - issued_dt).total_seconds() == 3600,
           f"got {(expires_dt - issued_dt).total_seconds()}")
 
+# Over-cap TTL: clamped to the 365-day descriptor lifetime cap, so the
+# minted descriptor still verifies at its own seat instead of being
+# refused everywhere as overlong.
+os.environ["CYBERNET_REACH_TTL"] = str(400 * 86400)
+built2 = core._reach_build("buildprobe", priv.hex())
+check("over-cap TTL still builds a descriptor", built2 is not None)
+desc2 = built2[0] if built2 else {}
+check("over-cap descriptor verifies at its own seat",
+      bool(desc2) and core._reach_descriptor_verify(desc2) is True,
+      f"issued={desc2.get('issued_at')!r} expires={desc2.get('expires_at')!r}")
+if desc2:
+    life2 = (core._parse_claim_time(desc2["expires_at"])
+             - core._parse_claim_time(desc2["issued_at"])).total_seconds()
+    check("over-cap lifetime clamped to 365 days exactly",
+          life2 == 365 * 86400, f"got {life2}")
+
+# At-cap TTL passes unchanged.
+os.environ["CYBERNET_REACH_TTL"] = str(365 * 86400)
+built3 = core._reach_build("buildprobe", priv.hex())
+desc3 = built3[0] if built3 else {}
+if desc3:
+    life3 = (core._parse_claim_time(desc3["expires_at"])
+             - core._parse_claim_time(desc3["issued_at"])).total_seconds()
+    check("at-cap lifetime passes unchanged", life3 == 365 * 86400,
+          f"got {life3}")
+else:
+    check("at-cap lifetime passes unchanged", False, "no descriptor")
+
 print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

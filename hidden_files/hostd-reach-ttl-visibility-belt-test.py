@@ -63,6 +63,15 @@ class TestReachTtlWarnings(unittest.TestCase):
         self.assertEqual(len(warns), 1)
         self.assertIn("600", warns[0])
 
+    def test_over_cap_warns_clamped(self):
+        warns = self._warns(str(400 * 86400))
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_REACH_TTL", warns[0])
+        self.assertIn("31536000", warns[0])
+
+    def test_at_cap_is_silent(self):
+        self.assertEqual(self._warns(str(365 * 86400)), [])
+
     def test_non_integer_warns_default(self):
         warns = self._warns("banana")
         self.assertEqual(len(warns), 1)
