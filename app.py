@@ -31,6 +31,7 @@ import routes_agents
 import routes_channels
 import routes_relay
 import routes_doh
+import routes_legacy_migrate
 import routes_social
 import routes_social_serve
 import routes_spaces
@@ -150,6 +151,7 @@ app.include_router(routes_workspaces.router)
 app.include_router(routes_channels.router)
 app.include_router(routes_relay.router)
 app.include_router(routes_spaces.router)
+app.include_router(routes_legacy_migrate.router)
 
 
 @app.on_event("startup")
