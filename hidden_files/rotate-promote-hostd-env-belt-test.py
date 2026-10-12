@@ -132,5 +132,42 @@ class TestPromoteRefreshesEnv(unittest.TestCase):
             self.assertIn("update its", msg)
 
 
+class TestInstalledEnvNote(unittest.TestCase):
+    """install-agent.sh copies the staging env to the installed path
+    hostd.service reads; a stale installed copy must be named, never
+    silently left behind a 'restart hostd' instruction."""
+
+    def _promote(self, td, installed_text):
+        home = Path(td) / "home"
+        home.mkdir()
+        _stage_home(home, mint_name._hostd_env_text(LABEL, OLD.hex(), MIRROR))
+        installed = Path(td) / "hostd.env"
+        if installed_text is not None:
+            installed.write_text(installed_text)
+        ok, msg = rotate_name.promote_rotation(
+            LABEL, home, installed_env=installed)
+        self.assertTrue(ok, msg)
+        return msg, installed
+
+    def test_installed_stale_warns_reinstall_not_restart(self):
+        with tempfile.TemporaryDirectory() as td:
+            stale = mint_name._hostd_env_text(LABEL, OLD.hex(), MIRROR)
+            msg, installed = self._promote(td, stale)
+            self.assertIn("still holds the OLD key", msg)
+            self.assertIn("will NOT pick up the new key", msg)
+            self.assertEqual(installed.read_text(), stale)  # never written
+
+    def test_installed_current_is_confirmed(self):
+        with tempfile.TemporaryDirectory() as td:
+            msg, _ = self._promote(
+                td, mint_name._hostd_env_text(LABEL, NEW.hex(), MIRROR))
+            self.assertIn("already holds the new key", msg)
+
+    def test_installed_absent_adds_no_noise(self):
+        with tempfile.TemporaryDirectory() as td:
+            msg, _ = self._promote(td, None)
+            self.assertNotIn("installed hostd env", msg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -220,7 +220,53 @@ def _refresh_hostd_env_text(text: str, old_hex: str, new_hex: str):
     return "".join(out), status
 
 
-def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
+# Where deploy/install-agent.sh installs the hostd env — the copy
+# hostd.service actually reads (EnvironmentFile=). The staging env under
+# ~/.cyberspace/hostd is only the source it was copied FROM.
+_INSTALLED_HOSTD_ENV = Path("/etc/cybernet-hostd/hostd.env")
+
+
+def _installed_env_note(installed_path: Path, old_hex: str,
+                        new_hex: str) -> str:
+    """Read-only check of the INSTALLED hostd env after a promote.
+
+    install-agent.sh copies the staging env to /etc/cybernet-hostd/
+    hostd.env and hostd.service reads THAT file — refreshing the staging
+    copy alone leaves a restarted hostd signing with the old key. This
+    never writes there (an unprivileged CLI has no business in /etc);
+    it only makes the summary tell the truth: stale -> re-install,
+    current -> say so, foreign/unreadable -> warn. Absent -> "" (the
+    staging note already covers the manual case)."""
+    if not installed_path.exists():
+        return ""
+    try:
+        text = installed_path.read_text()
+    except OSError:
+        return (f"; WARNING: installed hostd env at {installed_path} "
+                f"unreadable — check its CYBERNET_NAME_PRIVKEY manually; "
+                f"hostd reads that file, not the staging env")
+    cur = None
+    for line in text.splitlines():
+        if line.startswith("CYBERNET_NAME_PRIVKEY="):
+            cur = line.split("=", 1)[1].strip().lower()
+    if cur == new_hex.lower():
+        return (f"; installed hostd env at {installed_path} already "
+                f"holds the new key — restart hostd")
+    if cur == old_hex.lower():
+        return (f"; WARNING: installed hostd env at {installed_path} "
+                f"still holds the OLD key and hostd reads THAT file — "
+                f"a restart alone will NOT pick up the new key; "
+                f"re-install the refreshed env (deploy/install-agent.sh "
+                f"--hostd-env, or copy it over {installed_path} at 0600) "
+                f"and then restart hostd")
+    return (f"; WARNING: installed hostd env at {installed_path} holds "
+            f"a different or no CYBERNET_NAME_PRIVKEY — NOT touched; "
+            f"check it manually, hostd reads that file")
+
+
+def promote_rotation(label: str, home: Path,
+                     installed_env: Path = _INSTALLED_HOSTD_ENV
+                     ) -> tuple[bool, str]:
     """Promote a minted rotation: .next becomes the name key, atomically.
 
     The loop-closing half of a rotation. Promotion is deliberate (an
@@ -241,7 +287,9 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
     The hostd env mint wrote (home/hostd/<label>.env) is refreshed to the
     new seed when it still holds the old one — hostd signs from that env,
     not from the key file; a foreign/absent privkey line is reported in
-    the summary, never overwritten.
+    the summary, never overwritten. The INSTALLED env (install-agent.sh's
+    copy at /etc/cybernet-hostd/hostd.env, the file hostd.service reads)
+    is checked read-only and reported the same way — never written.
     Returns (True, summary) or (False, reason). Never raises on input.
     """
     label = _normalize(label)
@@ -320,6 +368,8 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
         env_note = ("; no hostd env under ~/.cyberspace/hostd — if hostd "
                     "runs from an installed env elsewhere, update its "
                     "CYBERNET_NAME_PRIVKEY to the new key and restart it")
+    env_note += _installed_env_note(installed_env, old_priv.hex(),
+                                    new_priv.hex())
     return True, (f"promoted {label}.cyberspace: "
                   f"{old_pub[:16]}... -> {new_pub[:16]}...; "
                   f"old key kept at {prev_path}{env_note}")
