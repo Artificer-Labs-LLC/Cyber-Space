@@ -394,7 +394,8 @@ def _hex32(raw: bytes | None) -> str | None:
 
 def _plan_entries(row: dict) -> list:
     """Log entries for one frozen row. At most the four ruled-in kinds.
-    No hold-closure and no resolution record."""
+    hold-closure is not per row; open_window writes that record once.
+    No resolution record."""
     orphan = 1 if row["orphan"] else 0
     out = []
     if row["disposition"] == "reserve-hold" and row["reserved_for_raw"] is not None:
@@ -448,6 +449,32 @@ def _append_kind_entries(conn, rows) -> int:
     return n
 
 
+def _hold_closure_fields() -> dict:
+    """The admission hold is closed on Villhaze's accepted witness port.
+    A resolution record is not this and is not written here."""
+    import legacy_witness as lw
+    return {
+        "precondition": lw.HOLD_CLOSURE_PRECONDITION,
+        "state": "closed",
+        "port": lw.HOLD_CLOSURE_PORT,
+        "ruling": lw.HOLD_CLOSURE_RULING,
+    }
+
+
+def _append_hold_closure(conn, rows) -> None:
+    """One hold-closure for the open, not one per frozen row.
+
+    `rows` is the snapshot the caller just froze. The real writer does not
+    iterate it. A mutant that does is how the belt shows the record is
+    singular. The basis is the closed witness + weak_reason precondition.
+    """
+    del rows
+    detail = _hold_closure_fields()
+    signed = dict(detail)
+    signed["witness_sig"] = _sign_witness("hold-closure", detail)
+    append_log_entry(conn, kind="hold-closure", detail=signed)
+
+
 # Private clock hook: tests may set window_open._now_hook; no public
 # caller-supplied `now` exists on open_window/record_start (ART-41 BLOCK).
 _now_hook = None
@@ -465,10 +492,11 @@ def open_window(opened_by: str) -> dict:
 
     snapshot_bindings runs once. Its reserved and refused rows are the
     frozen source for reserve-hold and name-refused (plus origin-pin and
-    origin-handoff from that same scan). The orphan count pinned on the
-    anchor is that scan's orphan count. If the saved rows would exceed
-    the per-name cap or the global ceiling, this raises WindowRefused
-    before any write.
+    origin-handoff from that same scan). The same transaction writes one
+    hold-closure: the witness + weak_reason admission hold is closed on
+    the accepted witness port. The orphan count pinned on the anchor is
+    that scan's orphan count. If the saved rows would exceed the per-name
+    cap or the global ceiling, this raises WindowRefused before any write.
     """
     import legacy_witness as lw
     with core._db_lock, core._db() as conn:
@@ -485,7 +513,7 @@ def open_window(opened_by: str) -> dict:
             # column, and the real function never does that.
             _overflow(snap, why)
         rows = snap["kind_source"]
-        planned = sum(len(_plan_entries(r)) for r in rows)
+        planned = sum(len(_plan_entries(r)) for r in rows) + lw.HOLD_CLOSURE_ENTRIES
         live = sum(1 for r in rows if not r["orphan"])
         # orphan_count is the orphan pass this snapshot just ran, not a
         # second query.
@@ -500,6 +528,7 @@ def open_window(opened_by: str) -> dict:
         n = record_refused_bindings(conn, 1)
         _save_kind_source(conn, rows)
         kinds_n = _append_kind_entries(conn, rows)
+        _append_hold_closure(conn, rows)
     return {"id": 1, "opened_at": opened_at, "opened_by": opened_by,
             "refused_recorded": n, "already_open": False,
             "orphan_count": snap["orphan_count"], "kinds_recorded": kinds_n}

@@ -171,7 +171,12 @@ K_UP = K.upper()
 
 # ---------------------------------------------------------------- sizing / kinds
 check("four ruled-in kinds are exact KINDS members",
-      all(k in lw.KINDS for k in KINDS_IN) and lw.WITNESS_KINDS == KINDS_IN)
+      all(k in lw.KINDS for k in KINDS_IN)
+      and lw.WITNESS_KINDS == KINDS_IN + ("hold-closure",))
+check("hold-closure is one ceiling slot and a resolution record stays out",
+      lw.HOLD_CLOSURE_ENTRIES == 1 and "hold-closure" in lw.KINDS
+      and "resolution" not in lw.KINDS
+      and lw.max_log_entries(0, 0, 0) == lw.WINDOW_EDGES + lw.HOLD_CLOSURE_ENTRIES)
 check("kinds are ASCII and contain no '|'",
       all(isinstance(k, str) and "|" not in k and k.encode("ascii") == k.encode()
           for k in lw.KINDS))
@@ -424,6 +429,89 @@ finally:
 record_mutant("unknown kind skipped in the shape check",
               "KINDS missing reserve-hold: node B rejects the log",
               real_e, mutant_ok is True)
+
+# ---------------------------------------------------------------- hold-closure (Villhaze 49a4fdca)
+def closure_view():
+    _lid, entries, ok, why, view = rebuilt()
+    return entries, ok, why, view.get("hold-closure", [])
+
+
+def plant_two():
+    with core._db_lock, core._db() as conn:
+        wo.init_schema(conn)
+        bind(conn, "one", ZERO, PAST)
+        bind(conn, "two", ZERO, PAST)
+        rot(conn, "one", K, ZERO, PAST)
+        rot(conn, "two", X, ZERO, PAST)
+
+
+wipe()
+plant_two()
+reap()
+opened, err = open_or("hold")
+entries, ok, why, closures = closure_view()
+one = closures[0] if len(closures) == 1 else {}
+detail = dict(one.get("detail") or {})
+sig = detail.pop("witness_sig", None)
+signed_ok = bool(sig) and lw.verify_witness_signature(
+    "hold-closure", lw.witness_message("hold-closure", detail), core._NODE_PUB, sig)
+check("(h) one hold-closure, state closed, on the accepted port",
+      err is None and ok and len(closures) == 1 and one.get("name") is None
+      and detail == {
+          "precondition": "witness+weak_reason",
+          "state": "closed",
+          "port": "34a9a7d",
+          "ruling": "49a4fdca",
+      }
+      and one.get("state") == "closed" and one.get("port") == "34a9a7d"
+      and one.get("ruling") == "49a4fdca"
+      and one.get("precondition") == "witness+weak_reason"
+      and signed_ok
+      and not any(e.get("kind") == "resolution" for e in entries),
+      (err, ok, why, closures, signed_ok))
+real_h = (err is None and ok and len(closures) == 1 and detail.get("state") == "closed"
+          and detail.get("port") == "34a9a7d" and signed_ok)
+
+real_close = wo._append_hold_closure
+
+
+def skip_closure(conn, rows):
+    del conn, rows
+
+
+wo._append_hold_closure = skip_closure
+try:
+    wipe()
+    plant_two()
+    reap()
+    open_or("hold-mut")
+    _ent, _ok, _why, missed = closure_view()
+    mutant_h = len(missed) == 0
+finally:
+    wo._append_hold_closure = real_close
+record_mutant("hold-closure writer is a no-op",
+              "node B rebuilds one closed hold-closure from the accepted port",
+              real_h, mutant_h)
+
+
+def per_row(conn, rows):
+    for row in rows:
+        real_close(conn, [row])
+
+
+wo._append_hold_closure = per_row
+try:
+    wipe()
+    plant_two()
+    reap()
+    open_or("hold-rows")
+    _ent, _ok, _why, many = closure_view()
+    mutant_rows = len(many) != 1
+finally:
+    wo._append_hold_closure = real_close
+record_mutant("hold-closure written once per frozen row",
+              "two reserved names still produce one hold-closure",
+              real_h, mutant_rows)
 
 print("mutant table:")
 print(f"  {'mutant':<52} {'row':<62} real mutant-fails")
