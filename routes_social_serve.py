@@ -1208,6 +1208,20 @@ async def names_claim(request: Request):
         raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
 
 
+# ART-38 (Bulwark/Cipher 2026-10-12): the same per-IP gate on names/rotate,
+# first before parse/verify. Parallel env pair, same defaults (30 per 60s),
+# separate bucket so claim floods and rotation floods are counted apart.
+NAME_ROTATE_RATE_LIMIT = int(_os.environ.get("CYBERNET_NAME_ROTATE_RATE_LIMIT", "30"))
+NAME_ROTATE_RATE_WINDOW = float(_os.environ.get("CYBERNET_NAME_ROTATE_RATE_WINDOW", "60"))
+
+
+def _names_rotate_check_rate(request: Request) -> None:
+    client = request.client
+    ip = client.host if client else "unknown"
+    _check_rate(f"names-rotate:{ip}", limit=NAME_ROTATE_RATE_LIMIT,
+                window=NAME_ROTATE_RATE_WINDOW)
+
+
 @router.post("/api/v1/names/rotate")
 async def names_rotate(request: Request):
     """.cyberspace depth (primitive 4, identity): the mirror accepts a name-key
@@ -1238,6 +1252,7 @@ async def names_rotate(request: Request):
     (rotate_name.py's <label>-name.key.next -> <label>-name.key) only after
     the mirror accepts.
     """
+    _names_rotate_check_rate(request)  # ART-38: first, before parse/verify
     form = await read_bounded_form(request)
     name = (form.get("name") or "").strip().lower()
     old_pubkey = (form.get("old_pubkey") or "").strip().lower()
