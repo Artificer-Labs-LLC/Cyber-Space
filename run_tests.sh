@@ -40,6 +40,7 @@ TESTS=(
   "test_witness_port.py"
   "test_names_gossip_receive.py"
   "test_names_gossip_hardening.py"
+  "test_fed_route_parity.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"

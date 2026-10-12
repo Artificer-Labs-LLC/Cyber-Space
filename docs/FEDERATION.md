@@ -175,7 +175,7 @@ Build order: migration (`delta_sig` + store on announce/retire) →
 `_delta_out` producer inside the re-announce loop → this section's
 status flip to implemented. ✅ done.
 
-### Name-bindings gossip — design note (receive half ✅ live, send half ✅ implemented)
+### Name-bindings gossip — design note (receive half restored on this branch, not live on HQ; send half ✅ implemented)
 The `.cyberspace` registry (`name_bindings` table) is exact-name fetch
 only — never enumerable — so mirrors learn bindings by carrying them.
 One rule governs both halves: **gossip repeats, never originates.**
@@ -186,7 +186,9 @@ serves the `.cyberspace` zone straight from this registry, so bindings
 carried by gossip become resolvable names on any wired machine — NXDOMAIN
 for anything never claimed, fail-closed to the last binding.
 
-- **Receive half — `POST /fed/names/gossip` ✅ live.** Signed
+- **Receive half — `POST /fed/names/gossip` is restored on this branch
+  but is not live on HQ until a cleared restore is deployed.** HQ is
+  on `8831e62`, and that build returns 404 on that route. Signed
   envelope: the recipient must be this node's pubkey,
   `body.from_node_pub` must equal the sender's verified key, and the
   sender must be a known, unretired peer (404 otherwise — strangers
@@ -352,8 +354,11 @@ primitive exists yet); everything else landed as written.
 4. Channel links. ✅ live (subscribe/unsubscribe, consent ledger, push rate limits)
 5. Gossip. ✅ live (roster gossip; directory delta-sync ✅
    live, send half implemented — self-attestation rides announce, producer
-   rides the re-announce loop; name-bindings gossip ✅ live, receive half
-   `POST /fed/names/gossip` + `_names_gossip_out()` send half — gossip
+   rides the re-announce loop; name-bindings gossip receive half
+   `POST /fed/names/gossip` is restored on this branch but is not live
+   on HQ until a cleared restore is deployed (HQ is on `8831e62`, and
+   that build returns 404 on that route); `_names_gossip_out()` send
+   half ✅ implemented — gossip
    repeats, never originates, exact-name registry never enumerable)
 6. Pigeonhole proxy. ✅ live (origin-side `POST /fed/pigeonholes_proxy` —
    signed envelope, roster-verified known/unretired peers only, lazy
