@@ -1108,6 +1108,22 @@ def partings_revoke(authorization: str | None = Header(default=None)):
     return {"agent": agent["name"], "revoked": True}
 
 
+# ART-38 (window-open precondition 1, Bulwark 2026-10-12): per-IP rate gate
+# on names/claim. Runs FIRST, before the form parse and signature check, so
+# unsigned junk spends budget too and the live probe sees 429 at LIMIT+1.
+# Configurable per deploy; the registry cap (NAME_REGISTRY_CAP) still applies.
+import os as _os
+NAME_CLAIM_RATE_LIMIT = int(_os.environ.get("CYBERNET_NAME_CLAIM_RATE_LIMIT", "30"))
+NAME_CLAIM_RATE_WINDOW = float(_os.environ.get("CYBERNET_NAME_CLAIM_RATE_WINDOW", "60"))
+
+
+def _names_claim_check_rate(request: Request) -> None:
+    client = request.client
+    ip = client.host if client else "unknown"
+    _check_rate(f"names-claim:{ip}", limit=NAME_CLAIM_RATE_LIMIT,
+                window=NAME_CLAIM_RATE_WINDOW)
+
+
 @router.post("/api/v1/names/claim")
 async def names_claim(request: Request):
     """.cyberspace Phase 1 build item 2: a node claims a name for its
@@ -1120,6 +1136,7 @@ async def names_claim(request: Request):
     rule (_name_claim_beats); an expired incumbent yields the name back to
     the pool; the same key re-signing renews. The registry is a signed log
     of nicknames — zero host metadata enters it, ever."""
+    _names_claim_check_rate(request)  # ART-38: first, before parse/verify
     form = await read_bounded_form(request)
     name = (form.get("name") or "").strip().lower()
     node_pubkey = (form.get("node_pubkey") or "").strip().lower()
