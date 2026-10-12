@@ -112,6 +112,11 @@ def pinned():
         return None
 
 
+def witnessed_inception_ok(ident: dict, pub: str) -> bool:
+    """The presented key is the cutover's k0, not a fresh key over an old proof."""
+    return ident.get("k0_pub") == pub
+
+
 def import_message(name: str, log_id: str, public_key: str, proof: dict) -> bytes:
     digest = hashlib.sha256(
         json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()
@@ -314,7 +319,7 @@ async def import_legacy(request: Request):
             _h, _entries, ident = lw.check_identity(proof, name, wset, pinned_log)
         except lw.WitnessRefused as e:
             raise HTTPException(status_code=400, detail=str(e))
-        if ident.get("k0_pub") != pub:
+        if not witnessed_inception_ok(ident, pub):
             raise HTTPException(
                 status_code=400,
                 detail="presented key is not the witnessed inception key")
