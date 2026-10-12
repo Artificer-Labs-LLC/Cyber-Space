@@ -828,41 +828,62 @@ def _incumbent_is_live(old, now_dt):
         return False
 
 
+# Loom never-evict (Villhaze (b), ART-29): one slot per challenger key.
+# Distinct challengers beyond this are counted, not stored. Rows already
+# stored are never deleted — an attacker cannot flood the audit trail out.
+NAME_CONFLICT_CAP = 32
+
+
 def _log_name_conflict(conn, name, incumbent, challenger, reason):
     """r3 (Bulwark High, ART-29): record a rejected challenger.
 
     When a live foreign incumbent keeps a name, the challenger's claim is
     written to name_conflicts — an audit trail of steal attempts. The
     mirror never acts on these rows; they exist for operators.
-    Append-only; never raises (a logging failure must not break the
-    claim path).
+    Never raises (a logging failure must not break the claim path).
 
-    Bulwark MEDIUM (ART-29 r3): the table is writable from the
-    unauthenticated gossip path, so it is bounded — duplicate challenger
-    claims are ignored (UNIQUE on name/challenger_pubkey/challenger_issued_at)
-    and each name keeps at most 32 rows (oldest dropped when the cap is hit).
+    Villhaze (b) / Loom: UNIQUE(name, challenger_pubkey) — one slot per
+    challenger key, not per issued_at. The first record for that key is
+    kept; a later re-sign of the same key is ignored. Each name keeps
+    the first NAME_CONFLICT_CAP distinct challengers. Attempts beyond
+    that increment name_conflict_overflow and do not insert. Existing
+    rows are never evicted. The signed payload and signature are stored
+    so the rejected claim can be re-verified.
     """
-    # r3: per-name cap — drop the oldest rows beyond 32 before inserting,
-    # so a malicious peer cannot grow the DB without limit via the
-    # unauthenticated gossip path.
-    NAME_CONFLICT_CAP = 32
     try:
+        ch_pub = challenger["node_pubkey"]
+        existing = conn.execute(
+            "SELECT id FROM name_conflicts WHERE name=? AND challenger_pubkey=?",
+            (name, ch_pub)).fetchone()
+        if existing is not None:
+            return
+        n = conn.execute(
+            "SELECT COUNT(*) FROM name_conflicts WHERE name=?",
+            (name,)).fetchone()[0]
+        if n >= NAME_CONFLICT_CAP:
+            conn.execute(
+                "INSERT INTO name_conflict_overflow (name, overflow_count) "
+                "VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET "
+                "overflow_count = overflow_count + 1",
+                (name,))
+            conn.commit()
+            return
+        signature = str(challenger.get("signature") or "")
+        payload = _name_claim_payload(
+            str(name), str(ch_pub), str(challenger["issued_at"]),
+            str(challenger["expires_at"]))
         conn.execute(
-            "INSERT OR IGNORE INTO name_conflicts (name, incumbent_pubkey,"
+            "INSERT INTO name_conflicts (name, incumbent_pubkey,"
             " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
-            " challenger_expires_at, reason, recorded_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " challenger_expires_at, reason, recorded_at,"
+            " challenger_signature, signed_payload)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (name,
              incumbent["node_pubkey"], incumbent["issued_at"],
-             challenger["node_pubkey"], challenger["issued_at"],
+             ch_pub, challenger["issued_at"],
              challenger["expires_at"], reason,
-             datetime.now(timezone.utc).isoformat()))
-        # Enforce cap: delete oldest rows for this name beyond the cap.
-        conn.execute(
-            "DELETE FROM name_conflicts WHERE id IN ("
-            " SELECT id FROM name_conflicts WHERE name=? "
-            " ORDER BY id DESC LIMIT -1 OFFSET ?)",
-            (name, NAME_CONFLICT_CAP))
+             datetime.now(timezone.utc).isoformat(),
+             signature, payload))
         conn.commit()  # r3: commit immediately — the caller may raise
         # (409 on the route) after logging, which would roll back the
         # conflict record if we relied on the context manager.
@@ -1648,7 +1669,8 @@ def ingest_gossiped_binding(binding: dict) -> str:
                 return "dropped-over-cap"
             return "dropped-stale"
         new = {"name": name, "node_pubkey": node_pubkey,
-               "issued_at": issued_at, "expires_at": expires_at}
+               "issued_at": issued_at, "expires_at": expires_at,
+               "signature": signature}
         with _db_lock, _db() as conn:
             row = conn.execute(
                 "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",

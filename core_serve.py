@@ -709,7 +709,9 @@ def init_db() -> None:
         -- incumbent keeps a name against a challenger, the rejected claim is
         -- logged here — an audit trail, not a queue. Mirrors never act on
         -- these rows; they exist so operators can see steal attempts.
-        -- Append-only: rows are never updated or deleted by the mirror.
+        -- Villhaze (b) / Loom: one slot per challenger key. Rows are never
+        -- evicted. signed_payload is the canonical name-claim bytes; the
+        -- signature is stored beside it so the rejected claim re-verifies.
         CREATE TABLE IF NOT EXISTS name_conflicts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -719,27 +721,39 @@ def init_db() -> None:
             challenger_issued_at TEXT NOT NULL,
             challenger_expires_at TEXT NOT NULL,
             reason TEXT NOT NULL,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            challenger_signature TEXT NOT NULL DEFAULT '',
+            signed_payload BLOB
         );
         CREATE INDEX IF NOT EXISTS idx_name_conflicts_name ON name_conflicts(name);
-        -- Bulwark MEDIUM (ART-29 r3): the conflicts table is writable from
-        -- the unauthenticated gossip path. Bound it: dedupe identical
-        -- challenger claims and cap per-name rows so a malicious peer
-        -- cannot grow the DB without limit.
-        -- Dedupe pre-existing rows before creating the unique index.
-        DELETE FROM name_conflicts WHERE id NOT IN (
-            SELECT MIN(id) FROM name_conflicts
-            GROUP BY name, challenger_pubkey, challenger_issued_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_name_conflicts_dedupe
-            ON name_conflicts(name, challenger_pubkey, challenger_issued_at);
-        -- Enforce the per-name cap on pre-existing rows: keep the 32 most
-        -- recent per name.
-        DELETE FROM name_conflicts WHERE id IN (
-            SELECT id FROM (
-                SELECT id, ROW_NUMBER() OVER (
-                    PARTITION BY name ORDER BY id DESC) AS rn
-                FROM name_conflicts) WHERE rn > 32);
+        -- Attempts past the per-name distinct-challenger cap. Counted,
+        -- not stored. Never a reason to delete a conflict row.
+        CREATE TABLE IF NOT EXISTS name_conflict_overflow (
+            name TEXT PRIMARY KEY,
+            overflow_count INTEGER NOT NULL DEFAULT 0
+        );
         """)
+        # Existing DBs created before Villhaze (b) lack the audit columns
+        # and may still have UNIQUE(name, challenger_pubkey, issued_at).
+        # Add the columns, collapse repeat re-signs of the same key down
+        # to the first row, and install UNIQUE(name, challenger_pubkey).
+        # Distinct challengers are kept — this does not evict.
+        for stmt in (
+            "ALTER TABLE name_conflicts ADD COLUMN challenger_signature TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE name_conflicts ADD COLUMN signed_payload BLOB",
+        ):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        conn.execute("DROP INDEX IF EXISTS idx_name_conflicts_dedupe")
+        conn.execute(
+            "DELETE FROM name_conflicts WHERE id NOT IN ("
+            " SELECT MIN(id) FROM name_conflicts"
+            " GROUP BY name, challenger_pubkey)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_name_conflicts_challenger"
+            " ON name_conflicts(name, challenger_pubkey)")
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")
         except sqlite3.OperationalError:

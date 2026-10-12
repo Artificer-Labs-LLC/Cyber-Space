@@ -249,38 +249,153 @@ check("unparseable row beaten by same key",
           old_bad, new_foreign, old_bad["node_pubkey"], NOW),
       True)
 
-# --- Bulwark MEDIUM (r3): name_conflicts table is bounded ---
-# The conflicts table is writable from the unauthenticated gossip path.
-# (a) Duplicate challenger claims are ignored via the UNIQUE index.
-# (b) Per-name cap (32) is enforced — oldest dropped when cap is hit.
+# --- Villhaze (b) / Loom: name_conflicts never evicts ---
+# One slot per challenger key. The first N distinct challengers stay.
+# A repeat of the same key is ignored. The (N+1)th distinct key increments
+# the overflow counter and is not inserted. The first row's signed bytes
+# remain.
 def _conflict_count(nm):
     with core._db_lock, core._db() as conn:
         return conn.execute(
             "SELECT COUNT(*) FROM name_conflicts WHERE name=?",
             (nm,)).fetchone()[0]
 
-# (a) Log the same conflict twice — second is ignored.
+def _overflow(nm):
+    with core._db_lock, core._db() as conn:
+        row = conn.execute(
+            "SELECT overflow_count FROM name_conflict_overflow WHERE name=?",
+            (nm,)).fetchone()
+    return row[0] if row else 0
+
 k_dup_inc = os.urandom(32).hex()
 k_dup_ch = os.urandom(32).hex()
+dup_pub = _ed.publickey(bytes.fromhex(k_dup_ch)).hex()
 dup_inc = {"node_pubkey": _ed.publickey(bytes.fromhex(k_dup_inc)).hex(),
            "issued_at": live_issued}
-dup_ch = {"node_pubkey": _ed.publickey(bytes.fromhex(k_dup_ch)).hex(),
-          "issued_at": live_issued, "expires_at": live_expires}
+dup_sig = "ab" * 64
+dup_ch = {"node_pubkey": dup_pub, "issued_at": live_issued,
+          "expires_at": live_expires, "signature": dup_sig}
+dup_again = {"node_pubkey": dup_pub,
+             "issued_at": iso_z(NOW - timedelta(minutes=1)),
+             "expires_at": live_expires, "signature": "cd" * 64}
 with core._db_lock, core._db() as conn:
     core._log_name_conflict(conn, "belt-dup", dup_inc, dup_ch, "live-foreign-incumbent")
-    core._log_name_conflict(conn, "belt-dup", dup_inc, dup_ch, "live-foreign-incumbent")
-check("duplicate conflict ignored (UNIQUE)", _conflict_count("belt-dup"), 1)
+    core._log_name_conflict(conn, "belt-dup", dup_inc, dup_again, "live-foreign-incumbent")
+check("duplicate challenger ignored (UNIQUE pubkey)", _conflict_count("belt-dup"), 1)
+check("duplicate re-sign does not overflow", _overflow("belt-dup"), 0)
+with core._db_lock, core._db() as conn:
+    kept = conn.execute(
+        "SELECT challenger_issued_at, challenger_signature, signed_payload "
+        "FROM name_conflicts WHERE name=?",
+        ("belt-dup",)).fetchone()
+want_payload = core._name_claim_payload(
+    "belt-dup", dup_pub, live_issued, live_expires)
+check("first slot keeps original issued_at and signature",
+      (kept[0], kept[1]), (live_issued, dup_sig))
+check("signed payload stored for audit", bytes(kept[2]), want_payload)
 
-# (b) Spam 40 distinct conflicts for one name — cap at 32.
-for i in range(40):
+# First N distinct challengers insert. The genuine first row is the
+# audit trail that must survive the flood.
+first_pubs = []
+first_sig = "11" * 64
+for i in range(core.NAME_CONFLICT_CAP):
     k_spam = os.urandom(32).hex()
-    spam_ch = {"node_pubkey": _ed.publickey(bytes.fromhex(k_spam)).hex(),
-               "issued_at": iso_z(NOW - timedelta(minutes=i)),
-               "expires_at": live_expires}
+    pub = _ed.publickey(bytes.fromhex(k_spam)).hex()
+    first_pubs.append(pub)
+    sig = first_sig if i == 0 else ("%02x" % (i % 256)) * 64
+    spam_ch = {"node_pubkey": pub,
+               "issued_at": iso_z(NOW - timedelta(minutes=i + 1)),
+               "expires_at": live_expires, "signature": sig}
     with core._db_lock, core._db() as conn:
         core._log_name_conflict(conn, "belt-cap", dup_inc, spam_ch,
                                 "live-foreign-incumbent")
-check("per-name conflict cap enforced at 32", _conflict_count("belt-cap"), 32)
+check("first N challengers stored",
+      _conflict_count("belt-cap"), core.NAME_CONFLICT_CAP)
+check("no overflow while at the cap", _overflow("belt-cap"), 0)
+
+extra = 0
+for i in range(8):
+    k_spam = os.urandom(32).hex()
+    spam_ch = {"node_pubkey": _ed.publickey(bytes.fromhex(k_spam)).hex(),
+               "issued_at": iso_z(NOW - timedelta(seconds=i + 1)),
+               "expires_at": live_expires, "signature": "ee" * 64}
+    with core._db_lock, core._db() as conn:
+        core._log_name_conflict(conn, "belt-cap", dup_inc, spam_ch,
+                                "live-foreign-incumbent")
+    extra += 1
+check("N+1th does not insert",
+      _conflict_count("belt-cap"), core.NAME_CONFLICT_CAP)
+check("N+1th increments overflow", _overflow("belt-cap"), extra)
+with core._db_lock, core._db() as conn:
+    trail = conn.execute(
+        "SELECT challenger_pubkey, challenger_signature FROM name_conflicts "
+        "WHERE name=? ORDER BY id ASC LIMIT 1",
+        ("belt-cap",)).fetchone()
+check("audit trail preserved (first challenger still stored)",
+      (trail[0], trail[1]), (first_pubs[0], first_sig))
+
+# Same key re-signing many times cannot evict the genuine row and is
+# not an overflow (the slot already exists).
+for i in range(40):
+    resign = {"node_pubkey": first_pubs[0],
+              "issued_at": iso_z(NOW - timedelta(seconds=30 + i)),
+              "expires_at": live_expires, "signature": "ff" * 64}
+    with core._db_lock, core._db() as conn:
+        core._log_name_conflict(conn, "belt-cap", dup_inc, resign,
+                                "live-foreign-incumbent")
+check("re-sign flood does not evict",
+      _conflict_count("belt-cap"), core.NAME_CONFLICT_CAP)
+check("re-sign flood does not overflow", _overflow("belt-cap"), extra)
+with core._db_lock, core._db() as conn:
+    trail = conn.execute(
+        "SELECT challenger_signature FROM name_conflicts "
+        "WHERE name=? AND challenger_pubkey=?",
+        ("belt-cap", first_pubs[0])).fetchone()
+check("re-sign leaves the original signature", trail[0], first_sig)
+
+# Migration: an old unique key (pubkey + issued_at) collapses to the
+# first row per challenger, and rows beyond N are not deleted.
+with core._db_lock, core._db() as conn:
+    conn.execute("DROP INDEX IF EXISTS idx_name_conflicts_challenger")
+    conn.execute(
+        "INSERT INTO name_conflicts (name, incumbent_pubkey,"
+        " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
+        " challenger_expires_at, reason, recorded_at, challenger_signature)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ("belt-mig", "inc", live_issued, "aa" * 32, live_issued,
+         live_expires, "live-foreign-incumbent", live_issued, "mig-first"))
+    conn.execute(
+        "INSERT INTO name_conflicts (name, incumbent_pubkey,"
+        " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
+        " challenger_expires_at, reason, recorded_at, challenger_signature)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ("belt-mig", "inc", live_issued, "aa" * 32,
+         iso_z(NOW - timedelta(minutes=3)),
+         live_expires, "live-foreign-incumbent", live_issued, "mig-second"))
+    for i in range(40):
+        conn.execute(
+            "INSERT INTO name_conflicts (name, incumbent_pubkey,"
+            " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
+            " challenger_expires_at, reason, recorded_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            ("belt-mig", "inc", live_issued, ("%064x" % (i + 1)),
+             live_issued, live_expires, "live-foreign-incumbent", live_issued))
+    conn.commit()
+core.init_db()
+check("migration keeps first row of a repeated challenger",
+      _conflict_count("belt-mig"), 41)  # 1 collapsed key + 40 distinct
+with core._db_lock, core._db() as conn:
+    mig = conn.execute(
+        "SELECT challenger_signature FROM name_conflicts "
+        "WHERE name=? AND challenger_pubkey=?",
+        ("belt-mig", "aa" * 32)).fetchone()
+    idx = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='idx_name_conflicts_challenger'"
+    ).fetchone()
+check("migration kept the earliest signature", mig[0], "mig-first")
+check("unique index is (name, challenger_pubkey)",
+      "challenger_issued_at" not in (idx[0] or "")
+      and "challenger_pubkey" in (idx[0] or ""), True)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
