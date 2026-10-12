@@ -337,7 +337,7 @@ ok, cok, nh, bound, noreap, f1, f2 = mixed_handoff("")
 check("Z1->X (Z1 mixed-order, X clean) via gossip single-hop -> False", ok is False, ok)
 check("Z1->X via gossip chain -> False", cok is False, cok)
 check("Z1->X: both hops recorded in name_rotations", nh == 2, nh)
-check("Z1->X: name_bindings untouched (no write, no reap)", bound == [MXK, MXK] and noreap, (bound, noreap))
+check("Z1->X: [invariant, cannot fail by construction: helpers never write name_bindings] binding still Z1, count same", bound == [MXK, MXK] and noreap, (bound, noreap))
 check("Z1->X: snapshot FLAGs 'chain starts on weak key' (single + chain)",
       "chain starts on weak key" in str(f1) and "chain starts on weak key" in str(f2), (f1, f2))
 _real_old = core._gossip_old_key_weak
@@ -396,7 +396,7 @@ check("mid-chain premise: hop 2 forged record verifies under strict checkvalid; 
 r, nh2, b2, noreap2, fl2, rs2, hd2 = midchain("midweak")
 check("mid-chain K->M->Z1->X (only hop 2 old key weak) -> False", r is False, r)
 check("mid-chain: all 3 hops recorded in name_rotations", nh2 == 3, nh2)
-check("mid-chain: name_bindings untouched (still K, no write, no reap)", b2 == MCK and noreap2, (b2, noreap2))
+check("mid-chain: [invariant, cannot fail by construction: helpers never write name_bindings] binding still K, count same", b2 == MCK and noreap2, (b2, noreap2))
 check("mid-chain: snapshot FLAGs the name: reserved for M (last non-weak), not held", rs2 == MCM and not hd2, (fl2, rs2, hd2))
 
 _real_new = core._gossip_new_key_weak
@@ -414,5 +414,47 @@ check("MUTANT (old-key check on hop 0 only) fails the mid-chain row: chain helpe
       r_hop0 is True, r_hop0)
 check("old Z1->X rows cannot tell hop-0-only from every-hop (both still False under the mutant)",
       old_rows_hop0[0] is False and old_rows_hop0[1] is False, old_rows_hop0[:2])
+
+# Examiner revised B1 (d): the helpers contain no name_bindings write at all.
+_HELPER_SRC = "".join(inspect.getsource(f) for f in (core._gossiped_rotation_designates,
+    core._gossiped_rotation_chain_designates, core._record_gossiped_rotation))
+check("helpers contain no name_bindings write (source has no 'name_bindings')",
+      "name_bindings" not in _HELPER_SRC)
+
+# Examiner revised B1 (a): 2-hop K->Z1->X, K clean, Z1 mixed-order (a*B+T2), hop 1 ground for even h.
+B1K_SEED = bytes.fromhex("e1" * 32)
+B1K = _ed.publickey(B1K_SEED).hex()
+B1X = _ed.publickey(bytes.fromhex("e3" * 32)).hex()
+
+def b1chain(label):
+    ch = [mint_rotation(label, B1K_SEED, MXK, issued_at=PAST), forge_mixed(label, B1X)]
+    with core._db_lock, core._db() as conn:
+        conn.execute("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     (label, B1K, PAST, FUT, "00" * 64))
+        r = core._gossiped_rotation_chain_designates(ch, label, B1K, B1X, FUT, conn=conn)
+        hops = conn.execute("SELECT COUNT(*) FROM name_rotations WHERE name=?", (label,)).fetchone()[0]
+        snap = wo.snapshot_bindings(conn)
+    flag = {x[0]: x[-1] for x in snap["refused"]}.get(label)
+    res = {x["name"]: x["reserved_for"] for x in snap["reserved"]}.get(label)
+    return r, hops, flag, res
+
+r, nh3, fl3, rs3 = b1chain("b1kz1x")
+print("B1 K->Z1->X snapshot:", {"flag": fl3, "reserved_for_is_K": rs3 == B1K})
+check("B1 K->Z1->X (K clean, Z1 mixed-order) -> False", r is False, r)
+check("B1 K->Z1->X: 2 hops recorded", nh3 == 2, nh3)
+check("B1 K->Z1->X: snapshot reserves for K (earliest weak hop K->Z1 starts on clean K; no 'chain starts on weak key' flag)",
+      rs3 == B1K and fl3 is None, (fl3, rs3))
+
+# (b) mutant: old-key check on hop 0 only, new-key check on the tail hop only.
+_NEW_ANY = 'if any(_gossip_new_key_weak(rec["new_pubkey"]) for rec in chain):'
+assert _SRC_CHAIN.count(_NEW_ANY) == 1, "new-key any(...) line moved"
+_B1_MUT = _chain_variant(_SRC_CHAIN.replace(_OLD_ANY, 'if _gossip_old_key_weak(chain[0]["old_pubkey"]):')
+                         .replace(_NEW_ANY, 'if _gossip_new_key_weak(chain[-1]["new_pubkey"]):'))
+core._gossiped_rotation_chain_designates = _B1_MUT
+try:
+    rm, *_ = b1chain("b1mut")
+finally:
+    core._gossiped_rotation_chain_designates = _real_chain
+check("MUTANT (old-key hop 0 only + new-key tail only) returns True on K->Z1->X; real code False", rm is True and r is False, (rm, r))
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

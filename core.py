@@ -1069,7 +1069,7 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
     for rec in chain:  # 5b1c941d: every accepted hop, local accepted_at
         _record_gossiped_rotation(conn, rec)
     if any(_gossip_old_key_weak(rec["old_pubkey"]) for rec in chain):
-        return False  # Examiner 26cea33: weak holder, recorded (FLAG), never bound
+        return False  # Examiner 26cea33 / revised B1: hops >=1 old keys are covered via linkage (:1064, old == prev new) plus the every-hop new-key check (:1073); hop 0 old key here
     if any(_gossip_new_key_weak(rec["new_pubkey"]) for rec in chain):
         return False  # Bulwark H3: recorded (snapshot reserves), never bound
     return True
