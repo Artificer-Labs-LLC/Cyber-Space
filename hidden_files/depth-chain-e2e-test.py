@@ -93,8 +93,11 @@ def _post_claim(name, pub, issued, expires, sig):
 
 SK, PK = _keypair()
 NOW = datetime.datetime.now(datetime.timezone.utc)
-NOWS = NOW.isoformat()
-LATER = (NOW + datetime.timedelta(days=30)).isoformat()
+# Canonical UTC seconds form (twin of mint_name._iso): raw .isoformat()
+# emits microseconds, which every claim-time seat (_parse_claim_time)
+# reads as malformed — the claim route 400s before any logic runs.
+NOWS = NOW.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+LATER = (NOW + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 LABEL = "deepe2e"
 
 # 1: naming — the claim goes through the real HTTP route, signed by the
