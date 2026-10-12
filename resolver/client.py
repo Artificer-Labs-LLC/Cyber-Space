@@ -152,7 +152,10 @@ def _parse_response(
     daemon response builder ever sets TC — its replies are whole on
     both wires, so a TC-set packet over TCP was contradicting itself
     yet still trusted until now; over UDP the TC refusal was already
-    the retry-on-TCP signal), and an echoed
+    the retry-on-TCP signal), a packet with the RA bit set claims
+    recursion was available (the daemon is authoritative-only for the
+    zone and neither response builder ever sets RA — an RA-set packet
+    is a recursive resolver's answer, not the daemon's), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -182,6 +185,8 @@ def _parse_response(
         raise ResolveError("response does not echo RD")
     if flags & 0x0200:
         raise ResolveError("response claims truncation (TC set)")
+    if flags & 0x0080:
+        raise ResolveError("response claims recursion available (RA set)")
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
