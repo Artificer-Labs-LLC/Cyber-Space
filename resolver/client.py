@@ -81,6 +81,22 @@ def _client_port_warnings() -> list[str]:
     return []
 
 
+def _server_host(server: str) -> str:
+    """Host to dial for a --server value, brackets stripped.
+
+    Mirrors daemon._bind_family exactly: an operator who bound the
+    daemon with the bracketed form copied out of a URL ("[::1]") will
+    naturally pass that same form here, but ip_address, gethostbyname,
+    sendto, and create_connection all want the bare literal — the
+    bracketed form picked AF_INET, then died in transport, for a
+    daemon that was listening fine. Brackets are stripped when they
+    wrap the whole value; anything else is returned unchanged."""
+    host = server.strip()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1].strip()
+    return host
+
+
 class NameNotFound(NameError):
     """The daemon answered NXDOMAIN: the name does not resolve."""
 
@@ -324,6 +340,7 @@ def _query_udp(
     owner — came from a stranger who reached the ephemeral port, and
     is refused rather than parsed.
     """
+    host = _server_host(server)
     s = sock
     try:
         if s is None:
@@ -331,18 +348,18 @@ def _query_udp(
             # AF_INET6 socket; gethostbyname below is v4-only, so the
             # expected source for a literal is the literal itself.
             try:
-                is_v6 = ipaddress.ip_address(server).version == 6
+                is_v6 = ipaddress.ip_address(host).version == 6
             except ValueError:
                 is_v6 = False
             family = socket.AF_INET6 if is_v6 else socket.AF_INET
             s = socket.socket(family, socket.SOCK_DGRAM)
         s.settimeout(timeout)
-        s.sendto(packet, (server, port))
+        s.sendto(packet, (host, port))
         data, source = s.recvfrom(4096)
         try:
-            expected = str(ipaddress.ip_address(server))
+            expected = str(ipaddress.ip_address(host))
         except ValueError:
-            expected = socket.gethostbyname(server)
+            expected = socket.gethostbyname(host)
         if (source[0], source[1]) != (expected, port):
             raise ResolveError("udp response from an unexpected source")
     except ResolveError:
@@ -371,7 +388,7 @@ def _query_tcp(
     s = sock
     try:
         if s is None:
-            s = socket.create_connection((server, port), timeout)
+            s = socket.create_connection((_server_host(server), port), timeout)
         s.settimeout(timeout)
         s.sendall(struct.pack(">H", len(packet)) + packet)
         (body_len,) = struct.unpack(">H", _read_exact(s, 2))

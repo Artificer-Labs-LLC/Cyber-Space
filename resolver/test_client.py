@@ -161,6 +161,55 @@ class ClientTests(unittest.TestCase):
         addrs = client.resolve("node.cyberspace", _udp_sock=_Echo())
         self.assertEqual(addrs, ["10.9.8.7"])
 
+    def test_server_host_bracketed_v6_stripped(self):
+        """Daemon-parity: _bind_family strips "[::1]" to "::1"; the
+        client must dial that same bare form, not the bracketed one."""
+        self.assertEqual(client._server_host("[::1]"), "::1")
+        self.assertEqual(client._server_host("::1"), "::1")
+        self.assertEqual(client._server_host("127.0.0.1"), "127.0.0.1")
+        self.assertEqual(client._server_host("[127.0.0.1]"), "127.0.0.1")
+        self.assertEqual(client._server_host("localhost"), "localhost")
+
+    def test_udp_bracketed_v6_server_dials_bare_literal(self):
+        """server="[::1]" sends to ("::1", port) and accepts a reply
+        sourced from ::1 — before, the bracketed form was compared
+        and dialed verbatim and could never match or connect."""
+        class _V6Echo(_FakeUdpSock):
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+                parsed = dns.parse_query(data)
+                self.canned = dns.build_response(
+                    parsed, [(1, 120, socket.inet_aton("10.9.8.7"))], rcode=0
+                )
+                return len(data)
+
+            def recvfrom(self, n):
+                return self.canned, ("::1", 5353)
+
+        sock = _V6Echo()
+        addrs = client.resolve("node.cyberspace", server="[::1]", _udp_sock=sock)
+        self.assertEqual(addrs, ["10.9.8.7"])
+        self.assertEqual(sock.sent[0][1], ("::1", 5353))
+
+    def test_tcp_bracketed_v6_server_dials_bare_literal(self):
+        """TCP wire: create_connection receives the bare "::1", not
+        "[::1]" (which it rejects as an unknown host)."""
+        from unittest import mock
+
+        server = _tcp_server(_a_response)
+        seen = []
+
+        def _fake_create(addr, timeout=None):
+            seen.append(addr)
+            return server
+
+        with mock.patch.object(socket, "create_connection", _fake_create):
+            addrs = client.resolve(
+                "node.cyberspace", server="[::1]", port=5399, tcp_only=True
+            )
+        self.assertEqual(addrs, ["10.9.8.7"])
+        self.assertEqual(seen, [("::1", 5399)])
+
     def test_udp_response_from_stranger_address_refused(self):
         """A flawless packet from the wrong source IP is not the daemon's
         answer: UDP is connectionless, so source IS the authentication
