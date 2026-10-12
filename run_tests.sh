@@ -17,6 +17,7 @@ TESTS=(
   "test_names_rotate_zero_key.py"
   "test_window_open_preconditions.py"
   "test_legacy_migrate_stub.py"
+  "test_witness_port.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
