@@ -1,0 +1,31 @@
+{
+  "valid": {
+    "name": "vectortest",
+    "node_pubkey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "issued_at": "2026-01-01T00:00:00+00:00",
+    "expires_at": "2099-01-01T00:00:00Z",
+    "signature": "87a87bcfbf75920aa00c28a4ad1f67955fe1d45edd45882701e4c8a6e235ebf04022505b496722cd7d459e80934ed55b3af812247d4553f57483412f37a31b0e"
+  },
+  "other_key": {
+    "name": "vectortest",
+    "node_pubkey": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
+    "issued_at": "2026-01-01T00:00:00+00:00",
+    "expires_at": "2099-01-01T00:00:00Z",
+    "signature": "bddb64de95462702a23e9948110dcb4cfe254b53a3a17c8730905e7d827fa84ef9046561651b0c16ca823e70ca54891dc34fee3f7dfc23a54d7f1a1f4176c801"
+  },
+  "expired": {
+    "name": "vectortest",
+    "node_pubkey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "issued_at": "2020-01-01T00:00:00Z",
+    "expires_at": "2021-01-01T00:00:00Z",
+    "signature": "3145ffa53fe07a862f429aaf7bf48323d5fbe98ff5cbfea1cd74e8bab0a84b717444a9b75ea396562308311f16bbc66cc186c9f1d525684a527f3eb3560d1b0e"
+  },
+  "_note": "Throwaway vectors: seeds are bytes([7])*32 and bytes([9])*32, signed with the repo's fed.ed25519 via mint_name.sign over core._name_claim_payload. Not real keys.",
+  "genesis_live_2026_10_12": {
+    "name": "genesis",
+    "node_pubkey": "46b62b6c58d4299e9376dcda9192a141a154b1dd3be620ac55e4bc2a38f4b4df",
+    "issued_at": "2026-10-08T02:47:31+00:00",
+    "expires_at": "2027-10-08T02:47:31+00:00",
+    "signature": "577c48cac5c6eb962867e4ec58b96166398b1362c240cb3f1824d6e841f974db9f59f0137547ed0cd3c878e58442d5773dd81299e44eacc3d5c646fce0bac605"
+  }
+}

@@ -873,6 +873,115 @@ async function fetchRound(name, dohUrl, timeoutMs = DOH_TIMEOUT_MS) {
   return { ips, cname, ttl };
 }
 
+// Signed name binding check (Controller port, ART-20; Villhaze-approved
+// scope). The DoH answer carries an address but no signature, so a bridge
+// that lies about a name would otherwise be believed. Before any address is
+// accepted (or cached), the extension fetches the name's signed binding from
+// the bridge's own origin — GET <bridge origin>/api/v1/names/<label>, the
+// exact-name registry endpoint core.resolve_cyberspace step 2 uses — and
+// re-verifies it locally, fail-closed:
+//   payload = "name-claim|" + name + "|" + node_pubkey(lowercase hex) + "|"
+//             + issued_at + "|" + expires_at          (core._name_claim_payload)
+//   signature = Ed25519 by node_pubkey itself (the name key vouches for its
+//               own binding; verify_name.py is the offline twin).
+// Timestamps follow verify_name._parse_ts exactly: YYYY-MM-DDTHH:MM:SS plus
+// Z or +00:00 only. Missing, malformed, tampered, wrong-key, not-yet-issued
+// and expired bindings all throw "Name binding refused: <reason>" — there is
+// no unverified fallback and no setting that turns this off.
+// Scope: this proves name -> name key. The address half (key -> node_url,
+// the name-key-signed reach descriptor / announce) is still verified only by
+// the bridge; the DoH A/AAAA carries nothing the extension can check.
+const BINDING_REFUSED = "Name binding refused: ";
+const BINDING_FIELDS = ["name", "node_pubkey", "issued_at", "expires_at", "signature"];
+
+function bindingHexBytes(h) {
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+function parseClaimTime(s, field) {
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)$/.exec(s);
+  if (!m) throw new Error(`${BINDING_REFUSED}${field} is not a canonical UTC timestamp`);
+  const [y, mo, d, h, mi, se] = m.slice(1, 7).map(Number);
+  if (!(mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h <= 23 && mi <= 59 && se <= 59))
+    throw new Error(`${BINDING_REFUSED}${field} out of range`);
+  const t = Date.UTC(y, mo - 1, d, h, mi, se);
+  const dt = new Date(t);
+  // Reject rolled-over dates (Feb 30 -> Mar 2), as Python's datetime() does.
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d)
+    throw new Error(`${BINDING_REFUSED}${field} invalid date`);
+  return t;
+}
+
+function nameClaimPayload(name, pub, issuedAt, expiresAt) {
+  return new TextEncoder().encode(`name-claim|${name}|${pub.toLowerCase()}|${issuedAt}|${expiresAt}`);
+}
+
+// Verify a binding object for `label` (no suffix). Returns {name, pub,
+// expiresMs} on success; throws "Name binding refused: ..." otherwise.
+async function verifyNameBinding(binding, label, nowMs = Date.now(), subtle) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding))
+    throw new Error(`${BINDING_REFUSED}signed binding missing`);
+  for (const k of BINDING_FIELDS) {
+    if (typeof binding[k] !== "string" || !binding[k])
+      throw new Error(`${BINDING_REFUSED}${k === "signature" ? "signature missing" : "missing field " + k}`);
+  }
+  // Normalize identically to the mirror / verify_name.py (strip + lowercase).
+  const name = binding.name.trim().toLowerCase();
+  const pub = binding.node_pubkey.trim().toLowerCase();
+  const sig = binding.signature.trim().toLowerCase();
+  if (name !== String(label).toLowerCase())
+    throw new Error(`${BINDING_REFUSED}binding is for ${truncateEcho(name, 64)}, not ${truncateEcho(label, 64)}`);
+  if (!/^[0-9a-f]{64}$/.test(pub)) throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 hex chars`);
+  if (!/^[0-9a-f]{128}$/.test(sig)) throw new Error(`${BINDING_REFUSED}signature is not 128 hex chars`);
+  const issued = parseClaimTime(binding.issued_at, "issued_at");
+  const expires = parseClaimTime(binding.expires_at, "expires_at");
+  if (!(issued < expires)) throw new Error(`${BINDING_REFUSED}issued_at is not before expires_at`);
+  if (nowMs < issued) throw new Error(`${BINDING_REFUSED}binding is not yet issued`);
+  if (nowMs >= expires) throw new Error(`${BINDING_REFUSED}binding has expired`);
+  const sub = subtle || (globalThis.crypto && globalThis.crypto.subtle);
+  if (!sub) throw new Error(`${BINDING_REFUSED}this browser cannot verify Ed25519 signatures`);
+  let ok = false;
+  try {
+    const key = await sub.importKey("raw", bindingHexBytes(pub), { name: "Ed25519" }, false, ["verify"]);
+    ok = await sub.verify({ name: "Ed25519" }, key, bindingHexBytes(sig),
+      nameClaimPayload(name, pub, binding.issued_at, binding.expires_at));
+  } catch (e) {
+    throw new Error(`${BINDING_REFUSED}signature could not be checked (${truncateEcho((e && e.message) || e, 80)})`);
+  }
+  if (!ok) throw new Error(`${BINDING_REFUSED}signature does not verify against the named key`);
+  return { name, pub, expiresMs: expires };
+}
+
+// Fetch <bridge origin>/api/v1/names/<label> under the same abort budget as
+// a DoH round. 404 = the bridge serves no signed binding -> refused.
+async function fetchSignedBinding(label, dohUrl, timeoutMs = DOH_TIMEOUT_MS) {
+  const url = new URL(`/api/v1/names/${encodeURIComponent(label)}`, dohUrl).href;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { headers: { "Accept": "application/json" }, signal: controller.signal });
+    if (resp.status === 404) throw new Error(`${BINDING_REFUSED}signed binding missing (bridge serves none for ${truncateEcho(label, 64)})`);
+    if (!resp.ok) throw new Error(`${BINDING_REFUSED}signed binding fetch failed (HTTP ${resp.status})`);
+    const text = await resp.text();
+    if (text.length > MAX_DNS_MSG) throw new Error(`${BINDING_REFUSED}signed binding too large`);
+    try { return JSON.parse(text); } catch (_) { throw new Error(`${BINDING_REFUSED}signed binding is not JSON`); }
+  } catch (err) {
+    if (err && err.name === "AbortError") throw new Error(`${BINDING_REFUSED}signed binding fetch timed out after ${timeoutMs}ms`);
+    if (err && typeof err.message === "string" && err.message.startsWith(BINDING_REFUSED)) throw err;
+    throw new Error(`${BINDING_REFUSED}signed binding fetch failed (${truncateEcho((err && err.message) || err, 80)})`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function checkSignedBinding(name, dohUrl, timeoutMs = DOH_TIMEOUT_MS) {
+  const label = name.toLowerCase().replace(/\.$/, "").slice(0, -SUFFIX.length);
+  const binding = await fetchSignedBinding(label, dohUrl, timeoutMs);
+  return verifyNameBinding(binding, label);
+}
+
 async function resolveCyberspaceInner(name, dohUrl, timeoutMs = DOH_TIMEOUT_MS) {
   if (typeof name !== "string" || !name.toLowerCase().endsWith(SUFFIX)) {
     throw new Error(`Not a .cyberspace name: ${name}`);
@@ -952,6 +1061,12 @@ async function resolveCyberspaceInner(name, dohUrl, timeoutMs = DOH_TIMEOUT_MS) 
     const { ips, cname, ttl } = round;
     if (ttl < wireTtl) wireTtl = ttl;
     if (ips.length) {
+      // Fail-closed signed-binding gate (ART-20): no address is returned or
+      // cached until the answered name's signed binding verifies locally.
+      // The cache entry must not outlive the binding either.
+      const verified = await checkSignedBinding(name, dohUrl, timeoutMs);
+      const bindingTtl = Math.max(0, Math.floor((verified.expiresMs - Date.now()) / 1000));
+      if (bindingTtl < wireTtl) wireTtl = bindingTtl;
       cachePut(cacheKey, ips[0], dohUrl, wireTtl);
       return ips[0];
     }
@@ -1069,6 +1184,11 @@ function classifyResolveError(e, loc = "below") {
   const msg = e && e.message ? e.message : String(e);
   if (NAME_INPUT_PROBLEM.test(msg) || NAME_DATA_PROBLEM.test(msg))
     return { kind: "name", hint: tHint("hintNameSpelling", " — check the spelling, or claim it on the genesis node") };
+  if (/^Name binding refused: /.test(msg))
+    // The signed-binding gate refused the answer: the reason (missing,
+    // tampered, wrong key, expired) is already in msg. Not a spelling
+    // problem and not the endpoint setting — the binding itself failed.
+    return { kind: "name", hint: tHint("hintBindingRefused", " — the name's signed binding did not verify, so the address was not used") };
   if (NAME_NO_ADDRESS.test(msg))
     // The bridge answered authoritatively; the name simply carries no
     // address records. Spelling/claiming advice would mislead, so this is
