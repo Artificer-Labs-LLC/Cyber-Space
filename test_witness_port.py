@@ -395,6 +395,7 @@ check("(d) strong rotate is still accepted",
 
 # weak OLD key: checkvalid accepts the mixed-order holder, weak_reason does not.
 # The rate gate runs first, so the refusal still spends a names-write token.
+# Claim would 400 this key, so the binding is seeded directly.
 scalar_old = 0x97531
 old_weak = mixed_pub(scalar_old)
 weak_new_priv = "77" * 32
@@ -421,6 +422,9 @@ r = client_at(weak_ip).post("/api/v1/names/rotate", data={
     "binding_signature": weak_nsig})
 with core._db_lock:
     weak_bucket = core._hits.get(f"names-write:{weak_ip}")
+real_weak_old = (r.status_code == 400 and "weak key" in r.text
+                 and bindings("weakold") == (old_weak, 0)
+                 and weak_bucket is not None and len(weak_bucket) == 1)
 check("rotate with a weak old key is 400",
       r.status_code == 400 and "weak key" in r.text, (r.status_code, r.text[:240]))
 check("weak old rotate wrote no rotation row and left the binding",
@@ -624,6 +628,31 @@ finally:
 record_mutant("weak_reason skipped on rotate",
               "mixed-order rotate is 400 and writes nothing",
               True, mutant_rot)
+
+# 3b. weak_reason on old_pubkey only, turned into a no-op.
+# The new key stays checked, so this is not the whole-function mutant above.
+real_rot_old = rss._rotate_weak_reason
+
+
+def skip_old_only(pub, _real=real_rot_old, _old=old_weak):
+    if pub == _old:
+        return None
+    return _real(pub)
+
+
+rss._rotate_weak_reason = skip_old_only
+try:
+    r = client_at("203.0.113.63").post("/api/v1/names/rotate", data={
+        "name": "weakold", "old_pubkey": old_weak, "new_pubkey": weak_new_pub,
+        "rotation_issued_at": ISSUED, "rotation_signature": weak_rsig,
+        "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
+        "binding_signature": weak_nsig})
+    mutant_old = r.status_code == 200 and bindings("weakold") == (weak_new_pub, 1)
+finally:
+    rss._rotate_weak_reason = real_rot_old
+record_mutant("weak_reason on old_pubkey is a no-op",
+              "weak old_pubkey on rotate is 400 and writes nothing",
+              real_weak_old, mutant_old)
 
 # 4. proxy headers trusted from an untrusted peer
 reset_hits()
