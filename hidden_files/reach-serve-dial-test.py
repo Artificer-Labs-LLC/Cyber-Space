@@ -159,10 +159,10 @@ def _rbinding(corrupt=False):
             "expires_at": LIVE, "signature": sig}
 
 
-def _rdesc(tamper=False):
+def _rdesc(tamper=False, issued=None):
     d = core._reach_mint(_name_seed.hex(), _name_pub, RLABEL,
                          [{"kind": "direct", "url": DESC_URL}],
-                         ISSUED, LIVE)
+                         issued if issued is not None else ISSUED, LIVE)
     if tamper:
         d = dict(d)
         d["signature"] = ("0" if d["signature"][0] != "0" else "1") + d["signature"][1:]
@@ -209,7 +209,9 @@ def _fake_factory(mode):
             "absent": None, "cross-name-live": _rdesc(),
             "garbage-issued-live": _rdesc(),
             "future-issued-live": _rdesc(),
-            "future-issued-mirror": _rdesc()}[mode]
+            "future-issued-mirror": _rdesc(),
+            "garbage-issued-desc": _rdesc(issued="not-a-time"),
+            "future-issued-desc": _rdesc(issued=FUTURE_ISSUED)}[mode]
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
@@ -243,7 +245,14 @@ def part_b():
         for mode, expect_url, expect_dir_hits in (
                 ("descriptor", DESC_NODE, 0),
                 ("bad-sig", NODE, 1),
-                ("absent", NODE, 1)):
+                ("absent", NODE, 1),
+                # Descriptor issued_at floor: a descriptor signed over
+                # a garbage or future issued_at (valid signature, live
+                # expiry, sane binding) must be refused by
+                # _reach_descriptor_verify and fall to the directory
+                # scan, like a bad signature.
+                ("garbage-issued-desc", NODE, 1),
+                ("future-issued-desc", NODE, 1)):
             fake, hits = _fake_factory(mode)
             core._resolve_get_json = fake
             core._resolve_peer_get_json = fake

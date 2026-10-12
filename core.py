@@ -773,7 +773,19 @@ def _reach_descriptor_verify(desc) -> bool:
             return False
         issued_at = str(desc["issued_at"])
         expires_at = str(desc["expires_at"])
-        if _parse_claim_time(expires_at) <= datetime.now(timezone.utc):
+        # The issued_at floor the binding seats carry applies here
+        # too: it must parse (a signer can sign a garbage string and
+        # pass the signature check below), it must not be in the
+        # future (verify_name's "not yet issued"), and it must precede
+        # the expiry (verify_name's ordering) — an unparseable or
+        # future-dated descriptor verified True here while every
+        # binding seat read the same claim as absent.
+        now_utc = datetime.now(timezone.utc)
+        issued_dt = _parse_claim_time(issued_at)
+        expires_dt = _parse_claim_time(expires_at)
+        if issued_dt > now_utc or not issued_dt < expires_dt:
+            return False
+        if expires_dt <= now_utc:
             return False
         return _fed_ed25519.checkvalid(
             bytes.fromhex(desc["signature"]),
