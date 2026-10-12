@@ -545,6 +545,85 @@ record_mutant("checkvalid only (no small-order component check)",
               "mixed-order witness head is refused",
               True, mutant_verify and mutant_route)
 
+# 6. presented key is not the witnessed inception key
+os.environ["CYBERNET_GENESIS_WITNESSES"] = witness_pub
+os.environ["CYBERNET_GENESIS_LOG_ID"] = ilog
+k1_priv = "99" * 32
+k1_pub = _ed.publickey(bytes.fromhex(k1_priv)).hex()
+k1_msg = rlw.import_message("zed", ilog, k1_pub, proof)
+k1_sig = _ed.sign(k1_msg, bytes.fromhex(k1_priv), bytes.fromhex(k1_pub))
+check("premise: fresh K1 signature verifies over the honest zed proof",
+      _ed.checkvalid(k1_sig, k1_msg, bytes.fromhex(k1_pub)) and k1_pub != k0_pub)
+before_k1 = imports_for("zed")
+k1_body = {
+    "name": "zed", "public_key": k1_pub, "log_id": ilog, "proof": proof,
+    "signature": k1_sig.hex(),
+}
+r = client_at("203.0.113.110").post("/api/v1/agents/import-legacy", json=k1_body)
+real_inception = (r.status_code == 400 and "not the witnessed inception key" in r.text
+                  and imports_for("zed") == before_k1)
+check("(a) fresh K1 over an honest zed proof is 400 and writes no import",
+      real_inception, (r.status_code, r.text[:240], before_k1, imports_for("zed")))
+real_inception_ok = rlw.witnessed_inception_ok
+rlw.witnessed_inception_ok = lambda ident, pub: True
+try:
+    r = client_at("203.0.113.112").post("/api/v1/agents/import-legacy", json=k1_body)
+    mutant_inception = r.status_code == 200 and imports_for("zed") == before_k1 + 1
+finally:
+    rlw.witnessed_inception_ok = real_inception_ok
+record_mutant("inception key check deleted",
+              "fresh K1 over honest zed proof is 400 and writes no import",
+              real_inception, mutant_inception)
+
+# 7. cutover k0_pub differs from the migrate-pending entry
+cut_priv = "ab" * 32
+cut_pub = _ed.publickey(bytes.fromhex(cut_priv)).hex()
+mismatch = Builder(ilog)
+mismatch.add("window-open")
+mismatch.add("hold", 7, "zed")
+mismatch.add("migrate-pending", 7, "zed", 1, k0_pub, at=T0 + 10)
+close = mismatch.add("window-close", at=T0 + 30 * DAY)
+mismatch.add("cutover", 7, "zed", 1, cut_pub, {"window_close_seq": close}, at=T0 + 30 * DAY)
+proof_mis = mismatch.proof(W, [signer_for(witness_priv, witness_pub)])
+try:
+    lw.check_identity(proof_mis, "zed", W, ilog)
+    mismatch_why = ""
+except lw.WitnessRefused as e:
+    mismatch_why = str(e)
+mis_msg = rlw.import_message("zed", ilog, cut_pub, proof_mis)
+mis_sig = _ed.sign(mis_msg, bytes.fromhex(cut_priv), bytes.fromhex(cut_pub))
+check("premise: presented key is the cutover key and its signature verifies",
+      cut_pub != k0_pub and _ed.checkvalid(mis_sig, mis_msg, bytes.fromhex(cut_pub)))
+before_mis = imports_for("zed")
+mis_body = {
+    "name": "zed", "public_key": cut_pub, "log_id": ilog, "proof": proof_mis,
+    "signature": mis_sig.hex(),
+}
+r = client_at("203.0.113.111").post("/api/v1/agents/import-legacy", json=mis_body)
+real_cut = ("cutover does not match the migration it activates" in mismatch_why
+            and r.status_code == 400
+            and "cutover does not match the migration it activates" in r.text
+            and "not the witnessed inception key" not in r.text
+            and imports_for("zed") == before_mis)
+check("(b) cutover k0 differing from migrate-pending is 400 from check_identity",
+      real_cut, (mismatch_why, r.status_code, r.text[:240], before_mis, imports_for("zed")))
+real_match = lw.migration_matches_cutover
+lw.migration_matches_cutover = lambda *args: True
+try:
+    try:
+        ident_mis = lw.check_identity(proof_mis, "zed", W, ilog)[2]
+        ident_ok = ident_mis["k0_pub"] == cut_pub
+    except lw.WitnessRefused as e:
+        ident_ok = False
+        ident_mis = str(e)
+    r = client_at("203.0.113.113").post("/api/v1/agents/import-legacy", json=mis_body)
+    mutant_cut = ident_ok and r.status_code == 200 and imports_for("zed") == before_mis + 1
+finally:
+    lw.migration_matches_cutover = real_match
+record_mutant("cutover k0 match deleted",
+              "cutover k0 differing from migrate-pending is 400",
+              real_cut, mutant_cut)
+
 print("mutant table:")
 print(f"  {'mutant':<52} {'row':<56} real mutant-fails")
 for name, row, real_ok, mutant_fails in MUTANTS:
