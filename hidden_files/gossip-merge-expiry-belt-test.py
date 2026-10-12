@@ -77,7 +77,9 @@ b2b = mint("belt-renew", k2, iso_z(NOW), iso_z(NOW + timedelta(days=60)))
 check("same key later re-sign replaces", core.ingest_gossiped_binding(b2b),
       "replaced")
 
-# 3: different key, earlier issued_at beats (first-claim wins)
+# 3: different key against a live incumbent is a conflict, even when
+# the challenger's issued_at is earlier (ART-29 ruling a). The live
+# foreign key is never displaced.
 k3a, k3b = os.urandom(32).hex(), os.urandom(32).hex()
 check("challenger first", core.ingest_gossiped_binding(
     mint("belt-contest", k3a, iso_z(NOW - timedelta(hours=2)),
@@ -87,8 +89,14 @@ check("later issued_at -> conflict (live incumbent, audit logged)",
       core.ingest_gossiped_binding(late), "conflict")
 early = mint("belt-contest", k3b, iso_z(NOW - timedelta(hours=5)),
              iso_z(NOW + timedelta(days=30)))
-check("earlier issued_at replaces", core.ingest_gossiped_binding(early),
-      "replaced")
+check("earlier issued_at -> conflict, live incumbent kept",
+      core.ingest_gossiped_binding(early), "conflict")
+with core._db_lock, core._db() as conn:
+    row = conn.execute(
+        "SELECT node_pubkey FROM name_bindings WHERE name=?",
+        ("belt-contest",)).fetchone()
+check("live incumbent still holds the name after earlier claim",
+      row[0], _ed.publickey(bytes.fromhex(k3a)).hex())
 
 # 4: B4 — a non-UTC-offset binding is malformed at intake, never
 # compared. (Old case: "+05:00" hours-dead string-sorted as live;

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Belt for Bulwark's HIGH (ART-29): gossip ingest enforces the route's
-admission gates — the 365-day cap. Freshness (24h) is NOT checked on
-ingest (r3): gossip is propagation, not origination — late-arriving
-valid bindings must merge, or mirrors split.
+admission gates — the 365-day cap and NAME_CLAIM_FRESHNESS (24h).
+ART-29 ruling (a) withdraws the r3 gossip exemption: a binding older
+than 24h is dropped-stale. The originator re-signs fresh.
 
-r3 (ART-29): live foreign incumbent is ALWAYS kept on ingest. A
-challenger signing issued_at = incumbent - 1s (or 2001) passes the
-route's freshness gate but must not steal a live name via gossip. The
+r3 (ART-29) / ruling (a): live foreign incumbent is ALWAYS kept on
+ingest. A challenger signing issued_at = incumbent - 1s passes the
+24h freshness gate but must not steal a live name via gossip. The
 rejected claim is logged to name_conflicts and ingest returns
-"conflict" — not a silent "kept".
+"conflict" — not a silent "kept", and not "replaced".
 
 Also covers Bulwark's MEDIUM: ingest now loads the old row WITH expires_at
 and calls _old_binding_beaten (the route's conflict rule), so expired rows
@@ -88,14 +88,11 @@ with core._db_lock, core._db() as conn:
 check("incumbent untouched after backdate attempt",
       row[0], _ed.publickey(bytes.fromhex(k_inc)).hex())
 
-# --- HIGH 1b: T-1s earlier claim (deterministic rule) ---
-# Mirror convergence (ART-29 r3 gap): a challenger with an EARLIER issued_at
-# beats the incumbent by the deterministic rule (_name_claim_beats), even on
-# the ingest path. This is what lets two mirrors receiving claims in opposite
-# orders converge on the same winner (see mirror-order-belt-test.py).
-# The 2001-style backdate is blocked by the 365-day cap (HIGH 1/2 above);
-# the route's 24h freshness + live-incumbent 409 remain the origination-time
-# defenses. The displacement is logged as a conflict for audit.
+# --- HIGH 1b: T-1s steal attempt (freshness-passing backdate) ---
+# ART-29 ruling (a): a challenger with issued_at = incumbent - 1s passes
+# the 24h freshness gate and must NOT replace the live foreign incumbent.
+# Ingest returns conflict, the incumbent stays, and the attempt is logged
+# as live-foreign-incumbent — never displaced-by-earlier-claim.
 k_inc2 = os.urandom(32).hex()
 inc_issued = iso_z(NOW - timedelta(minutes=5))
 check("t-1s incumbent inserts",
@@ -104,24 +101,24 @@ check("t-1s incumbent inserts",
       "inserted")
 k_atk2 = os.urandom(32).hex()
 atk_issued = iso_z(datetime.fromisoformat(inc_issued) - timedelta(seconds=1))
-check("T-1s earlier challenger replaces (deterministic rule)",
+check("T-1s challenger -> conflict, incumbent kept",
       core.ingest_gossiped_binding(
           mint("belt-tminus1", k_atk2, atk_issued, live_expires)),
-      "replaced")
+      "conflict")
 with core._db_lock, core._db() as conn:
     row = conn.execute(
         "SELECT node_pubkey FROM name_bindings WHERE name=?",
         ("belt-tminus1",)).fetchone()
-check("earlier challenger now holds the name",
-      row[0], _ed.publickey(bytes.fromhex(k_atk2)).hex())
-# Displacement of a live incumbent is logged with the challenger's key
+check("incumbent untouched after T-1s attempt",
+      row[0], _ed.publickey(bytes.fromhex(k_inc2)).hex())
+# Conflict record was written with the challenger's key and reason
 with core._db_lock, core._db() as conn:
     crow = conn.execute(
         "SELECT challenger_pubkey, reason FROM name_conflicts WHERE name=?",
         ("belt-tminus1",)).fetchone()
-check("displacement logged for T-1s",
+check("conflict record logged for T-1s",
       (crow[0], crow[1]),
-      (_ed.publickey(bytes.fromhex(k_atk2)).hex(), "displaced-by-earlier-claim"))
+      (_ed.publickey(bytes.fromhex(k_atk2)).hex(), "live-foreign-incumbent"))
 
 # --- HIGH 2: over-cap gossip binding (>365d lifetime) is refused ---
 k_cap = os.urandom(32).hex()
@@ -154,10 +151,23 @@ check("fresh valid gossip accepted",
           mint("belt-fresh", k_fresh, live_issued, live_expires)),
       "inserted")
 
-# --- HIGH 6 (r3): late arrival merges — no freshness drop on ingest ---
-# A binding signed 25h ago (stale by the route's 24h gate) arrives via
-# gossip for an EXPIRED incumbent. r3: ingest skips freshness — the
-# binding merges instead of splitting mirrors as "dropped-stale".
+# --- HIGH 6: stale gossip (>24h) is dropped; originator re-signs fresh ---
+# ART-29 ruling (a): NAME_CLAIM_FRESHNESS applies on ingest. A binding
+# signed 25h ago is dropped-stale. It does not insert, and it does not
+# displace an expired row. The originator re-signs issued_at=now; that
+# fresh claim then frees the dead row.
+k_late = os.urandom(32).hex()
+late_issued = iso_z(NOW - timedelta(hours=25))
+check("stale (25h) gossip dropped on an empty name",
+      core.ingest_gossiped_binding(
+          mint("belt-stale-new", k_late, late_issued,
+               iso_z(NOW + timedelta(days=30)))),
+      "dropped-stale")
+with core._db_lock, core._db() as conn:
+    row = conn.execute(
+        "SELECT node_pubkey FROM name_bindings WHERE name=?",
+        ("belt-stale-new",)).fetchone()
+check("stale gossip did not insert", row, None)
 k_late_old = os.urandom(32).hex()
 check("late-arrival incumbent inserts",
       core.ingest_gossiped_binding(
@@ -167,11 +177,20 @@ with core._db_lock, core._db() as conn:
     conn.execute(
         "UPDATE name_bindings SET expires_at=? WHERE name=?",
         (iso_z(NOW - timedelta(hours=1)), "belt-late"))
-k_late = os.urandom(32).hex()
-late_issued = iso_z(NOW - timedelta(hours=25))  # stale by route's 24h gate
-check("late (25h old) gossip replaces expired incumbent",
+check("stale (25h) gossip does not replace expired incumbent",
       core.ingest_gossiped_binding(
           mint("belt-late", k_late, late_issued,
+               iso_z(NOW + timedelta(days=30)))),
+      "dropped-stale")
+with core._db_lock, core._db() as conn:
+    row = conn.execute(
+        "SELECT node_pubkey FROM name_bindings WHERE name=?",
+        ("belt-late",)).fetchone()
+check("expired incumbent untouched by stale gossip",
+      row[0], _ed.publickey(bytes.fromhex(k_late_old)).hex())
+check("originator fresh re-sign replaces expired incumbent",
+      core.ingest_gossiped_binding(
+          mint("belt-late", k_late, iso_z(NOW),
                iso_z(NOW + timedelta(days=30)))),
       "replaced")
 
