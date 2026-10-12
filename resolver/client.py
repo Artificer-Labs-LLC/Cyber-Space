@@ -15,12 +15,22 @@ verifier proved.
 
 Env (mirrors daemon defaults):
   CYBERNET_RESOLVER_PORT  listen port the client queries (default 5353)
+                         — parsed exactly as the daemon parses it
+                         (strip, int, floor 1, fallback 5353); the old
+                         isdigit() check disagreed with the daemon on
+                         " 5354 " (client 5353, daemon 5354), "0"
+                         (client 0, daemon 1) and "-5" (client 5353,
+                         daemon 1), so the client queried a port no
+                         daemon was listening on, in silence. main()
+                         warns on set-but-ineffective values (see
+                         _client_port_warnings)
 """
 
 import os
 import random
 import socket
 import struct
+import sys
 
 from . import dns
 from .dns import _read_name
@@ -34,8 +44,40 @@ DEFAULT_TIMEOUT = 2.0
 
 
 def _default_port() -> int:
-    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "5353")
-    return int(raw) if raw.isdigit() else 5353
+    """Mirror daemon._env_int("CYBERNET_RESOLVER_PORT", 5353, floor=1)
+    exactly, so client and daemon derive the same port from the same
+    environment — agreement, not a second parser that drifts."""
+    try:
+        return max(1, int(os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()))
+    except (ValueError, TypeError):
+        return 5353
+
+
+def _client_port_warnings() -> list[str]:
+    """Loud port mistakes, or []. Unset/empty means the documented
+    default (silent, a choice). Set-but-ineffective cases _default_port
+    otherwise hides: not an integer (5353 will be queried instead of
+    the port the operator named), below 1 (clamped to 1), or above
+    65535 (honored, so every query fails against an invalid port).
+    Never prints the value."""
+    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
+    if not raw:
+        return []
+    try:
+        port = int(raw)
+    except (ValueError, TypeError):
+        return [
+            "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
+            "default will be queried instead"]
+    if port < 1:
+        return [
+            "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 will be "
+            "queried instead"]
+    if port > 65535:
+        return [
+            "CYBERNET_RESOLVER_PORT is above 65535 — no valid port "
+            "can be derived from it, so queries will fail"]
+    return []
 
 
 class NameNotFound(NameError):
@@ -230,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    for warn in _client_port_warnings():
+        print(f"resolver-client: config: {warn}", file=sys.stderr)
     port = _default_port()
     try:
         answers = resolve(
