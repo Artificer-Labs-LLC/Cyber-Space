@@ -4,17 +4,28 @@
 Scratch DB only. Adversarial rows call ingest in-process or the real route
 against that DB. No live-route test hook.
 
-Items, each with a belt row and one mutant:
-  1. replay seen-set on (sender_pub, envelope sig), kept 2×MAX_SKEW,
-     refused before ingest with no row written, memory capped.
-  2. per-peer cap on NEW-name inserts per gossip call; over-cap new
-     names are dropped-peer-cap; updates of existing names still apply.
-  3. route check order: size, per-source bucket, envelope verify,
-     known-peer and allowlist, binding-count 400, replay, per-peer
-     bucket, ingest. More than 128 bindings is 400, not a truncation.
-  4. ingest uses strict checkvalid and weak_reason. The zero key and a
-     small-order key are dropped on an empty DB, with no row written.
+Kept from the earlier hardening, each with a belt row and one mutant:
+  - replay seen-set on (sender_pub, envelope sig), kept 2×MAX_SKEW,
+    refused before ingest with no row written, memory capped.
+  - per-peer cap on NEW-name inserts per gossip call; over-cap new
+    names are dropped-peer-cap; updates of existing names still apply.
+  - more than 128 bindings is 400, never a truncation.
+  - ingest uses strict checkvalid and weak_reason. The zero key and a
+    small-order key are dropped on an empty DB, with no row written.
+
+Examiner six-item gate, each with a belt row and one mutant:
+  1. per-binding verify budget and a global verify budget, both charged
+     before checkvalid.
+  2. cheap gates before checkvalid: dedupe on sha256(signed bytes) so an
+     S+L copy does not verify again; name and timestamp shape; expiry
+     and freshness.
+  3. known-peer 404 before the per-sender bucket.
+  4. more than 128 bindings is 400, never truncated.
+  5. allowlist mandatory: unannounced or unlisted sender refused before
+     any verify. Unset admits nobody.
+  6. client.host CI guard covers federation.py and app.py.
 """
+import hashlib
 import json
 import os
 import secrets
@@ -83,6 +94,15 @@ def node_key():
     return priv, pub
 
 
+def allow_peer(pub):
+    """The allowlist is mandatory. A peer the belt announces is listed."""
+    cur = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
+    parts = [p.strip() for p in cur.replace("\n", ",").split(",") if p.strip()]
+    if pub.lower() not in {p.lower() for p in parts}:
+        parts.append(pub.lower())
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = ",".join(parts)
+
+
 def add_peer(pub, retired=""):
     now = core._now()
     with core._db_lock, core._db() as conn:
@@ -92,6 +112,7 @@ def add_peer(pub, retired=""):
                                   retired_at)
                VALUES (?,?,?,?,?,?,?,?,?)""",
             (pub, "peer", "cybernet", "0.1.0", 0, "[]", now, now, retired))
+    allow_peer(pub)
 
 
 def binding_count(name=None):
@@ -324,9 +345,15 @@ check("allow_new False on an absent name -> dropped-peer-cap, no row",
       and binding_row("capabsent") is None and binding_count() == n_before)
 bad = dict(absent)
 bad["signature"] = ("0" if bad["signature"][0] != "0" else "1") + bad["signature"][1:]
-check("allow_new False still verifies: tampered sig is dropped-unverifiable",
-      core.ingest_gossiped_binding(bad, allow_new=False) == "dropped-unverifiable"
+check("allow_new False: same payload, bad sig, is a duplicate of the verify already done",
+      core.ingest_gossiped_binding(bad, allow_new=False) == "dropped-duplicate"
       and binding_row("capabsent") is None)
+fresh_bad = mint("capbadfresh", secrets.token_hex(32))
+fresh_bad["signature"] = (
+    "0" if fresh_bad["signature"][0] != "0" else "1") + fresh_bad["signature"][1:]
+check("allow_new False still verifies: a new tampered sig is dropped-unverifiable",
+      core.ingest_gossiped_binding(fresh_bad, allow_new=False) == "dropped-unverifiable"
+      and binding_row("capbadfresh") is None)
 renew = mint("capupdate", seed_priv, issued=ISSUED)
 check("allow_new False still replaces an existing same-key renewal",
       core.ingest_gossiped_binding(renew, allow_new=False) == "replaced"
@@ -430,7 +457,10 @@ federation.FED_SOURCE_LIMIT = 1
 try:
     spent = mint("sourcespent", secrets.token_hex(32))
     ok_status, _ok = call_direct(gossip_env(sender_priv, sender_pub, [spent]))
-    bad_status, bad_why = call_direct({"v": "not-an-envelope"})
+    bad_env = gossip_env(sender_priv, sender_pub,
+                         [mint("sourcebad", secrets.token_hex(32))])
+    bad_env["sig"] = flip_hex(bad_env["sig"])
+    bad_status, bad_why = call_direct(bad_env)
     check("source bucket exhausted -> 429 even for an invalid envelope",
           ok_status == 200 and bad_status == 429 and bad_status != 400,
           (ok_status, bad_status, bad_why))
@@ -443,11 +473,24 @@ stranger_priv, stranger_pub = node_key()
 bad_env = gossip_env(stranger_priv, stranger_pub,
                      [mint("strangername", secrets.token_hex(32))])
 bad_env["sig"] = flip_hex(bad_env["sig"])
-r = post(bad_env)
-check("bad signature from an unknown sender -> 400, not 404",
-      r.status_code == 400 and detail(r) == "invalid envelope",
-      (r.status_code, detail(r)))
+unk_calls = {"n": 0}
+real_env_verify = _fed_env.verify_envelope
+def _count_env(env, *a, **k):
+    unk_calls["n"] += 1
+    return real_env_verify(env, *a, **k)
+_fed_env.verify_envelope = _count_env
+try:
+    r = post(bad_env)
+finally:
+    _fed_env.verify_envelope = real_env_verify
+check("bad signature from an unknown sender -> 404 before verify and the per-sender bucket",
+      r.status_code == 404 and detail(r) == "unknown peer"
+      and hits(f"fednamesgossip:{stranger_pub.lower()}") == 0
+      and unk_calls["n"] == 0
+      and binding_row("strangername") is None,
+      (r.status_code, detail(r), unk_calls["n"]))
 
+saved_allow = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
 os.environ["CYBERNET_PEER_ALLOWLIST"] = sender_pub
 try:
     unk = gossip_env(stranger_priv, stranger_pub,
@@ -457,7 +500,7 @@ try:
           r.status_code == 404 and detail(r) == "unknown peer",
           (r.status_code, detail(r)))
 finally:
-    os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow
 
 reset_hits()
 federation._gossip_seen.clear()
@@ -470,7 +513,7 @@ try:
                and "allowlist" in (detail(r) or ""))
     untouched = hits(peer_bucket) == 0 and binding_row("allowheld") is None
 finally:
-    os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow
 r2 = post(held_env)
 check("unlisted peer -> 403 without spending the per-peer bucket or the seen-set",
       refused and untouched and r2.status_code == 200
@@ -499,8 +542,8 @@ none_written = (binding_row(many[0]["name"]) is None
 over_real_ok = (r.status_code == 400
                 and detail(r) == f"bindings exceed {federation.NAMES_GOSSIP_RECV_CAP}"
                 and none_written)
-check(">128 bindings -> 400 before the per-peer bucket, no row written",
-      over_real_ok, (r.status_code, detail(r), none_written))
+check(">128 bindings -> 400 before the per-peer bucket, no row written, never truncated",
+      over_real_ok and r.status_code == 400, (r.status_code, detail(r), none_written))
 
 reset_hits()
 exact = mint("exact128", secrets.token_hex(32))
@@ -608,6 +651,303 @@ check("only the mutant's row exists; the real refusals wrote nothing",
       empty_count())
 
 core.DB_PATH, core_serve.DB_PATH = _saved_db
+
+# ---------------------------------------------- Examiner six-item gate
+print("six-item gate:")
+federation._gossip_seen.clear()
+core._gossip_dedupe.clear()
+core._gossip_verify_times.clear()
+reset_hits()
+
+
+def sl_signature(sig_hex):
+    raw = bytes.fromhex(sig_hex)
+    scalar = int.from_bytes(raw[32:], "little")
+    return (raw[:32] + (scalar + _ed._L).to_bytes(32, "little")).hex()
+
+
+# (1) verify budget before checkvalid, per call and global
+print("verify budget:")
+saved_global = core.GOSSIP_VERIFY_GLOBAL_LIMIT
+saved_per = core.NAMES_GOSSIP_VERIFY_PER_CALL
+core._gossip_verify_times.clear()
+core.GOSSIP_VERIFY_GLOBAL_LIMIT = 0
+before_v = core._gossip_binding_verifies
+budget_b = mint("budgetzero", secrets.token_hex(32))
+budget_out = core.ingest_gossiped_binding(budget_b)
+budget_real_ok = (budget_out == "dropped-verify-budget"
+                  and core._gossip_binding_verifies == before_v
+                  and binding_row("budgetzero") is None)
+check("global verify budget spent -> dropped-verify-budget, checkvalid not called",
+      budget_real_ok, (budget_out, core._gossip_binding_verifies, before_v))
+real_admit = core._admit_binding_verify
+core._admit_binding_verify = lambda box: True
+try:
+    budget_mut = mint("budgetmut", secrets.token_hex(32))
+    mut_before = core._gossip_binding_verifies
+    mut_out = core.ingest_gossiped_binding(budget_mut)
+    budget_mutant_fails = (mut_out == "inserted"
+                           and core._gossip_binding_verifies == mut_before + 1
+                           and binding_row("budgetmut") == (
+                               budget_mut["node_pubkey"], budget_mut["signature"]))
+finally:
+    core._admit_binding_verify = real_admit
+    core.GOSSIP_VERIFY_GLOBAL_LIMIT = saved_global
+    core._gossip_verify_times.clear()
+record_mutant("verify budget skipped",
+              "a binding is not checkvalid'd once the global budget is spent",
+              budget_real_ok, budget_mutant_fails)
+core.NAMES_GOSSIP_VERIFY_PER_CALL = 1
+per_a = mint("percalla", secrets.token_hex(32))
+per_b = mint("percallb", secrets.token_hex(32))
+per_before = core._gossip_binding_verifies
+per_r = post(gossip_env(sender_priv, sender_pub, [per_a, per_b]))
+per_outcomes = per_r.json().get("outcomes") if per_r.status_code == 200 else None
+check("per-call verify budget: second binding dropped before checkvalid",
+      per_outcomes == ["inserted", "dropped-verify-budget"]
+      and core._gossip_binding_verifies == per_before + 1
+      and binding_row("percalla") is not None
+      and binding_row("percallb") is None,
+      (per_r.status_code, per_outcomes, core._gossip_binding_verifies, per_before))
+core.NAMES_GOSSIP_VERIFY_PER_CALL = saved_per
+
+# (2) cheap gates before checkvalid
+print("cheap gates:")
+core._gossip_verify_times.clear()
+honest = mint("dedupesl", secrets.token_hex(32))
+sl_before = core._gossip_binding_verifies
+check("honest binding inserts and charges one verify",
+      core.ingest_gossiped_binding(honest) == "inserted"
+      and core._gossip_binding_verifies == sl_before + 1)
+sl = dict(honest)
+sl["signature"] = sl_signature(honest["signature"])
+sl_mid = core._gossip_binding_verifies
+sl_out = core.ingest_gossiped_binding(sl)
+sl_real_ok = (sl_out == "kept"
+              and core._gossip_binding_verifies == sl_mid
+              and binding_row("dedupesl") == (
+                  honest["node_pubkey"], honest["signature"]))
+check("S+L of a verified payload -> kept, checkvalid not called, stored sig unchanged",
+      sl_real_ok, (sl_out, core._gossip_binding_verifies, sl_mid, binding_row("dedupesl")))
+# S+L arriving first is not remembered: checkvalid refuses it, then the
+# honest signature still inserts.
+early = mint("dedupeearly", secrets.token_hex(32))
+early_sl = dict(early)
+early_sl["signature"] = sl_signature(early["signature"])
+early_before = core._gossip_binding_verifies
+early_out = core.ingest_gossiped_binding(early_sl)
+early_honest = core.ingest_gossiped_binding(early)
+check("S+L first is unverifiable and does not block the honest signature",
+      early_out == "dropped-unverifiable"
+      and early_honest == "inserted"
+      and core._gossip_binding_verifies == early_before + 2
+      and binding_row("dedupeearly") == (early["node_pubkey"], early["signature"]),
+      (early_out, early_honest, binding_row("dedupeearly")))
+real_dedupe_key = core._gossip_signed_dedupe_key
+core._gossip_signed_dedupe_key = lambda signed, sig: hashlib.sha256(
+    bytes.fromhex(sig)).digest()
+try:
+    sl_again = dict(honest)
+    sl_again["signature"] = sl_signature(honest["signature"])
+    sl_mut_before = core._gossip_binding_verifies
+    sl_mut_out = core.ingest_gossiped_binding(sl_again)
+    sl_mutant_fails = (sl_mut_out == "dropped-unverifiable"
+                       and core._gossip_binding_verifies == sl_mut_before + 1
+                       and binding_row("dedupesl") == (
+                           honest["node_pubkey"], honest["signature"]))
+finally:
+    core._gossip_signed_dedupe_key = real_dedupe_key
+record_mutant("signed-bytes dedupe skipped",
+              "S+L of an already verified payload does not reach checkvalid",
+              sl_real_ok, sl_mutant_fails)
+
+dotted = mint("a.b", secrets.token_hex(32))
+name_before = core._gossip_binding_verifies
+name_out = core.ingest_gossiped_binding(dotted)
+name_real_ok = (name_out == "dropped-malformed"
+                and core._gossip_binding_verifies == name_before
+                and binding_row("a.b") is None)
+check("bad name shape -> dropped-malformed before checkvalid",
+      name_real_ok, (name_out, core._gossip_binding_verifies, name_before))
+real_name_ok = core._gossip_name_time_ok
+core._gossip_name_time_ok = lambda *a, **k: True
+try:
+    name_mut_before = core._gossip_binding_verifies
+    name_mut_out = core.ingest_gossiped_binding(dotted)
+    name_mutant_fails = (name_mut_out == "inserted"
+                         and core._gossip_binding_verifies == name_mut_before + 1
+                         and binding_row("a.b") is not None)
+finally:
+    core._gossip_name_time_ok = real_name_ok
+record_mutant("name and timestamp gate skipped",
+              "a dotted label is dropped-malformed before checkvalid",
+              name_real_ok, name_mutant_fails)
+
+expired = mint("expiredgate", secrets.token_hex(32),
+               issued=iso(NOW - timedelta(hours=2)),
+               expires=iso(NOW - timedelta(minutes=30)))
+exp_before = core._gossip_binding_verifies
+exp_out = core.ingest_gossiped_binding(expired)
+exp_real_ok = (exp_out == "dropped-expired"
+               and core._gossip_binding_verifies == exp_before
+               and binding_row("expiredgate") is None)
+check("expired binding -> dropped-expired before checkvalid",
+      exp_real_ok, (exp_out, core._gossip_binding_verifies, exp_before))
+stale_b = mint("stalegate", secrets.token_hex(32),
+               issued=iso(NOW - timedelta(hours=25)))
+stale_before = core._gossip_binding_verifies
+stale_out = core.ingest_gossiped_binding(stale_b)
+check("stale binding -> dropped-stale before checkvalid",
+      stale_out == "dropped-stale"
+      and core._gossip_binding_verifies == stale_before
+      and binding_row("stalegate") is None,
+      (stale_out, core._gossip_binding_verifies, stale_before))
+over_issued = NOW - timedelta(minutes=1)
+over_b = mint("overgate", secrets.token_hex(32),
+              issued=iso(over_issued),
+              expires=iso(over_issued + timedelta(days=366)))
+over_before = core._gossip_binding_verifies
+over_out = core.ingest_gossiped_binding(over_b)
+check("lifetime over 365 days -> dropped-over-cap before checkvalid",
+      over_out == "dropped-over-cap"
+      and core._gossip_binding_verifies == over_before
+      and binding_row("overgate") is None,
+      (over_out, core._gossip_binding_verifies, over_before))
+real_time_drop = core._gossip_time_drop
+core._gossip_time_drop = lambda *a, **k: None
+try:
+    expired_mut = mint("expiredmut", secrets.token_hex(32),
+                       issued=iso(NOW - timedelta(hours=2)),
+                       expires=iso(NOW - timedelta(minutes=30)))
+    exp_mut_out = core.ingest_gossiped_binding(expired_mut)
+    exp_mutant_fails = (exp_mut_out == "inserted"
+                        and binding_row("expiredmut") is not None)
+finally:
+    core._gossip_time_drop = real_time_drop
+record_mutant("expiry and freshness gate skipped",
+              "an expired binding is dropped before checkvalid",
+              exp_real_ok, exp_mutant_fails)
+
+# (3) known-peer 404 before the per-sender bucket
+print("known-peer before bucket:")
+reset_hits()
+federation._gossip_seen.clear()
+gate_priv, gate_pub = node_key()
+gate_binding = mint("gateunknown", secrets.token_hex(32))
+gate_env = gossip_env(gate_priv, gate_pub, [gate_binding])
+gate_calls = {"n": 0}
+real_gate_verify = _fed_env.verify_envelope
+def _count_gate(env, *a, **k):
+    gate_calls["n"] += 1
+    return real_gate_verify(env, *a, **k)
+_fed_env.verify_envelope = _count_gate
+try:
+    gate_r = post(gate_env)
+finally:
+    _fed_env.verify_envelope = real_gate_verify
+gate_bucket = f"fednamesgossip:{gate_pub.lower()}"
+gate_real_ok = (gate_r.status_code == 404 and detail(gate_r) == "unknown peer"
+                and hits(gate_bucket) == 0 and gate_calls["n"] == 0
+                and binding_row("gateunknown") is None)
+check("unknown sender -> 404 before the per-sender bucket and before verify",
+      gate_real_ok, (gate_r.status_code, detail(gate_r), hits(gate_bucket), gate_calls["n"]))
+real_refuse = federation._refuse_unknown_before_bucket
+def _charge_then_refuse(sender_pub):
+    federation._charge_gossip_sender(sender_pub)
+    return real_refuse(sender_pub)
+federation._refuse_unknown_before_bucket = _charge_then_refuse
+reset_hits()
+try:
+    gate_mut_pub_priv, gate_mut_pub = node_key()
+    gate_mut_env = gossip_env(gate_mut_pub_priv, gate_mut_pub,
+                              [mint("gatermut", secrets.token_hex(32))])
+    gate_mut = post(gate_mut_env)
+    gate_mut_bucket = f"fednamesgossip:{gate_mut_pub.lower()}"
+    gate_mutant_fails = (gate_mut.status_code == 404
+                         and detail(gate_mut) == "unknown peer"
+                         and hits(gate_mut_bucket) >= 1
+                         and binding_row("gatermut") is None)
+finally:
+    federation._refuse_unknown_before_bucket = real_refuse
+record_mutant("known-peer 404 after the per-sender bucket",
+              "an unknown sender is 404 with the per-sender bucket uncharged",
+              gate_real_ok, gate_mutant_fails)
+
+# (5) allowlist mandatory, before any verify. Item 4 is the 400 above.
+print("mandatory allowlist:")
+reset_hits()
+federation._gossip_seen.clear()
+saved_allow_gate = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
+os.environ["CYBERNET_PEER_ALLOWLIST"] = ""
+allow_calls = {"n": 0}
+real_allow_verify = _fed_env.verify_envelope
+def _count_allow(env, *a, **k):
+    allow_calls["n"] += 1
+    return real_allow_verify(env, *a, **k)
+_fed_env.verify_envelope = _count_allow
+try:
+    unset_binding = mint("allowunset", secrets.token_hex(32))
+    unset_r = post(gossip_env(sender_priv, sender_pub, [unset_binding]))
+    stranger_r = post(gossip_env(gate_priv, gate_pub,
+                                 [mint("allowunk", secrets.token_hex(32))]))
+    allow_real_ok = (unset_r.status_code == 403
+                     and "allowlist" in (detail(unset_r) or "")
+                     and binding_row("allowunset") is None
+                     and stranger_r.status_code == 404
+                     and detail(stranger_r) == "unknown peer"
+                     and allow_calls["n"] == 0)
+finally:
+    _fed_env.verify_envelope = real_allow_verify
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow_gate
+check("unset allowlist admits nobody, and unknown stays 404, before verify",
+      allow_real_ok,
+      (unset_r.status_code, detail(unset_r), stranger_r.status_code,
+       detail(stranger_r), allow_calls["n"]))
+os.environ["CYBERNET_PEER_ALLOWLIST"] = "ab" * 32
+unlisted_binding = mint("allowmut", secrets.token_hex(32))
+unlisted_env = gossip_env(sender_priv, sender_pub, [unlisted_binding])
+unlisted_r = post(unlisted_env)
+allow_row_ok = (unlisted_r.status_code == 403
+                and binding_row("allowmut") is None)
+real_pre = federation._gossip_pre_verify_gate
+federation._gossip_pre_verify_gate = lambda sender_pub: None
+try:
+    allow_mut_r = post(gossip_env(sender_priv, sender_pub, [unlisted_binding]))
+    allow_body = allow_mut_r.json() if allow_mut_r.status_code == 200 else {}
+    allow_mutant_fails = (allow_mut_r.status_code == 200
+                          and allow_body.get("outcomes") == ["inserted"]
+                          and binding_row("allowmut") is not None)
+finally:
+    federation._gossip_pre_verify_gate = real_pre
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow_gate
+record_mutant("mandatory allowlist skipped",
+              "an unlisted sender is refused before any verify",
+              allow_real_ok and allow_row_ok, allow_mutant_fails)
+
+# (6) client.host CI guard covers federation.py and app.py
+print("client.host guard:")
+root = os.path.dirname(os.path.abspath(__file__))
+script = open(os.path.join(root, "run_tests.sh"), encoding="utf-8").read()
+guard_line = ""
+for line in script.splitlines():
+    if ("git" in line and "grep" in line and "client.host" in line
+            and "federation.py" in line and "app.py" in line):
+        guard_line = line
+        break
+fed_txt = open(os.path.join(root, "federation.py"), encoding="utf-8").read()
+app_txt = open(os.path.join(root, "app.py"), encoding="utf-8").read()
+guard_real_ok = ("client.host" not in fed_txt and "client.host" not in app_txt
+                 and "federation.py" in guard_line and "app.py" in guard_line)
+check("run_tests.sh greps client.host in federation.py and app.py, and neither file has it",
+      guard_real_ok, guard_line)
+narrow = guard_line.replace(" federation.py", "").replace(" app.py", "")
+fake_hit = "return request.client.host\n"
+guard_mutant_fails = ("federation.py" not in narrow and "app.py" not in narrow
+                      and "client.host" in fake_hit
+                      and "federation.py" in guard_line and "app.py" in guard_line)
+record_mutant("client.host guard omits federation.py and app.py",
+              "client.host in federation.py or app.py fails the CI grep",
+              guard_real_ok, guard_mutant_fails)
 
 print("mutant results:")
 for name, row, real_ok, mutant_fails in MUTANTS:

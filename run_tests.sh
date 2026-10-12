@@ -13,8 +13,8 @@ trap 'rm -rf "$CYBERNET_DB_DIR"' EXIT
 # client.host must not appear in those files. The only allowed hit is the
 # peer read inside core.request_source. Deploy keeps --no-proxy-headers.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-if git -C "$ROOT" grep -n 'client.host' -- 'routes_*.py' ratesrc.py; then
-  echo "FAIL: client.host must not appear in route files or ratesrc.py"
+if git -C "$ROOT" grep -n 'client.host' -- 'routes_*.py' ratesrc.py federation.py app.py; then
+  echo "FAIL: client.host must not appear in route files, ratesrc.py, federation.py, or app.py"
   exit 1
 fi
 core_hits="$(git -C "$ROOT" grep -n 'client.host' -- core.py || true)"

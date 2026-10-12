@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from html import escape as html_escape
 
@@ -1679,7 +1679,141 @@ def _gossip_claim_weak(pub: str):
     return window_open.weak_reason((pub or "").strip().lower())
 
 
-def ingest_gossiped_binding(binding: dict, allow_new: bool = True) -> str:
+# Per-binding and global verify budgets (Examiner item 1). Both are
+# charged before checkvalid. A single gossip call may verify at most
+# NAMES_GOSSIP_VERIFY_PER_CALL bindings; the node may verify at most
+# GOSSIP_VERIFY_GLOBAL_LIMIT bindings per window, across every caller.
+NAMES_GOSSIP_VERIFY_PER_CALL = 32
+GOSSIP_VERIFY_GLOBAL_LIMIT = 256
+GOSSIP_VERIFY_GLOBAL_WINDOW = 60.0
+_gossip_verify_times = deque()
+_gossip_binding_verifies = 0
+
+# Dedupe of identical signed claim bytes (Examiner item 2). Keyed on
+# sha256(canonical payload), not the signature, so an S+L malleation of
+# a payload already verified does not reach checkvalid. Kept for
+# 2×MAX_SKEW and capped, same family as the envelope seen-set.
+_GOSSIP_DEDUPE_HORIZON_SEC = 2 * _fed_env.MAX_SKEW_SEC
+_GOSSIP_DEDUPE_CAP = 4096
+_gossip_dedupe = OrderedDict()
+
+
+def _gossip_name_time_ok(name, node_pubkey, issued_at, expires_at,
+                         signature) -> bool:
+    """Name and timestamp shape, before checkvalid. False → the caller
+    returns dropped-malformed and does not verify. Patchable."""
+    if (not _valid_name_label(name) or len(node_pubkey) != 64
+            or len(signature) != 128 or not issued_at or not expires_at):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", node_pubkey):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{128}", signature):
+        return False
+    try:
+        _parse_claim_time(issued_at)
+        _parse_claim_time(expires_at)
+    except (ValueError, OverflowError):
+        return False
+    return True
+
+
+def _gossip_time_drop(issued_dt, expires_dt, now_dt):
+    """Expiry and freshness before checkvalid. None when verify may
+    proceed; otherwise dropped-expired, dropped-stale, or
+    dropped-over-cap. Patchable: the expiry mutant returns None."""
+    if expires_dt <= now_dt:
+        return "dropped-expired"
+    reason = _name_binding_admission_ok(issued_dt, expires_dt, now_dt)
+    if reason is None:
+        return None
+    if "exceeds 365" in reason:
+        return "dropped-over-cap"
+    return "dropped-stale"
+
+
+def _gossip_signed_dedupe_key(signed: bytes, signature: str) -> bytes:
+    """sha256 of the canonical signed bytes. The signature is ignored so
+    an S+L copy collides with the honest payload. Patchable."""
+    return hashlib.sha256(signed).digest()
+
+
+def _prune_gossip_dedupe(now: float) -> None:
+    cutoff = now - _GOSSIP_DEDUPE_HORIZON_SEC
+    stale = [k for k, seen_at in _gossip_dedupe.items() if seen_at < cutoff]
+    for key in stale:
+        _gossip_dedupe.pop(key, None)
+    while len(_gossip_dedupe) > _GOSSIP_DEDUPE_CAP:
+        _gossip_dedupe.popitem(last=False)
+
+
+def _gossip_dedupe_hit(key: bytes, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    _prune_gossip_dedupe(now)
+    seen_at = _gossip_dedupe.get(key)
+    if seen_at is None:
+        return False
+    return (now - seen_at) <= _GOSSIP_DEDUPE_HORIZON_SEC
+
+
+def _gossip_dedupe_remember(key: bytes, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    _prune_gossip_dedupe(now)
+    _gossip_dedupe[key] = now
+    _gossip_dedupe.move_to_end(key)
+    while len(_gossip_dedupe) > _GOSSIP_DEDUPE_CAP:
+        _gossip_dedupe.popitem(last=False)
+
+
+def _gossip_duplicate_outcome(name, node_pubkey, issued_at, expires_at) -> str:
+    """A payload already verified. Keep the stored row when it is the
+    same claim; otherwise drop the duplicate without a second verify."""
+    with _db_lock, _db() as conn:
+        row = conn.execute(
+            "SELECT node_pubkey, issued_at, expires_at FROM name_bindings"
+            " WHERE name=?", (name,)).fetchone()
+    if (row is not None and str(row[0]).lower() == node_pubkey
+            and row[1] == issued_at and row[2] == expires_at):
+        return "kept"
+    return "dropped-duplicate"
+
+
+def _gossip_global_verify_ok() -> bool:
+    """Charge one global verify token. False when the window is full.
+    Does not call checkvalid."""
+    now = time.monotonic()
+    cutoff = now - GOSSIP_VERIFY_GLOBAL_WINDOW
+    while _gossip_verify_times and _gossip_verify_times[0] < cutoff:
+        _gossip_verify_times.popleft()
+    if len(_gossip_verify_times) >= GOSSIP_VERIFY_GLOBAL_LIMIT:
+        return False
+    _gossip_verify_times.append(now)
+    return True
+
+
+def _admit_binding_verify(verify_box) -> bool:
+    """Charge the per-call budget and the global budget. False if either
+    is spent. The caller must invoke this before checkvalid. Patchable
+    by the verify-budget mutant."""
+    if verify_box[0] >= NAMES_GOSSIP_VERIFY_PER_CALL:
+        return False
+    if not _gossip_global_verify_ok():
+        return False
+    verify_box[0] += 1
+    return True
+
+
+def _gossip_checkvalid(name, node_pubkey, issued_at, expires_at,
+                       signature) -> bool:
+    """The one binding checkvalid on the gossip ingest path. Counted so
+    a belt can show cheap gates and the budget ran first."""
+    global _gossip_binding_verifies
+    _gossip_binding_verifies += 1
+    return _name_binding_verify(name, node_pubkey, issued_at, expires_at,
+                                signature)
+
+
+def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
+                            verify_box=None) -> str:
     """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
     gossiped name binding into this mirror's registry. A registry is a
     signed log, not an authority: any mirror may repeat a binding, but
@@ -1703,17 +1837,22 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True) -> str:
     Returns one of "inserted", "replaced", "kept", "conflict",
     "dropped-malformed", "dropped-unverifiable", "dropped-expired",
     "dropped-stale", "dropped-over-cap", "dropped-full", "dropped-weak",
-    "dropped-peer-cap". Never raises. A weak claimant key
+    "dropped-peer-cap", "dropped-duplicate", "dropped-verify-budget".
+    Never raises. Cheap gates run before checkvalid: name and timestamp
+    shape, then expiry and freshness, then a dedupe on sha256 of the
+    canonical signed bytes. The per-call and global verify budgets are
+    charged after those gates and before checkvalid. A weak claimant key
     (window_open.weak_reason) is dropped-weak after the signature and
-    admission gates and before any write, including the conflict log —
-    gossip is not a bypass of the claim route's ART-40 refusal.
+    before any write, including the conflict log — gossip is not a
+    bypass of the claim route's ART-40 refusal.
 
     allow_new defaults True so every existing caller is unchanged. The
     gossip route passes False once this call has already inserted its
     per-peer budget of names that were not in the registry. An absent
-    name is then dropped-peer-cap after verification, admission, and the
-    weak-key gate, and before any write. A name that already has a row
-    is updated or kept regardless of allow_new."""
+    name is then dropped-peer-cap after verification and the weak-key
+    gate, and before any write. A name that already has a row is updated
+    or kept regardless of allow_new. verify_box is the route's per-call
+    counter; a direct caller gets a fresh one-binding budget."""
     try:
         if not isinstance(binding, dict):
             return "dropped-malformed"
@@ -1722,46 +1861,41 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True) -> str:
         issued_at = str(binding.get("issued_at", ""))
         expires_at = str(binding.get("expires_at", ""))
         signature = str(binding.get("signature", "")).lower()
-        if (not _valid_name_label(name) or len(node_pubkey) != 64
-                or len(signature) != 128 or not issued_at
-                or not expires_at):
-            return "dropped-malformed"
-        # Strict checkvalid (canonical point, S < L, neither A nor R
-        # small-order). The zero key and every small-order key fail here,
-        # before any write. weak_reason below is the second layer: it
-        # also refuses those keys, and mixed-order keys that checkvalid
-        # accepts. Admission stays between them so stale / over-cap keep
-        # their own labels.
-        if not _name_binding_verify(name, node_pubkey, issued_at,
+        # Name and timestamps before any signature work. Unparseable
+        # times are malformed — fail-closed, never guessed.
+        if not _gossip_name_time_ok(name, node_pubkey, issued_at,
                                     expires_at, signature):
-            return "dropped-unverifiable"
-        # Chronological expiry, twin of the claim route's gate: string
-        # comparison would resurrect hours-dead "+05:00" bindings. An
-        # unparseable expiry is malformed — fail-closed, never guessed.
-        # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
-        # row reads as absent, never wins, never goes live.
+            return "dropped-malformed"
         try:
             expires_dt = _parse_claim_time(expires_at)
             issued_dt = _parse_claim_time(issued_at)
         except (ValueError, OverflowError):
             return "dropped-malformed"
         now_dt = datetime.now(timezone.utc)
-        if expires_dt <= now_dt:
-            return "dropped-expired"
-        # Bulwark HIGH (ART-29) / ruling (a): gossip enforces the route's
-        # admission gates — 24h freshness and the 365-day cap. Stale
-        # gossip is dropped; the originator re-signs fresh. A future
-        # issued_at is never valid.
-        admission_reason = _name_binding_admission_ok(
-            issued_dt, expires_dt, now_dt)
-        if admission_reason is not None:
-            if "exceeds 365" in admission_reason:
-                return "dropped-over-cap"
-            return "dropped-stale"
+        # Expiry and freshness before checkvalid. Chronological, twin of
+        # the claim route: string comparison would resurrect hours-dead
+        # "+05:00" bindings.
+        time_drop = _gossip_time_drop(issued_dt, expires_dt, now_dt)
+        if time_drop:
+            return time_drop
+        signed = _name_claim_payload(name, node_pubkey, issued_at, expires_at)
+        dedupe_key = _gossip_signed_dedupe_key(signed, signature)
+        if _gossip_dedupe_hit(dedupe_key):
+            return _gossip_duplicate_outcome(
+                name, node_pubkey, issued_at, expires_at)
+        box = [0] if verify_box is None else verify_box
+        if not _admit_binding_verify(box):
+            return "dropped-verify-budget"
+        # Strict checkvalid (canonical point, S < L, neither A nor R
+        # small-order). The zero key and every small-order key fail here,
+        # before any write. weak_reason below also refuses those keys,
+        # and mixed-order keys that checkvalid accepts.
+        if not _gossip_checkvalid(name, node_pubkey, issued_at,
+                                  expires_at, signature):
+            return "dropped-unverifiable"
+        _gossip_dedupe_remember(dedupe_key)
         # ART-40: same refusal the claim route applies after a verifying
         # signature and before any name_bindings / name_conflicts write.
-        # Admission stays first so a stale or over-cap binding keeps its
-        # existing dropped-* result.
         why = _gossip_claim_weak(node_pubkey)
         if why:
             return "dropped-weak"

@@ -77,6 +77,15 @@ def node_key():
     return priv, pub
 
 
+def allow_peer(pub):
+    """The allowlist is mandatory. A peer the belt announces is listed."""
+    cur = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
+    parts = [p.strip() for p in cur.replace("\n", ",").split(",") if p.strip()]
+    if pub.lower() not in {p.lower() for p in parts}:
+        parts.append(pub.lower())
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = ",".join(parts)
+
+
 def add_peer(pub, retired=""):
     now = core._now()
     with core._db_lock, core._db() as conn:
@@ -86,6 +95,7 @@ def add_peer(pub, retired=""):
                                   retired_at)
                VALUES (?,?,?,?,?,?,?,?,?)""",
             (pub, "peer", "cybernet", "0.1.0", 0, "[]", now, now, retired))
+    allow_peer(pub)
 
 
 def binding_row(name):
@@ -291,6 +301,7 @@ check("mixed-order binding -> dropped-weak, no row, no conflict log",
 # ---------------------------------------------------------------- allowlist
 listed = mint("allowlisted", secrets.token_hex(32))
 unlisted = mint("allowunlisted", secrets.token_hex(32))
+saved_allow = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
 try:
     os.environ["CYBERNET_PEER_ALLOWLIST"] = "ab" * 32
     r = post(gossip_env(sender_priv, sender_pub, [unlisted]))
@@ -313,13 +324,27 @@ try:
           and binding_row("allowlisted")[0] is not None,
           body)
 finally:
-    os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow
 
+# Unset admits nobody. Verify is not reached. Restore before later rows.
 after = mint("allownone", secrets.token_hex(32))
-r = post(gossip_env(sender_priv, sender_pub, [after]))
-check("allowlist unset -> not in force, fresh binding inserted",
-      r.status_code == 200 and r.json().get("outcomes") == ["inserted"],
-      r.text[:300])
+os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+unset_calls = {"n": 0}
+real_verify_unset = _fed_env.verify_envelope
+def _count_unset(env, *a, **k):
+    unset_calls["n"] += 1
+    return real_verify_unset(env, *a, **k)
+_fed_env.verify_envelope = _count_unset
+try:
+    r = post(gossip_env(sender_priv, sender_pub, [after]))
+    check("allowlist unset -> 403 before verify, nothing stored",
+          r.status_code == 403 and "allowlist" in (detail(r) or "")
+          and binding_row("allownone")[0] is None
+          and unset_calls["n"] == 0,
+          (r.status_code, detail(r), unset_calls["n"]))
+finally:
+    _fed_env.verify_envelope = real_verify_unset
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_allow
 
 # ---------------------------------------------------------------- per-sender rate
 reset_hits()
@@ -340,7 +365,12 @@ federation.FED_SOURCE_LIMIT = 2
 try:
     bad_codes = []
     for _ in range(2):
-        bad_codes.append(post({"v": "not-an-envelope"}).status_code)
+        # A known allowlisted sender with a bad signature passes the
+        # pre-verify gate and spends a source token, then fails verify.
+        bad_env = gossip_env(sender_priv, sender_pub,
+                             [mint("badsrc", secrets.token_hex(32))])
+        bad_env["sig"] = flip_hex(bad_env["sig"])
+        bad_codes.append(post(bad_env).status_code)
     src_binding = mint("sourcecap", secrets.token_hex(32))
     src_env = gossip_env(sender_priv, sender_pub, [src_binding])
     blocked = post(src_env)
@@ -485,8 +515,12 @@ bad["signature"] = flip_hex(bad["signature"])
 r = post(gossip_env(a_priv, a_pub, [bad]))
 body = r.json()
 served_after = client.get("/api/v1/names/depthtest").json()
-check("one-byte tamper refused; served signature unchanged",
-      r.status_code == 200 and body.get("outcomes") == ["dropped-unverifiable"]
+# Same signed bytes as the insert above, so the sha256 dedupe keeps the
+# stored row and does not call checkvalid. The served signature stays
+# the honest one. A tamper of a name that was never verified is still
+# dropped-unverifiable (covered above).
+check("one-byte tamper of a verified payload does not replace the served signature",
+      r.status_code == 200 and body.get("outcomes") == ["kept"]
       and served_after.get("signature") == claimed["signature"],
       body)
 

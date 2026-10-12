@@ -256,9 +256,10 @@ def fed_gossip(env: dict):
     return {"ok": True, "merged": merged, "ignored": ignored}
 
 
-# Operator peer allowlist (5357b58). Unset or empty: not in force — the
-# known-unretired gate still applies. When set, a known sender absent from
-# the list is refused. Read on each call so an operator can change it
+# Operator peer allowlist (5357b58), mandatory on this route
+# (Villhaze 75979979). Unset or empty admits nobody — do not wait for
+# the V3(a) pin. A known sender absent from the list is refused before
+# any signature work. Read on each call so an operator can change it
 # without a restart. This route is the only caller; other /fed receivers
 # are unchanged.
 class _PeerAllowlist:
@@ -274,9 +275,7 @@ class _PeerAllowlist:
 
     def require(self, sender_pub: str, route: str) -> None:
         allowed = self.pubs()
-        if allowed is None:
-            return
-        if str(sender_pub).lower() not in allowed:
+        if not allowed or str(sender_pub).lower() not in allowed:
             raise HTTPException(
                 status_code=403,
                 detail=f"peer not on operator allowlist for {route}")
@@ -338,6 +337,59 @@ def _too_many_bindings(count: int) -> bool:
     return count > NAMES_GOSSIP_RECV_CAP
 
 
+def _gossip_claimed_sender(env):
+    """Sender pubkey as claimed, before any signature check. None when the
+    envelope has no 32-byte hex sender — that refusal is not verify work."""
+    if not isinstance(env, dict):
+        return None
+    sender = env.get("sender_pub")
+    if not isinstance(sender, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sender):
+        return None
+    return sender
+
+
+def _gossip_known_peer(sender_pub: str) -> bool:
+    """True when sender_pub is a known unretired peer. A retired row is
+    the same as a stranger."""
+    pub = str(sender_pub).lower()
+    with _db_lock, _db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM peers WHERE lower(node_pub)=? AND retired_at=''",
+            (pub,)).fetchone()
+    return row is not None
+
+
+def _refuse_unknown_before_bucket(sender_pub: str) -> bool:
+    """True when the route must 404 before charging fednamesgossip:<sender>
+    and before any signature work. Patchable by the known-peer-order mutant."""
+    return not _gossip_known_peer(sender_pub)
+
+
+def _gossip_allowlisted(sender_pub: str) -> bool:
+    """Mandatory allowlist. Unset or empty admits nobody."""
+    allowed = _pal.pubs()
+    if not allowed:
+        return False
+    return str(sender_pub).lower() in allowed
+
+
+def _gossip_pre_verify_gate(sender_pub: str):
+    """Unannounced or unallowlisted senders are refused before verify.
+    'unknown' → 404, 'unlisted' → 403, None → proceed to the source
+    bucket and signature checks. Patchable by the allowlist mutant."""
+    if _refuse_unknown_before_bucket(sender_pub):
+        return "unknown"
+    if not _gossip_allowlisted(sender_pub):
+        return "unlisted"
+    return None
+
+
+def _charge_gossip_sender(sender_pub: str) -> None:
+    """Per-sender bucket. The route calls this only after the known-peer
+    404, the allowlist refusal, envelope verify, and the replay check."""
+    _check_rate(f"fednamesgossip:{str(sender_pub).lower()}")
+
+
 # Replay seen-set (ART-29 d9ff58e3). Keyed on (sender_pub, envelope sig),
 # not the sig alone: two senders never share a replay slot. An envelope
 # minted at the future edge of MAX_SKEW_SEC still verifies 2×MAX_SKEW_SEC
@@ -390,19 +442,21 @@ def fed_names_gossip(env: dict, request: Request = None):
     Check order, fail-closed, no existing gate weakened:
       1. Request size cap (Content-Length and serialized body,
          NAMES_GOSSIP_BODY_CAP). Oversize is 413 "Request body too large"
-         and does not spend a per-source token.
-      2. Per-source sybil cap (`src:fed:<source>` via request_source,
+         and does not spend a per-source token or verify a signature.
+      2. Claimed sender_pub is 32 bytes of hex, else 400 "invalid
+         envelope" with no signature work. An unannounced sender is 404
+         "unknown peer" before the per-sender bucket and before any
+         verify. The allowlist is mandatory (unset admits nobody): an
+         unlisted sender is 403 before any verify.
+      3. Per-source sybil cap (`src:fed:<source>` via request_source,
          4× RATE_LIMIT / 60s; "direct" when request is None) before
-         signature verification or any database read.
-      3. Envelope verify: `verify_envelope` (version, signature, skew,
+         signature verification. Only a known allowlisted sender reaches
+         this bucket.
+      4. Envelope verify: `verify_envelope` (version, signature, skew,
          body hash) else 400 "invalid envelope"; recipient is this
          node's pubkey else 400 "not addressed to this node"; body is a
          dict else 400 "invalid envelope"; `body.from_node_pub` equals
          the verified sender_pub else 400 "sender_pub mismatch".
-      4. Sender is a known unretired peer, else 404 "unknown peer"
-         (a retired row is the same refusal as a stranger). Then the
-         operator allowlist, if CYBERNET_PEER_ALLOWLIST is set:
-         `_pal.require(sender_pub, "/fed/names/gossip")` (403).
       5. `body.bindings` is a list, else 400 "bindings must be a list".
          More than NAMES_GOSSIP_RECV_CAP bindings is 400
          "bindings exceed {cap}" — the route does not truncate, and it
@@ -412,40 +466,45 @@ def fed_names_gossip(env: dict, request: Request = None):
          A replay writes no row and does not spend a rate token.
       7. Per-peer bucket (`fednamesgossip:<sender_pub>`, one charge per
          call, RATE_LIMIT / RATE_WINDOW). A 429 does not record the
-         envelope, so the sender can retry it.
+         envelope, so the sender can retry it. An unknown sender never
+         reaches this charge.
       8. Record the envelope in the seen-set, then fold each binding
-         through `ingest_gossiped_binding`. At most NAMES_GOSSIP_NEW_CAP
-         of those folds may INSERT a name that was not already in the
-         registry (`_allow_new_name`); further new names are
-         dropped-peer-cap. Updates of existing names are not charged.
-         The route does not pre-verify the claimant signature; ingest
-         re-verifies it fail-closed.
+         through `ingest_gossiped_binding`. Cheap gates (name, time,
+         expiry, freshness, signed-bytes dedupe) and the verify budget
+         run inside ingest, before checkvalid. At most
+         NAMES_GOSSIP_NEW_CAP of those folds may INSERT a name that was
+         not already in the registry (`_allow_new_name`); further new
+         names are dropped-peer-cap. Updates of existing names are not
+         charged against that cap.
 
     Returns inserted / replaced / kept / dropped / conflict plus the
     per-binding outcome list. `dropped` counts every ingest result that
     is not inserted, replaced, kept, or conflict (malformed, unverifiable,
-    expired, stale, over-cap, full, weak, peer-cap).
+    expired, stale, over-cap, full, weak, peer-cap, duplicate,
+    verify-budget).
     """
     if _gossip_body_too_large(env, request):
         raise HTTPException(status_code=413, detail="Request body too large")
+    sender_pub = _gossip_claimed_sender(env)
+    if sender_pub is None:
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    refusal = _gossip_pre_verify_gate(sender_pub)
+    if refusal == "unknown":
+        raise HTTPException(status_code=404, detail="unknown peer")
+    if refusal == "unlisted":
+        raise HTTPException(
+            status_code=403,
+            detail="peer not on operator allowlist for /fed/names/gossip")
     _charge_fed_source(request)
-    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+    if not _fed_env.verify_envelope(env):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
-    sender_pub = env.get("sender_pub")
-    if body.get("from_node_pub") != sender_pub:
+    if body.get("from_node_pub") != env.get("sender_pub"):
         raise HTTPException(status_code=400, detail="sender_pub mismatch")
-    with _db_lock, _db() as conn:
-        known = conn.execute(
-            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
-            (sender_pub,)).fetchone()
-    if not known:
-        raise HTTPException(status_code=404, detail="unknown peer")
-    _pal.require(sender_pub, "/fed/names/gossip")
     bindings = body.get("bindings")
     if not isinstance(bindings, list):
         raise HTTPException(status_code=400, detail="bindings must be a list")
@@ -457,14 +516,16 @@ def fed_names_gossip(env: dict, request: Request = None):
     # nothing and does not spend a rate token.
     if _gossip_is_replay(sender_pub, env.get("sig", "")):
         raise HTTPException(status_code=400, detail="replay")
-    _check_rate(f"fednamesgossip:{sender_pub}")
+    _charge_gossip_sender(sender_pub)
     _gossip_mark_seen(sender_pub, env.get("sig", ""))
     inserted = replaced = kept = conflict = dropped = 0
     outcomes = []
     new_inserts = 0
+    verify_box = [0]
     for binding in bindings:
         outcome = ingest_gossiped_binding(
-            binding, allow_new=_allow_new_name(new_inserts))
+            binding, allow_new=_allow_new_name(new_inserts),
+            verify_box=verify_box)
         outcomes.append(outcome)
         if outcome == "inserted":
             inserted += 1
