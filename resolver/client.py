@@ -189,6 +189,18 @@ def _parse_response(
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
+
+    The answer TTL is deliberately NOT bounded, and this is a settled
+    question, not an unchecked gap: the daemon emits
+    min(seconds-until-the-binding-expires, its TTL cap), the cap is
+    daemon-local config (CYBERNET_TTL_CAP: default 300, floored at 0,
+    no ceiling — an operator may raise it), and a verified binding's
+    remaining life can run to the 365-day admission cap, so no bound
+    tighter than the wire's uint32 is provable from the client's
+    seat. The TTL also carries no trust here: this client never
+    caches — it discards the TTL and returns only the addresses — so
+    a large TTL cannot extend anything. Bounding it would only
+    refuse replies from a legitimately raised-cap daemon.
     When qname/qtype are given (resolve() always gives both), the
     echoed question must match them exactly (name compared in the
     client's normalized lower-case form).

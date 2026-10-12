@@ -692,6 +692,44 @@ class ClientTests(unittest.TestCase):
         flags, answers = client._parse_response(self._valid_response(), 0x42)
         self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
 
+    def _response_with_ttl(self, ttl, txid=0x42):
+        q = dns.parse_query(client._build_query(txid, "node.cyberspace", 1))
+        return dns.build_response(
+            q, [(1, ttl, socket.inet_aton("10.9.8.7"))], rcode=0
+        )
+
+    def test_parse_response_ttl_zero_accepted(self):
+        """TTL 0 is a daemon reply: a cap of 0 (CYBERNET_TTL_CAP=0) or
+        a binding expiring this second both emit it (answer._ttl_for
+        floors at 0). The client discards TTL, so 0 changes nothing."""
+        flags, answers = client._parse_response(
+            self._response_with_ttl(0), 0x42, "node.cyberspace", 1
+        )
+        self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
+
+    def test_parse_response_ttl_above_default_cap_accepted(self):
+        """No client-side TTL bound: the 300s cap is daemon-local
+        config with no ceiling, and a verified binding can have up
+        to the 365-day admission lifetime remaining — a raised-cap
+        daemon legitimately emits TTLs far above 300, and the
+        non-caching client gains nothing by refusing them."""
+        for ttl in (301, 86400, 365 * 86400):
+            flags, answers = client._parse_response(
+                self._response_with_ttl(ttl), 0x42, "node.cyberspace", 1
+            )
+            self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
+
+    def test_resolve_high_ttl_still_resolves(self):
+        server = _tcp_server(
+            lambda q: dns.build_response(
+                q, [(1, 365 * 86400, socket.inet_aton("10.9.8.7"))], rcode=0
+            )
+        )
+        self.assertEqual(
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True),
+            ["10.9.8.7"],
+        )
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
