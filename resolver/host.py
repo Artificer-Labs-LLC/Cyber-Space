@@ -479,9 +479,11 @@ def _announce_note(was_ok: bool | None, is_ok: bool, name: str) -> str | None:
 
 
 def run() -> int:
-    """Run the hosting daemon until SIGINT/SIGTERM. Returns 0 on clean
-    shutdown, 2 when misconfigured (a hosting daemon without a name or
-    a mirror refuses to start — fail-closed). Never raises."""
+    """Run the hosting daemon until SIGINT/SIGTERM (or, embedded in a
+    worker thread where signal handlers cannot be installed, until the
+    embedding process ends). Returns 0 on clean shutdown, 2 when
+    misconfigured (a hosting daemon without a name or a mirror refuses
+    to start — fail-closed). Never raises."""
     name, name_priv, mirror_url, refresh, ok = _config()
     if not ok:
         for problem in _startup_problems():
@@ -493,8 +495,19 @@ def run() -> int:
     def _stop(_signum, _frame):
         stop.set()
 
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _stop)
+        except (ValueError, OSError):
+            # signal.signal only works in the main thread. An embedded
+            # hostd (an agent hosting its name in-process, in a worker
+            # thread) must still host — the embedding process owns
+            # lifetime there. Dying here would break the never-raises
+            # contract for exactly that deployment (twin of resolverd).
+            print(f"hostd: cannot install {_sig!s} handler "
+                  f"(not the main thread?) — hosting without it; "
+                  f"stop is the embedding process's to give",
+                  file=sys.stderr)
 
     for warn in _public_url_warnings():
         print(f"hostd: direct disabled: {warn}", file=sys.stderr)

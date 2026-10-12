@@ -146,6 +146,41 @@ class TestHostdStartup(unittest.TestCase):
             capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 2)
 
+    def test_run_in_worker_thread_hosts_instead_of_raising(self):
+        # run() promises never-raises, but signal.signal raises
+        # ValueError off the main thread: an embedded hostd (an agent
+        # hosting its name in-process, in a worker thread) died before
+        # its first announce. Registration is now guarded per-signal —
+        # the embedded daemon warns and keeps hosting; the embedding
+        # process owns lifetime. Twin of resolverd's Phase C contract.
+        import contextlib
+        import io
+        import threading
+
+        os.environ.clear()
+        os.environ.update(_clean_env(
+            CYBERNET_HOSTED_NAME="alice",
+            CYBERNET_NAME_PRIVKEY="ab" * 32,
+            CYBERNET_MIRROR_URL="https://8.8.8.8:8471",
+            CYBERNET_PUBLIC_URL="https://8.8.4.4:8471"))
+        errors = []
+        buf = io.StringIO()
+
+        def _run():
+            try:
+                with contextlib.redirect_stderr(buf):
+                    host.run()
+            except Exception as exc:  # noqa: BLE001 — the contract is the point
+                errors.append(exc)
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(2.0)
+        self.assertEqual(errors, [])
+        self.assertTrue(th.is_alive(),
+                        "embedded hostd exited instead of hosting")
+        self.assertIn("hosting without it", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
