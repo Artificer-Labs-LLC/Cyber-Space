@@ -56,6 +56,11 @@ Config (environment, bad values degrade to silence, never to a lie):
                            warns loudly on stderr at startup for both
                            (see _rendezvous_warnings)
   CYBERNET_REACH_TTL       descriptor lifetime seconds (default 86400)
+                           — set but not an integer -> _reach_build
+                           silently falls back to 86400, and an integer
+                           below 600 is silently clamped to 600; run()
+                           warns loudly on stderr at startup for both
+                           (see _reach_ttl_warnings)
   CYBERNET_HOSTD_REFRESH   re-announce cadence seconds (default 600)
 
 Run from the repo root:  python -m resolver.host
@@ -282,6 +287,30 @@ def _rendezvous_warnings() -> list[str]:
     return problems
 
 
+def _reach_ttl_warnings() -> list[str]:
+    """Loud reach-TTL config mistakes, or []. Unset/empty means the
+    86400 default (silent, a choice). Two set-but-ineffective cases
+    core._reach_build otherwise hides: a non-integer value falls back
+    to 86400, and an integer below 600 is clamped to 600 — an operator
+    who set 60 expecting a one-minute descriptor (or typed a unit
+    suffix) gets a different lifetime than configured, with the name
+    staying resolvable long after they believed it expired. Mirrors
+    _reach_build exactly (max(600, int(...)) / ValueError -> 86400);
+    never prints the value itself."""
+    raw = os.environ.get("CYBERNET_REACH_TTL", "").strip()
+    if not raw:
+        return []
+    try:
+        ttl = int(raw)
+    except (ValueError, TypeError):
+        return ["CYBERNET_REACH_TTL is not an integer — the 86400 "
+                "default will be advertised instead"]
+    if ttl < 600:
+        return ["CYBERNET_REACH_TTL is below the 600 floor — 600 "
+                "will be advertised instead"]
+    return []
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
     """Signed POST to the mirror. True on HTTP 200; anything else
     (4xx/5xx/timeout) is silence, never a crash. Never raises."""
@@ -393,6 +422,9 @@ def run() -> int:
 
     for warn in _rendezvous_warnings():
         print(f"hostd: rendezvous: {warn}", file=sys.stderr)
+
+    for warn in _reach_ttl_warnings():
+        print(f"hostd: reach ttl: {warn}", file=sys.stderr)
 
     last_ok: bool | None = None
     while not stop.is_set():
