@@ -86,6 +86,22 @@ with core._db_lock, core._db() as conn:
                          ("loop", MIXED[2], IDENT, "2001"), ("loop", IDENT, MIXED[2], "2002")):
         conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
                      (nm, o, n_, PAST, "00" * 64, t + "-01-01T00:00:00+00:00"))
+    # Examiner item 1: Z1 claimed directly (no hop INTO Z1), then honest Z1->X.
+    # Kills the mutant that fires only on weak new_pubkey.
+    XH = _ed.publickey(bytes.fromhex("ee" * 32)).hex()
+    conn.execute("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                 ("z1claimx", XH, PAST, FUT, "00" * 64))
+    conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                 ("z1claimx", ZERO, XH, PAST, "00" * 64, "2001-01-01T00:00:00+00:00"))
+    # Repeat hops, modelling INSERT OR IGNORE on (name,old,new) (routes_social_serve.py:1327-1331):
+    # K->Z1->X->Z1->X; repeats keep their FIRST accepted_at.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS t_rot_dedup ON name_rotations(name,old_pubkey,new_pubkey)")
+    conn.execute("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                 ("repeat", XH, PAST, FUT, "00" * 64))
+    for o, n_, t in ((K3, ZERO, "2001"), (ZERO, XH, "2002"), (XH, ZERO, "2003"), (ZERO, XH, "2004")):
+        conn.execute("INSERT OR IGNORE INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                     ("repeat", o, n_, PAST, "00" * 64, t + "-01-01T00:00:00+00:00"))
+    rep_rows = conn.execute("SELECT old_pubkey,new_pubkey,accepted_at FROM name_rotations WHERE name='repeat' ORDER BY rowid").fetchall()
     cc = wo._cols(conn, "name_conflicts")
     vals = {"name": "alive", "incumbent_pubkey": GOOD, "challenger_pubkey": MIXED[2]}
     for c in cc - set(vals) - {"id"}:
@@ -111,7 +127,12 @@ check("loop chain (starts weak) -> refused + FLAG-VILLHAZE", lp and "starts on w
 poc = [r for r in snap["refused"] if r[0] == "pocz1"]
 check("PoC Z1->X->Z1 -> refused, FLAG starts on weak key", poc and "starts on weak key" in poc[0][-1], poc)
 check("PoC Z1->X->Z1 not reserved (not for attacker X)", "pocz1" not in reserved, reserved)
-check("refused set exactly {zeroclaim, loop, pocz1}", refused == {"zeroclaim", "loop", "pocz1"}, refused)
+z1x = [r for r in snap["refused"] if r[0] == "z1claimx"]
+check("Examiner item 1: Z1 claimed then Z1->X -> refused, FLAG starts on weak key", z1x and "FLAG-VILLHAZE: chain starts on weak key" in z1x[0][-1], z1x)
+check("Examiner item 1: Z1 claimed then Z1->X not reserved, not held", "z1claimx" not in reserved and "z1claimx" not in held, (reserved, held))
+check("repeat hops: INSERT OR IGNORE kept 3 rows, Z1->X keeps first accepted_at", len(rep_rows) == 3 and rep_rows[1][2].startswith("2002"), rep_rows)
+check("repeat hops K->Z1->X->Z1->X -> reserved for K", reserved.get("repeat") == K3, reserved)
+check("refused set exactly {zeroclaim, loop, pocz1, z1claimx}", refused == {"zeroclaim", "loop", "pocz1", "z1claimx"}, refused)
 check("zero-key rotation from real K -> reserved for K", reserved.get("rotzero") == K, reserved)
 check("mixed-order rotation from real K -> reserved for K", reserved.get("rotmixed") == K, reserved)
 check("no weak key held", not held & ({"zeroclaim", "rotzero", "rotmixed"}), held)
