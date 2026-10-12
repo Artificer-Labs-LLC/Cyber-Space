@@ -202,6 +202,19 @@ def _future_issued_binding():
             "issued_at": FUTURE_ISSUED, "expires_at": LIVE, "signature": sig}
 
 
+def _overlong_binding():
+    # Same label and key, valid signature, live expiry — but a 402-day
+    # lifetime (issued yesterday, expires +401d). Admission refuses
+    # (expires - issued) > 365 days; the cap is intrinsic, so steps 4
+    # and 6 must read it as absent too.
+    expires = _iso(now + timedelta(days=401))
+    sig = _ed.sign(core._name_claim_payload(RLABEL, _name_pub,
+                                            ISSUED, expires),
+                   _name_seed, bytes.fromhex(_name_pub)).hex()
+    return {"name": RLABEL, "node_pubkey": _name_pub,
+            "issued_at": ISSUED, "expires_at": expires, "signature": sig}
+
+
 def _fake_factory(mode):
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester", {"pong": True})
     hits = {"directory": 0, "reach": 0}
@@ -211,6 +224,8 @@ def _fake_factory(mode):
             "garbage-issued-live": _rdesc(),
             "future-issued-live": _rdesc(),
             "future-issued-mirror": _rdesc(),
+            "overlong-mirror": _rdesc(),
+            "overlong-live": _rdesc(),
             "garbage-issued-desc": _rdesc(issued="not-a-time"),
             "future-issued-desc": _rdesc(issued=FUTURE_ISSUED),
             "overlong-desc": _rdesc(expires=_iso(now + timedelta(days=400)))}[mode]
@@ -219,6 +234,8 @@ def _fake_factory(mode):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
             if mode == "future-issued-mirror":
                 return dict(_future_issued_binding())
+            if mode == "overlong-mirror":
+                return dict(_overlong_binding())
             return dict(binding)
         if url == MIRROR + "/api/v1/names/" + RLABEL + "/reach":
             hits["reach"] += 1
@@ -235,6 +252,8 @@ def _fake_factory(mode):
                 return dict(_garbage_issued_binding())
             if mode == "future-issued-live":
                 return dict(_future_issued_binding())
+            if mode == "overlong-live":
+                return dict(_overlong_binding())
             return dict(_rbinding())
         return None
     return fake, hits
@@ -309,6 +328,25 @@ def part_b():
         core._resolve_memo.clear()
         got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
         check("future-issued-mirror: step 4 refuses a not-yet-issued binding",
+              got is None, got)
+        # Step 4 lifetime cap: the MIRROR row itself is over-cap
+        # (402-day lifetime, valid signature, live expiry) — admission
+        # refuses it, and the cap is intrinsic, so it reads as absent.
+        fake, hits = _fake_factory("overlong-mirror")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("overlong-mirror: step 4 refuses an over-cap binding",
+              got is None, got)
+        # Step 6 lifetime cap: the LIVE row is over-cap while the
+        # mirror row is sane — the live re-fetch must refuse it too.
+        fake, hits = _fake_factory("overlong-live")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("overlong-live: step 6 refuses an over-cap binding",
               got is None, got)
     finally:
         core._resolve_get_json = real

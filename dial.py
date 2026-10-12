@@ -28,7 +28,7 @@ import argparse
 import os
 import sys
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import core
 
@@ -115,11 +115,19 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     if issued_dt > datetime.now(timezone.utc):
         return 1, ["name-side: binding not yet issued"]
     try:
-        live = core._parse_claim_time(expires_at) > datetime.now(timezone.utc)
+        expires_dt = core._parse_claim_time(expires_at)
+        live = expires_dt > datetime.now(timezone.utc)
     except ValueError:
         live = False
+        expires_dt = None
     if not live:
         return 1, ["name-side: binding expired"]
+    # Lifetime cap, twin of core._name_binding_admission_ok and of the
+    # resolver's step 4: intrinsic to the binding (expires - issued),
+    # so an over-cap binding the mirror serves (valid signature, live
+    # expiry) is refused here just as admission refuses it.
+    if (expires_dt - issued_dt) > timedelta(days=core.NAME_EXPIRY_DAYS):
+        return 1, ["name-side: binding lifetime exceeds 365 days"]
     out.append(f"name: {addr}")
     out.append(f"name-key: {node_pubkey}")
 

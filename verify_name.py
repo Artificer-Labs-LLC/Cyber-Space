@@ -151,6 +151,14 @@ def verify(binding: dict, expect_name: str | None = None,
         return str(e)
     if not issued < expires:
         return "issued_at is not before expires_at"
+    # Lifetime cap, twin of core._name_binding_admission_ok
+    # (NAME_EXPIRY_DAYS): admission refuses a binding signed for longer
+    # than 365 days, and the cap is intrinsic to the binding itself
+    # (expires - issued), so the offline seat can check it without
+    # trusting any mirror — an over-cap binding verified here while
+    # every admission seat read the same claim as refused.
+    if (expires - issued) > timedelta(days=365):
+        return "binding lifetime exceeds 365 days"
     now = datetime.now(timezone.utc)
     if now < issued:
         return "binding is not yet issued"

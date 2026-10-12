@@ -91,6 +91,11 @@ b = _mint(issued=_iso(now + timedelta(hours=1)),
 check("not-yet-issued binding -> exit 1 saying not yet issued",
       (lambda r: r is not None and "not yet issued" in r)(verify_name.verify(b)))
 
+b = _mint(issued=_iso(now - timedelta(hours=1)),
+          expires=_iso(now + timedelta(days=401)))
+check("overlong binding (401d lifetime) -> exit 1 saying lifetime exceeds",
+      (lambda r: r is not None and "lifetime exceeds 365" in r)(verify_name.verify(b)))
+
 b = _mint(); b["name"] = "tampered"
 check("tampered name -> exit 1, signature does not verify",
       (lambda r: r is not None and "does not verify" in r)(verify_name.verify(b)))

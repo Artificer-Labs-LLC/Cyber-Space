@@ -136,6 +136,21 @@ class DialPlanTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("expired", lines[0])
 
+    def test_overlong_binding_is_refused(self):
+        # Admission refuses (expires - issued) > 365 days; the cap is
+        # intrinsic, so a mirror serving such a binding (valid
+        # signature, live expiry) must read as refused here too.
+        priv, pub = _name_key()
+        now = datetime.now(timezone.utc)
+        binding = _signed_binding(
+            LABEL, priv, pub,
+            _iso(now - timedelta(hours=1)),
+            _iso(now + timedelta(days=401)))
+        with _fixture(binding=binding):
+            code, lines = dial.plan(ADDR, MIRROR)
+        self.assertEqual(code, 1)
+        self.assertIn("lifetime exceeds", lines[0])
+
     def test_unparseable_issued_at_is_absent(self):
         # The signature verifies (it was signed over the garbage value),
         # but the daemon's resolver parses issued_at and reads an

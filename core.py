@@ -1435,14 +1435,23 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         # row reads as absent, never live.
         try:
             now_utc = datetime.now(timezone.utc)
-            live = _parse_claim_time(expires_at) > now_utc
+            expires_dt = _parse_claim_time(expires_at)
+            issued_dt = _parse_claim_time(issued_at)
+            live = expires_dt > now_utc
             # Not-yet-issued reads as absent too (verify_name's
             # "binding is not yet issued"): a future-dated issued_at
             # is a valid signature over a claim that has not begun.
-            issued_ok = _parse_claim_time(issued_at) <= now_utc
+            issued_ok = issued_dt <= now_utc
+            # Lifetime cap, twin of _name_binding_admission_ok: the
+            # cap is intrinsic (expires - issued), so a mirror serving
+            # an over-cap binding (valid signature, live expiry) reads
+            # as absent here just as admission refuses it — a name must
+            # not stay bound for years on one signature.
+            lifetime_ok = (expires_dt - issued_dt) <= timedelta(
+                days=NAME_EXPIRY_DAYS)
         except ValueError:
             return None
-        if not live or not issued_ok:
+        if not live or not issued_ok or not lifetime_ok:
             return None
 
         # Step 5: key -> address. The descriptor (reach) half first: a
@@ -1572,21 +1581,29 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                     str(live.get("signature", "")).lower()):
                 return None
             try:
-                live_unexpired = _parse_claim_time(
-                    str(live.get("expires_at", ""))
-                ) > datetime.now(timezone.utc)
+                live_expires_dt = _parse_claim_time(
+                    str(live.get("expires_at", "")))
+                live_unexpired = live_expires_dt > datetime.now(
+                    timezone.utc)
                 # Same floor as step 4: the live row's issued_at must
                 # parse too — a signer can sign a garbage issued_at
                 # and pass the signature check above, and step 4 reads
                 # such a row as absent, never live. And the same
                 # not-yet-issued floor: a future-dated live row has
                 # not begun, however valid its signature.
-                live_issued_ok = _parse_claim_time(
-                    str(live.get("issued_at", ""))
-                ) <= datetime.now(timezone.utc)
+                live_issued_dt = _parse_claim_time(
+                    str(live.get("issued_at", "")))
+                live_issued_ok = live_issued_dt <= datetime.now(
+                    timezone.utc)
+                # Same intrinsic lifetime cap as step 4: an over-cap
+                # live row is refused however valid its signature.
+                live_lifetime_ok = (
+                    live_expires_dt - live_issued_dt) <= timedelta(
+                        days=NAME_EXPIRY_DAYS)
             except ValueError:
                 return None
-            if not live_unexpired or not live_issued_ok:
+            if not live_unexpired or not live_issued_ok \
+                    or not live_lifetime_ok:
                 return None
 
         result = {"name": label, "node_pubkey": node_pubkey,
