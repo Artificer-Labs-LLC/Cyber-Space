@@ -7,6 +7,8 @@ against that DB. No live-route test hook.
 Items, each with a belt row and one mutant:
   1. replay seen-set on (sender_pub, envelope sig), kept 2×MAX_SKEW,
      refused before ingest with no row written, memory capped.
+  2. per-peer cap on NEW-name inserts per gossip call; over-cap new
+     names are dropped-peer-cap; updates of existing names still apply.
 """
 import os
 import secrets
@@ -264,6 +266,89 @@ check("replay check restored: identical envelope refused, row count unchanged",
       r.status_code == 400 and detail(r) == "replay"
       and binding_count("replaymut") == n_after,
       (r.status_code, detail(r), binding_count("replaymut"), n_after))
+
+# ------------------------------------------------------- per-peer new cap
+print("peer new-name cap:")
+federation._gossip_seen.clear()
+reset_hits()
+cap = federation.NAMES_GOSSIP_NEW_CAP
+check("new-name cap is below the binding cap and the registry cap",
+      0 < cap < federation.NAMES_GOSSIP_RECV_CAP < 1024, cap)
+
+seed_priv = secrets.token_hex(32)
+seed_issued = iso(NOW - timedelta(minutes=30))
+seed = mint("capupdate", seed_priv, issued=seed_issued)
+check("seed existing name in-process",
+      core.ingest_gossiped_binding(seed) == "inserted"
+      and binding_row("capupdate") == (seed["node_pubkey"], seed["signature"]))
+
+# Ingest itself: allow_new False drops an absent name after verification
+# and does not touch an existing one.
+absent = mint("capabsent", secrets.token_hex(32))
+n_before = binding_count()
+check("allow_new False on an absent name -> dropped-peer-cap, no row",
+      core.ingest_gossiped_binding(absent, allow_new=False) == "dropped-peer-cap"
+      and binding_row("capabsent") is None and binding_count() == n_before)
+bad = dict(absent)
+bad["signature"] = ("0" if bad["signature"][0] != "0" else "1") + bad["signature"][1:]
+check("allow_new False still verifies: tampered sig is dropped-unverifiable",
+      core.ingest_gossiped_binding(bad, allow_new=False) == "dropped-unverifiable"
+      and binding_row("capabsent") is None)
+renew = mint("capupdate", seed_priv, issued=ISSUED)
+check("allow_new False still replaces an existing same-key renewal",
+      core.ingest_gossiped_binding(renew, allow_new=False) == "replaced"
+      and binding_row("capupdate") == (renew["node_pubkey"], renew["signature"]))
+
+fresh = [mint(f"capnew{i}", secrets.token_hex(32)) for i in range(cap)]
+extra = mint("capextra", secrets.token_hex(32))
+bad_new = mint("capbad", secrets.token_hex(32))
+bad_new["signature"] = (
+    "0" if bad_new["signature"][0] != "0" else "1") + bad_new["signature"][1:]
+# Later than the renewal above (ISSUED is now-1min); still inside 24h.
+later = iso(NOW - timedelta(seconds=30))
+update = mint("capupdate", seed_priv, issued=later)
+batch = fresh + [extra, update, bad_new]
+r = post(gossip_env(sender_priv, sender_pub, batch))
+outcomes = r.json().get("outcomes") if r.status_code == 200 else None
+want = (["inserted"] * cap) + ["dropped-peer-cap", "replaced", "dropped-unverifiable"]
+check("over-cap new name dropped, update replaced, bad sig still unverifiable",
+      r.status_code == 200 and outcomes == want,
+      (r.status_code, outcomes, want))
+check("the dropped new name has no row; the update landed",
+      binding_row("capextra") is None
+      and binding_row("capbad") is None
+      and binding_row("capupdate") == (update["node_pubkey"], update["signature"])
+      and all(binding_row(b["name"]) is not None for b in fresh))
+check("inserted count matches the cap and dropped counts the two refusals",
+      r.status_code == 200 and r.json().get("inserted") == cap
+      and r.json().get("replaced") == 1 and r.json().get("dropped") == 2,
+      r.text[:400])
+
+# ---------------------------------------------------------------- mutant
+print("mutant new-name cap:")
+federation._gossip_seen.clear()
+reset_hits()
+real_allow = federation._allow_new_name
+mut_fresh = [mint(f"mutnew{i}", secrets.token_hex(32)) for i in range(cap)]
+mut_extra = mint("mutextra", secrets.token_hex(32))
+federation._allow_new_name = lambda inserted_so_far: True
+try:
+    mutant = post(gossip_env(sender_priv, sender_pub, mut_fresh + [mut_extra]))
+    mutant_outcomes = mutant.json().get("outcomes") if mutant.status_code == 200 else None
+    mutant_fails = (mutant_outcomes == ["inserted"] * (cap + 1)
+                    and binding_row("mutextra") is not None)
+finally:
+    federation._allow_new_name = real_allow
+# Real gate, a different over-cap batch: the extra name stays absent.
+real_fresh = [mint(f"realnew{i}", secrets.token_hex(32)) for i in range(cap)]
+real_extra = mint("realextra", secrets.token_hex(32))
+real = post(gossip_env(sender_priv, sender_pub, real_fresh + [real_extra]))
+real_outcomes = real.json().get("outcomes") if real.status_code == 200 else None
+real_ok = (real_outcomes == ["inserted"] * cap + ["dropped-peer-cap"]
+           and binding_row("realextra") is None)
+record_mutant("per-peer new-name cap skipped",
+              "one extra new name past the cap is not inserted",
+              real_ok, mutant_fails)
 
 print("mutant results:")
 for name, row, real_ok, mutant_fails in MUTANTS:

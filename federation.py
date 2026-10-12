@@ -289,11 +289,21 @@ _pal = _PeerAllowlist()
 # any database work. Applied on this restored route only.
 FED_SOURCE_LIMIT = 4 * RATE_LIMIT
 NAMES_GOSSIP_RECV_CAP = 128
+# New names one allowlisted peer may plant in a single gossip call.
+# Updates of names already in the registry do not consume it.
+NAMES_GOSSIP_NEW_CAP = 16
 
 
 def _charge_fed_source(request) -> None:
     source = "direct" if request is None else request_source(request)
     _check_rate(f"src:fed:{source}", limit=FED_SOURCE_LIMIT, window=RATE_WINDOW)
+
+
+def _allow_new_name(inserted_so_far: int) -> bool:
+    """Whether this gossip call may still insert a name that is absent.
+    The route passes the count of inserts already accepted in the call.
+    Patchable: the new-name-cap mutant replaces this with a constant."""
+    return inserted_so_far < NAMES_GOSSIP_NEW_CAP
 
 
 # Replay seen-set (ART-29 d9ff58e3). Keyed on (sender_pub, envelope sig),
@@ -368,7 +378,10 @@ def fed_names_gossip(env: dict, request: Request = None):
      11. Fold at most 128 bindings through `ingest_gossiped_binding`
          only. The route does not pre-verify the claimant signature;
          ingest re-verifies it fail-closed. Bindings past the cap are
-         not processed and not counted.
+         not processed and not counted. At most NAMES_GOSSIP_NEW_CAP
+         of those folds may INSERT a name that was not already in the
+         registry (`_allow_new_name`); further new names are
+         dropped-peer-cap. Updates of existing names are not charged.
 
     Returns inserted / replaced / kept / dropped / conflict plus the
     per-binding outcome list. `dropped` counts every ingest result that
@@ -403,11 +416,14 @@ def fed_names_gossip(env: dict, request: Request = None):
     _gossip_mark_seen(sender_pub, env.get("sig", ""))
     inserted = replaced = kept = conflict = dropped = 0
     outcomes = []
+    new_inserts = 0
     for binding in bindings[:NAMES_GOSSIP_RECV_CAP]:
-        outcome = ingest_gossiped_binding(binding)
+        outcome = ingest_gossiped_binding(
+            binding, allow_new=_allow_new_name(new_inserts))
         outcomes.append(outcome)
         if outcome == "inserted":
             inserted += 1
+            new_inserts += 1
         elif outcome == "replaced":
             replaced += 1
         elif outcome == "kept":

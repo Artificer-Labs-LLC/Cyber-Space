@@ -1679,7 +1679,7 @@ def _gossip_claim_weak(pub: str):
     return window_open.weak_reason((pub or "").strip().lower())
 
 
-def ingest_gossiped_binding(binding: dict) -> str:
+def ingest_gossiped_binding(binding: dict, allow_new: bool = True) -> str:
     """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
     gossiped name binding into this mirror's registry. A registry is a
     signed log, not an authority: any mirror may repeat a binding, but
@@ -1702,11 +1702,18 @@ def ingest_gossiped_binding(binding: dict) -> str:
 
     Returns one of "inserted", "replaced", "kept", "conflict",
     "dropped-malformed", "dropped-unverifiable", "dropped-expired",
-    "dropped-stale", "dropped-over-cap", "dropped-full", "dropped-weak".
-    Never raises. A weak claimant key (window_open.weak_reason) is
-    dropped-weak after the signature and admission gates and before any
-    write, including the conflict log — gossip is not a bypass of the
-    claim route's ART-40 refusal."""
+    "dropped-stale", "dropped-over-cap", "dropped-full", "dropped-weak",
+    "dropped-peer-cap". Never raises. A weak claimant key
+    (window_open.weak_reason) is dropped-weak after the signature and
+    admission gates and before any write, including the conflict log —
+    gossip is not a bypass of the claim route's ART-40 refusal.
+
+    allow_new defaults True so every existing caller is unchanged. The
+    gossip route passes False once this call has already inserted its
+    per-peer budget of names that were not in the registry. An absent
+    name is then dropped-peer-cap after verification, admission, and the
+    weak-key gate, and before any write. A name that already has a row
+    is updated or kept regardless of allow_new."""
     try:
         if not isinstance(binding, dict):
             return "dropped-malformed"
@@ -1760,6 +1767,12 @@ def ingest_gossiped_binding(binding: dict) -> str:
                 "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
             if row is None:
+                # Per-call new-name budget. Checked after the row read so
+                # an update of a name that already exists is not charged,
+                # and after signature / admission / weak-key so those
+                # refusals keep their own labels.
+                if not allow_new:
+                    return "dropped-peer-cap"
                 if not _name_registry_has_room(conn):
                     return "dropped-full"
                 conn.execute(
