@@ -1151,6 +1151,18 @@ async def names_claim(request: Request):
         raise HTTPException(status_code=400, detail="Binding is expired on arrival; only live bindings are stored.")
     if issued_dt > now_dt:
         raise HTTPException(status_code=400, detail="issued_at is in the future; the claim must be signed now.")
+    if issued_dt < now_dt - NAME_CLAIM_FRESHNESS:
+        # Claim freshness (2026-10-11): the conflict rule's "earlier
+        # issued_at wins" lets a backdated issued_at displace any live
+        # incumbent — self-reported timestamps prove nothing about
+        # actual signing time. Claims must be signed fresh
+        # (mint_name.py always signs now); re-mint and re-submit.
+        raise HTTPException(status_code=400, detail="issued_at is stale (older than 24h); claims must be signed fresh — re-mint and re-submit.")
+    # B3 (Q1 fix, ART-29): the 365-day cap, as (expires - issued).
+    # The subtraction form (never issued + 365 days) cannot OverflowError
+    # on year-9999 stamps — a subtraction of two valid datetimes is safe.
+    if (expires_dt - issued_dt) > timedelta(days=NAME_EXPIRY_DAYS):
+        raise HTTPException(status_code=400, detail="Refused (expiry-cap): binding lifetime exceeds 365 days.")
     if not _name_binding_verify(name, node_pubkey, issued_at, expires_at, signature):
         raise HTTPException(status_code=400, detail="Signature does not verify against node_pubkey; binding refused.")
     binding = {"name": name, "node_pubkey": node_pubkey, "issued_at": issued_at,
@@ -1161,7 +1173,8 @@ async def names_claim(request: Request):
         old = dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), old)) if old else None
         # Q1 fix (Examiner's block): _old_binding_beaten decides; an
         # unparseable stored row is beaten only by the same key.
-        old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)        if old_beaten:
+        old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)
+        if old_beaten:
             if old is None and not _name_registry_has_room(conn):
                 raise HTTPException(status_code=400, detail="Name registry is full; renewals of known names still merge.")
             conn.execute(

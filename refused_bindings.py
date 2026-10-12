@@ -31,7 +31,12 @@ will call. The belt drives it directly against row dicts.
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# Q1 fix (B3, ART-29): the 365-day cap. Mirrors core_serve.NAME_EXPIRY_DAYS
+# (this module is standalone and cannot import the server tree — keep
+# the two in sync).
+NAME_EXPIRY_DAYS = 365
 
 # B3 (v0.6.3 red-team follow-up, Bulwark): this filter must reject exactly
 # what the server rejects. The server's strict parser
@@ -99,6 +104,19 @@ def _canonical_time_ok(s) -> bool:
     return True
 
 
+def _parse_canonical_time(s):
+    """Parse a canonical timestamp to an aware datetime.
+
+    Raises ValueError if the stamp is not canonical. Twin of
+    core_serve._parse_claim_time (duplicated: this module is standalone).
+    """
+    if not _canonical_time_ok(s):
+        raise ValueError(f"not a canonical timestamp: {s!r}")
+    m = _CANONICAL_TS_RE.match(s)
+    year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
+    return datetime(year, mon, day, hr, mi, se, tzinfo=timezone.utc)
+
+
 def _length_refused(label: str) -> bool:
     """Spec §7.3.9: length refusal for 1-2 and 33-63 byte labels."""
     n = _label_byte_len(label)
@@ -136,6 +154,15 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
     if not _canonical_time_ok(row.get("issued_at")):
         return "expiry-cap"
     if not _canonical_time_ok(row.get("expires_at")):
+        return "expiry-cap"
+    # B3 (Q1 fix, ART-29): (expires - issued) <= 365 days. The subtraction
+    # form (never issued + 365 days) cannot OverflowError on year-9999.
+    try:
+        issued = _parse_canonical_time(row["issued_at"])
+        expires = _parse_canonical_time(row["expires_at"])
+        if (expires - issued) > timedelta(days=NAME_EXPIRY_DAYS):
+            return "expiry-cap"
+    except (ValueError, OverflowError, TypeError):
         return "expiry-cap"
     if label not in manifest_labels:
         return "not-in-manifest"
