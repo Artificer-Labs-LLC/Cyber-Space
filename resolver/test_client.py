@@ -109,6 +109,25 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.NameNotFound):
             client.resolve("junk.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def test_noerror_no_answers_raises_resolve_error(self):
+        """NODATA (NOERROR, empty answer) is not a success: returning []
+        would make the CLI print nothing and exit 0 — a false success."""
+        server = _tcp_server(lambda q: dns.build_response(q, [], rcode=0))
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
+    def test_wrong_family_only_raises_resolve_error(self):
+        """An answer holding only the other family gives no usable address."""
+        server = _tcp_server(
+            lambda q: dns.build_response(
+                q,
+                [(28, 120, socket.inet_pton(socket.AF_INET6, "2001:db8::1"))],
+                rcode=0,
+            )
+        )
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_servfail_raises_resolve_error(self):
         server = _tcp_server(
             lambda q: dns.build_response(q, [], rcode=2)

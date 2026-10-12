@@ -245,7 +245,10 @@ def resolve(
 
     Returns the answer addresses as text, fail-closed: NameNotFound on
     NXDOMAIN (the name is not bound), ResolveError on SERVFAIL, transport
-    failure, mistransaction, or any malformed response. UDP is tried
+    failure, mistransaction, any malformed response, or a NOERROR answer
+    holding no record of the asked family (NODATA / wrong-family only) —
+    an empty list is never a success, or the CLI would print nothing and
+    exit 0 for a name that gave it no address to go to. UDP is tried
     first; any UDP failure falls back to the TCP wire (unless tcp_only).
     ``_udp_sock`` / ``_tcp_sock`` are test hooks, not public API.
     """
@@ -275,7 +278,10 @@ def resolve(
         raise NameNotFound(f"{name} does not resolve")
     if rcode != 0:
         raise ResolveError(f"daemon answered rcode {rcode} for {name}")
-    return [_textify(qtype_n, rdata) for rtype, rdata in answers if rtype == qtype_n]
+    matched = [_textify(qtype_n, rdata) for rtype, rdata in answers if rtype == qtype_n]
+    if not matched:
+        raise ResolveError(f"daemon answered no {qtype.upper()} record for {name}")
+    return matched
 
 
 def main(argv: list[str] | None = None) -> int:
