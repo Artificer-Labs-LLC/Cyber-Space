@@ -1130,6 +1130,12 @@ def _names_claim_check_rate(request: Request) -> None:
                 window=NAME_CLAIM_RATE_WINDOW)
 
 
+def name_fork_is_stale(name: str) -> bool:
+    import name_fork
+    with _db_lock, _db() as conn:
+        return name_fork.is_pin_stale(conn, name)
+
+
 def _claim_weak_reason(pub: str):
     """ART-40: claim refuses a weak name key before any name_bindings write.
     Tests replace this; do not skip it on the claim path."""
@@ -1206,6 +1212,23 @@ async def names_claim(request: Request):
             name_fork.ensure_genesis_pin(conn)
             pin_refused = name_fork.pin_refuses_before_signature(
                 conn, name, node_pubkey)
+            lapse = None
+            if (pin_refused and not name_fork.is_contested(conn, name)
+                    and not name_fork.is_pin_stale(conn, name)):
+                held = conn.execute(
+                    "SELECT expires_at FROM name_bindings WHERE name=?",
+                    (name,)).fetchone()
+                if held is not None:
+                    # Villhaze 392140b7 (4): lapse + day-90 release + a
+                    # different key with no rotation cert -> PIN-STALE.
+                    lapse = name_fork.claim_after_lapse(
+                        conn, name, node_pubkey, held[0], now_dt)
+            if lapse == "released":
+                pin_refused = False
+        if lapse == "stale" or (pin_refused and name_fork_is_stale(name)):
+            raise HTTPException(
+                status_code=409,
+                detail="Refused: name is PIN-STALE (binding lapsed; a different key with no rotation certificate). Neither key is served.")
         if pin_refused:
             raise HTTPException(
                 status_code=400,
@@ -1249,7 +1272,11 @@ async def names_claim(request: Request):
                 # TOFU: the first admitted key is the pin. A pin already
                 # present is left alone — it moves only through a certificate.
                 import name_fork
-                name_fork.pin_initial(conn, name, node_pubkey)
+                pinned = name_fork.pin_initial(
+                    conn, name, node_pubkey, source="claim_gate",
+                    binding=binding)
+                if pinned == "refused-cap":
+                    raise HTTPException(status_code=400, detail="Name pin registry is full.")
                 return {**binding, "status": "claimed"}
             raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
 
@@ -1324,11 +1351,25 @@ async def names_rotate(request: Request):
     # for the new one, not yet in force if future-dated. The payload uses
     # the raw issued_at string (twin of rotate_name's verify_rotation —
     # payload bytes are built there, never re-derived here).
-    record = {"name": name, "old_pubkey": old_pubkey, "new_pubkey": new_pubkey,
-              "issued_at": rotation_issued_at, "signature": rotation_signature}
-    reason = _rotation_verify_record(record)
-    if reason is not None:
-        raise HTTPException(status_code=400, detail=f"Rotation record refused: {reason}.")
+    for pub in (old_pubkey, new_pubkey):
+        why = _rotate_weak_reason(pub)
+        if why:
+            raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
+    # v2 certificate (cyberspace-name-rotate/v2): seq and prev_hash are
+    # signed. A v1 record (no seq / prev_hash) is refused on a v2 node.
+    import name_fork
+    try:
+        rotation_seq = int(form.get("rotation_seq") or "")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Rotation record refused: v2 certificate required (rotation_seq, rotation_prev_hash).")
+    rotation_prev_hash = (form.get("rotation_prev_hash") or "").strip().lower()
+    cert = {"v": name_fork.VERSION, "kind": name_fork.KIND,
+            "tag": name_fork.TAG.decode(), "name": name,
+            "old_pubkey": old_pubkey, "new_pubkey": new_pubkey,
+            "issued_at": rotation_issued_at, "seq": rotation_seq,
+            "prev_hash": rotation_prev_hash, "signature": rotation_signature}
+    if name_fork._norm_cert(cert) is None:
+        raise HTTPException(status_code=400, detail="Rotation record refused: v2 certificate does not verify (encoding, key, kind, or signature).")
     # 3-first: the new binding must be a live, self-certifying claim for the
     # NEW key under the same label, before the mirror looks anything up.
     try:
@@ -1379,10 +1420,6 @@ async def names_rotate(request: Request):
         # is CONTESTED — the local binding is not moved. Chain depth is
         # never a tiebreak. The verdict commits before the HTTP refusal
         # so fork evidence is not rolled back with the error.
-        import name_fork
-        cert = {"name": name, "old_pubkey": old_pubkey,
-                "new_pubkey": new_pubkey, "issued_at": rotation_issued_at,
-                "signature": rotation_signature}
         accepted_at = _now()
         with _db_lock, _db() as conn:
             verdict = name_fork.consider_rotation(conn, cert)
@@ -1400,6 +1437,8 @@ async def names_rotate(request: Request):
                     (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
         if verdict == "contested":
             raise HTTPException(status_code=409, detail="name contested")
+        if verdict == "rate-held":
+            raise HTTPException(status_code=429, detail="rotation rate bound: one hop per name per round")
         if verdict != "accepted":
             raise HTTPException(
                 status_code=400,
@@ -1409,6 +1448,25 @@ async def names_rotate(request: Request):
 
     import window_open
     return window_open.run_admission(_verify_rotate, _write_rotate)
+
+
+@router.get("/api/v1/names/{name}/head")
+def names_head(request: Request, name: str):
+    """v2 chain head for a pinned name: the seq and prev_hash the next
+    rotation certificate must sign. Contested names are 409."""
+    _social_read_belt(request, "names")
+    label = (name or "").strip().lower()
+    if not _valid_name_label(label):
+        raise HTTPException(status_code=404, detail="No such name.")
+    import name_fork
+    with _db_lock, _db() as conn:
+        if name_fork.is_contested(conn, label):
+            raise HTTPException(status_code=409, detail="name contested")
+        st = name_fork.current_state(conn, label)
+    if st is None:
+        raise HTTPException(status_code=404, detail="No pin for this name.")
+    return {"name": label, "pin": st[0], "seq": st[1], "head_hash": st[2],
+            "next_seq": st[1] + 1}
 
 
 @router.get("/api/v1/names/{name}/rotations")
@@ -1465,6 +1523,7 @@ def names_resolve(request: Request, name: str):
     import name_fork
     with _db_lock, _db() as conn:
         contested = name_fork.is_contested(conn, label)
+        stale = name_fork.is_pin_stale(conn, label)
         pin = name_fork.current_pin(conn, label)
         cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (label,))
         row = cur.fetchone()
@@ -1472,6 +1531,8 @@ def names_resolve(request: Request, name: str):
     # node accepted first. Winner determination is witness receipts only.
     if contested:
         raise HTTPException(status_code=409, detail="name contested")
+    if stale:
+        raise HTTPException(status_code=409, detail="name PIN-STALE")
     if row is None:
         raise HTTPException(status_code=404, detail="No such name.")
     if pin is not None and str(row[1]).lower() != pin:
@@ -1505,7 +1566,9 @@ def names_reach(request: Request, name: str):
     import name_fork
     with _db_lock, _db() as conn:
         if name_fork.is_contested(conn, label):
-            raise HTTPException(status_code=404, detail="No such name.")
+            raise HTTPException(status_code=409, detail="name contested")
+        if name_fork.is_pin_stale(conn, label):
+            raise HTTPException(status_code=409, detail="name PIN-STALE")
     with _db_lock, _db() as conn:
         row = conn.execute(
             "SELECT node_pubkey, reach, issued_at, expires_at, signature "

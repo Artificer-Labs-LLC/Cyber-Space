@@ -48,6 +48,7 @@ REQUIRED = frozenset({
     ("POST", "/fed/directory/delta"),
     ("POST", "/fed/gossip"),
     ("POST", "/fed/names/gossip"),
+    ("POST", "/fed/names/chain"),
 })
 
 _FED_PATH = re.compile(r"^/fed/[A-Za-z0-9_./-]+$")

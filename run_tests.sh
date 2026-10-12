@@ -48,7 +48,10 @@ TESTS=(
   "test_names_gossip_receive.py"
   "test_names_gossip_hardening.py"
   "test_fed_route_parity.py"
-  "test_name_fork_belt.py"
+  "test_pin_rotation_v2.py"
+  # fed/envelope.py self-test (RFC 8032 vector, kind binding). It uses a
+  # package-relative import, so it runs as a module.
+  "-m fed.envelope"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
@@ -65,7 +68,8 @@ fail=0
 failed_files=()
 
 for t in "${TESTS[@]}"; do
-  if "$PY" "$t" >/dev/null 2>&1; then
+  # shellcheck disable=SC2086  # "-m fed.envelope" must split
+  if (cd "$ROOT" && "$PY" $t) >/dev/null 2>&1; then
     echo "PASS: $t"
     pass=$((pass + 1))
   else

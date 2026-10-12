@@ -45,7 +45,8 @@ import core_serve  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
 import app as appmod  # noqa: E402
 import routes_social_serve as rss  # noqa: E402
-from rotate_name import _rotate_payload  # noqa: E402
+from rotate_name import _rotate_payload  # noqa: E402,F401
+import name_fork  # noqa: E402
 
 client = TestClient(appmod.app)
 PASS = FAIL = 0
@@ -86,13 +87,22 @@ def seed(name, priv):
     with core._db_lock, core._db() as conn:
         conn.execute("INSERT OR REPLACE INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) VALUES (?,?,?,?,?)",
                      (name, pub, B_ISSUED, B_EXPIRES, sig))
+        # v2: a rotation only moves an existing pin (claim-gate provenance).
+        name_fork.pin_initial(conn, name, pub, source="claim_gate", binding={
+            "name": name, "node_pubkey": pub, "issued_at": B_ISSUED,
+            "expires_at": B_EXPIRES, "signature": sig})
 
 
 def rotation(name, old_priv, new_pub, binding_sig):
     old_pub = pub_of(old_priv)
-    rsig = _ed.sign(_rotate_payload(name, old_pub, new_pub, ROT_ISSUED),
-                    bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
+    with core._db_lock, core._db() as conn:
+        st = name_fork.current_state(conn, name)
+    seq, prev = (st[1] + 1, st[2]) if st else (1, "00" * 32)
+    c = name_fork.mint_cert(name, bytes.fromhex(old_priv), new_pub, seq, prev,
+                            issued_at=ROT_ISSUED)
+    rsig = c["signature"]
     return {"name": name, "old_pubkey": old_pub, "new_pubkey": new_pub,
+            "rotation_seq": str(seq), "rotation_prev_hash": prev,
             "rotation_issued_at": ROT_ISSUED, "rotation_signature": rsig,
             "binding_issued_at": B_ISSUED, "binding_expires_at": B_EXPIRES,
             "binding_signature": binding_sig}
@@ -148,17 +158,29 @@ def _load_old_verifier():
 
 
 def restore_rotz2():
-    seed("rotz2", OLD)
+    """Rewind rotz2 between arms. name_pin_log is insert-only in
+    production; this scratch-DB rewind drops the two triggers, clears
+    the rows, and ensure_schema puts the triggers straight back."""
+    global vec
     with core._db_lock, core._db() as conn:
         conn.execute("DELETE FROM name_rotations WHERE name='rotz2'")
-        # Arm (a) moves the pin. Rewinding the binding has to rewind the
-        # pin log too, or the next arm is refused as non-contiguous.
-        for table in ("name_pins", "name_pin_log", "name_fork_certs",
-                      "name_fork_overflow", "name_contested"):
-            try:
-                conn.execute(f"DELETE FROM {table} WHERE name='rotz2'")
-            except Exception:
-                pass
+        conn.execute("DROP TRIGGER IF EXISTS name_pin_log_no_update")
+        conn.execute("DROP TRIGGER IF EXISTS name_pin_log_no_delete")
+        for table in ("name_pins", "name_pin_log", "name_fork_evidence",
+                      "name_fork_overflow", "name_contested",
+                      "name_rotation_round"):
+            conn.execute(f"DELETE FROM {table} WHERE name='rotz2'")
+        name_fork.ensure_schema(conn)
+    seed("rotz2", OLD)
+    vec = rotation("rotz2", OLD, ZERO_PUB, ZERO_SIG)
+
+
+def state_arm():
+    return state("rotz2")
+
+
+def post_arm():
+    return client.post("/api/v1/names/rotate", data=vec)
 
 
 old_rev, old_src = _load_old_verifier()
@@ -172,30 +194,35 @@ if old_src:
     spec.loader.exec_module(old)
     strict = core._fed_ed25519
     real_weak = rss._rotate_weak_reason
+    real_keys_ok = name_fork._keys_ok
     core._fed_ed25519 = old
     try:
         # (a) the hole still reproduces once weak_reason is stubbed out
         rss._rotate_weak_reason = lambda pub: None
+        name_fork._keys_ok = lambda rec: True
         reset_rate()
         restore_rotz2()
-        r_a = client.post("/api/v1/names/rotate", data=vec)
-        after_a = state("rotz2")
+        r_a = post_arm()
+        after_a = state_arm()
         # (b) real path: same loose verifier, weak_reason left in place
         rss._rotate_weak_reason = real_weak
+        name_fork._keys_ok = real_keys_ok
         reset_rate()
         restore_rotz2()
-        before_b = state("rotz2")
-        r_b = client.post("/api/v1/names/rotate", data=vec)
-        after_b = state("rotz2")
+        before_b = state_arm()
+        r_b = post_arm()
+        after_b = state_arm()
         # Mutant: the weak_reason call on rotate is gone. Arm (b) must fail.
         rss._rotate_weak_reason = lambda pub: None
+        name_fork._keys_ok = lambda rec: True
         reset_rate()
         restore_rotz2()
-        r_m = client.post("/api/v1/names/rotate", data=vec)
-        after_m = state("rotz2")
+        r_m = post_arm()
+        after_m = state_arm()
     finally:
         core._fed_ed25519 = strict
         rss._rotate_weak_reason = real_weak
+        name_fork._keys_ok = real_keys_ok
     restore_rotz2()
     print(f"  info old verifier {old_rev}: arm (a) {r_a.status_code}, arm (b) {r_b.status_code}, mutant {r_m.status_code}")
     check("(a) old verifier with weak_reason stubbed admits the zero key",

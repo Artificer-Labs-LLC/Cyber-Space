@@ -512,6 +512,11 @@ def fed_names_gossip(env: dict, request: Request = None):
         raise HTTPException(
             status_code=400,
             detail=f"bindings exceed {NAMES_GOSSIP_RECV_CAP}")
+    rotations = body.get("rotations", [])
+    if not isinstance(rotations, list):
+        raise HTTPException(status_code=400, detail="rotations must be a list")
+    if len(rotations) > 128:
+        raise HTTPException(status_code=400, detail="rotations exceed 128")
     # Before the per-peer bucket and before any ingest. A replay writes
     # nothing and does not spend a rate token.
     if _gossip_is_replay(sender_pub, env.get("sig", "")):
@@ -522,10 +527,18 @@ def fed_names_gossip(env: dict, request: Request = None):
     outcomes = []
     new_inserts = 0
     verify_box = [0]
+    # Rotation certificates first (pin-rotation v2). Each cert is charged
+    # against the same pre-verify budgets before _norm_cert, outside the
+    # DB lock; the pre-pass stops at the first 429.
+    from core import ingest_rotation_certs
+    rot = ingest_rotation_certs(rotations, sender_pub, verify_box,
+                                round_bindings=bindings)
+    if rotations and rot["stopped"] and rot["charged"] == 0:
+        raise HTTPException(status_code=429, detail="rotation budget spent")
     for binding in bindings:
         outcome = ingest_gossiped_binding(
             binding, allow_new=_allow_new_name(new_inserts),
-            verify_box=verify_box)
+            verify_box=verify_box, sender_pub=sender_pub)
         outcomes.append(outcome)
         if outcome == "inserted":
             inserted += 1
@@ -540,7 +553,49 @@ def fed_names_gossip(env: dict, request: Request = None):
             dropped += 1
     return {"ok": True, "inserted": inserted, "replaced": replaced,
             "kept": kept, "dropped": dropped, "conflict": conflict,
-            "outcomes": outcomes}
+            "outcomes": outcomes,
+            "accepted_rotations": len(rot["accepted"]),
+            "contested_names": sorted(rot["contested"]),
+            "rotation_outcomes": rot["outcomes"],
+            "rotations_charged": rot["charged"]}
+
+
+@router.post("/fed/names/chain")
+def fed_names_chain(env: dict, request: Request = None):
+    """Catch-up pull for the v2 rotation chain of ONE name. Same cheap
+    gates as /fed/names/gossip: known and allowlisted sender before the
+    source bucket, then envelope verify (kind names-chain), addressed to
+    this node. Returns the origin hash and every accepted v2 cert of the
+    current pin generation. The puller re-verifies every link itself and
+    accepts the path whole or not at all; nothing here is trusted."""
+    sender_pub = _gossip_claimed_sender(env)
+    if sender_pub is None:
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    refusal = _gossip_pre_verify_gate(sender_pub)
+    if refusal == "unknown":
+        raise HTTPException(status_code=404, detail="unknown peer")
+    if refusal == "unlisted":
+        raise HTTPException(status_code=403, detail="peer not on operator allowlist")
+    _charge_fed_source(request)
+    if not _fed_env.verify_envelope(env, expect_kind="names-chain"):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    if env.get("recipient") != _NODE_PUB:
+        raise HTTPException(status_code=400, detail="not addressed to this node")
+    body = env.get("body")
+    if not isinstance(body, dict) or body.get("from_node_pub") != sender_pub:
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    _check_rate(f"fednameschain:{sender_pub}")
+    name = str(body.get("name", "")).strip().lower()
+    if not name or len(name) > 63:
+        raise HTTPException(status_code=400, detail="invalid name")
+    import name_fork
+    with _db_lock, _db() as conn:
+        if name_fork.is_contested(conn, name):
+            raise HTTPException(status_code=409, detail="name contested")
+        chain = name_fork.chain_for(conn, name)
+    if chain is None:
+        raise HTTPException(status_code=404, detail="no pin for that name")
+    return chain
 
 
 DIR_SYNC_ROSTER_CAP = 128

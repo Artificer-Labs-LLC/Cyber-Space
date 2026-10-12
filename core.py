@@ -1838,6 +1838,29 @@ def _gossip_checkvalid(name, node_pubkey, issued_at, expires_at,
                                 signature)
 
 
+def _binding_pin_gate_conn(conn, name, node_pubkey, sender_pub):
+    import name_fork
+    name_fork.ensure_schema(conn)
+    if name_fork.is_contested(conn, name):
+        return "contested"
+    if name_fork.is_pin_stale(conn, name):
+        return "dropped-pin-stale"
+    pin = name_fork.current_pin(conn, name)
+    if pin is not None and node_pubkey != pin:
+        return "dropped-pin"
+    if pin is None and not name_fork.sender_may_introduce(sender_pub):
+        return "dropped-unpinned"
+    return None
+
+
+def _binding_pin_gate(name, node_pubkey, sender_pub):
+    """Item 12 (core.py:1734): pin, contested and unpinned refusals run
+    BEFORE the verify budget and checkvalid. Patchable: the belt's
+    gate-after-verify mutant returns None here."""
+    with _db_lock, _db() as conn:
+        return _binding_pin_gate_conn(conn, name, node_pubkey, sender_pub)
+
+
 def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
                             verify_box=None,
                             sender_pub: str | None = None) -> str:
@@ -1905,6 +1928,13 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
         time_drop = _gossip_time_drop(issued_dt, expires_dt, now_dt)
         if time_drop:
             return time_drop
+        # Item 12: a gossiped binding always carries its sender, and the
+        # pin / contested / unpinned gates run before any verify.
+        if sender_pub is None:
+            return "dropped-no-sender"
+        pre = _binding_pin_gate(name, node_pubkey, sender_pub)
+        if pre is not None:
+            return pre
         signed = _name_claim_payload(name, node_pubkey, issued_at, expires_at)
         dedupe_key = _gossip_signed_dedupe_key(signed, signature)
         if _gossip_dedupe_hit(dedupe_key):
@@ -1936,15 +1966,12 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
             # pass no sender keep the historical merge — they are not a
             # gossip envelope. A contested name never gains a winner here.
             import name_fork
-            name_fork.ensure_schema(conn)
-            if name_fork.is_contested(conn, name):
-                return "contested"
+            # Re-checked under the lock: the state may have moved since
+            # the pre-verify gate.
+            again = _binding_pin_gate_conn(conn, name, node_pubkey, sender_pub)
+            if again is not None:
+                return again
             pin = name_fork.current_pin(conn, name)
-            if pin is not None and node_pubkey != pin:
-                return "dropped-pin"
-            if (pin is None and sender_pub is not None
-                    and not name_fork.sender_may_introduce(sender_pub)):
-                return "dropped-unpinned"
             row = conn.execute(
                 "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
@@ -1957,12 +1984,18 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
                     return "dropped-peer-cap"
                 if not _name_registry_has_room(conn):
                     return "dropped-full"
+                if (pin is None and name_fork._pin_count(conn)
+                        >= name_fork.pin_cap()):
+                    return "dropped-full"
                 conn.execute(
                     "INSERT INTO name_bindings (name, node_pubkey, issued_at,"
                     " expires_at, signature) VALUES (?,?,?,?,?)",
                     (name, node_pubkey, issued_at, expires_at, signature))
-                if sender_pub is not None and name_fork.sender_may_introduce(sender_pub):
-                    name_fork.pin_initial(conn, name, node_pubkey)
+                if pin is None:
+                    # Provenance: an OOB-allowlisted relay of the exact
+                    # signed binding. Never a rotation.
+                    name_fork.pin_initial(conn, name, node_pubkey,
+                                          source="oob_allowlist", binding=new)
                 return "inserted"
             # Bulwark MEDIUM (ART-29): the old row loads WITH expires_at and
             # goes through _old_binding_beaten — the route's conflict rule —
@@ -2350,38 +2383,104 @@ def _names_gossip_rotations(names: list, include_unbound: bool = False) -> list:
         wanted = list(names)
         if include_unbound:
             extra = [r[0] for r in conn.execute(
-                "SELECT name FROM name_fork_certs").fetchall()]
+                "SELECT DISTINCT name FROM name_fork_evidence").fetchall()]
             extra += [r[0] for r in conn.execute(
                 "SELECT name FROM name_contested").fetchall()]
             wanted = list(dict.fromkeys(wanted + extra))
         return name_fork.gossip_rotations(conn, wanted)[:NAMES_GOSSIP_BATCH_CAP]
 
 
-def ingest_names_gossip(body: dict, sender_pub: str) -> dict:
-    """Receive half of name gossip: rotation certificates first, then
-    bindings. One accepted rotation per name in this call (one round).
-    Chain depth is never a tiebreak. Overflow fork certs charge the
-    per-peer namefork bucket (F4) outside the database lock."""
+NAMES_GOSSIP_ROTATION_CAP = 128
+
+
+def _charge_one_rotation(sender_pub: str, verify_box) -> bool:
+    """Item 6: one rotation cert against 7f7448e's pre-verify budgets
+    (NAMES_GOSSIP_VERIFY_PER_CALL and the global 60s budget) and the
+    per-peer namefork bucket. False stops the pre-pass (a 429)."""
+    if not _admit_binding_verify(verify_box):
+        return False
+    try:
+        _check_rate(f"namefork:{str(sender_pub).lower()}", limit=32,
+                    window=60.0)
+    except HTTPException:
+        return False
+    return True
+
+
+def charge_rotation_certs(certs: list, sender_pub: str, verify_box):
+    """Charge every cert BEFORE _norm_cert, outside the DB lock, and stop
+    at the first 429. Returns (admitted certs, stopped). Patchable: the
+    belt's charge-after-norm mutant normalizes first."""
+    admitted = []
+    for raw in certs:
+        if not _charge_one_rotation(sender_pub, verify_box):
+            return admitted, True
+        admitted.append(raw)
+    return admitted, False
+
+
+def ingest_rotation_certs(certs: list, sender_pub: str, verify_box,
+                          round_bindings=None) -> dict:
+    """Rotation half of a names-gossip call: charge, then ingest under the
+    lock, then fire the bounded catch-up pulls at the sender."""
     import name_fork
-    if not isinstance(body, dict):
-        return {"ok": False}
-    rotations = body.get("rotations") or []
-    bindings = body.get("bindings") or []
-    if not isinstance(rotations, list) or not isinstance(bindings, list):
-        return {"ok": False}
+    admitted, stopped = charge_rotation_certs(certs, sender_pub, verify_box)
     with _db_lock, _db() as conn:
-        summary = name_fork.ingest_rotation_round(conn, rotations)
-        overflow_n = int(summary["overflow_n"])
-    for _ in range(overflow_n):
-        _check_rate(f"namefork:{str(sender_pub).lower()}", limit=32, window=60.0)
-    counts = {"ok": True, "inserted": 0, "kept": 0, "replaced": 0,
-              "conflict": 0, "contested": 0}
-    for binding in bindings:
-        outcome = ingest_gossiped_binding(binding, sender_pub=sender_pub)
-        counts[outcome] = counts.get(outcome, 0) + 1
-    counts["accepted_rotations"] = len(summary["accepted"])
-    counts["contested_names"] = sorted(summary["contested"])
-    return counts
+        summary = name_fork.ingest_rotation_round(
+            conn, admitted, sender_pub, round_bindings=round_bindings)
+    for pull in summary["pulls"]:
+        _spawn_chain_pull(pull["sender"], pull["name"])
+    summary["charged"] = len(admitted)
+    summary["stopped"] = stopped
+    return summary
+
+
+def _fetch_name_chain(node_url: str, name: str, peer_pub: str):
+    """POST /fed/names/chain on the sending peer. Signed envelope; the
+    reply is the peer's served chain for one name. None on any failure."""
+    body = {"from_node_pub": _NODE_PUB, "name": name}
+    env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, peer_pub, body,
+                                 kind="names-chain")
+    req = urllib.request.Request(
+        node_url + "/fed/names/chain", data=json.dumps(env).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with _peer_urlopen(req, timeout=8) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(_read_peer_bytes(resp).decode("utf-8"))
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def pull_name_chain(sender_pub: str, name: str, fetch=None) -> str:
+    """One catch-up pull, aimed only at the node that sent the unknown
+    prev_hash. The fetched path is accepted or refused whole."""
+    import name_fork
+    fetch = fetch or _fetch_name_chain
+    with _db_lock, _db() as conn:
+        row = conn.execute(
+            "SELECT node_url FROM peers WHERE node_pub=? AND retired_at=''",
+            (str(sender_pub).lower(),)).fetchone()
+        head = name_fork.head_hash(conn, name)
+    if row is None or head is None:
+        return "no-peer"
+    chain = fetch(row[0], name, str(sender_pub).lower())
+    if not isinstance(chain, dict):
+        return "no-chain"
+    path = name_fork.path_after(chain, head)
+    with _db_lock, _db() as conn:
+        verdict = name_fork.accept_catchup(conn, name, path[:NAMES_GOSSIP_ROTATION_CAP],
+                                           sender_pub)
+        if verdict == "accepted":
+            name_fork.drain_pending(conn, name, sender_pub)
+    return verdict
+
+
+def _spawn_chain_pull(sender_pub: str, name: str) -> None:
+    threading.Thread(target=pull_name_chain, args=(sender_pub, name),
+                     daemon=True).start()
 
 
 def _names_gossip_out() -> int:
@@ -2419,6 +2518,13 @@ def _names_gossip_out() -> int:
             {"name": r["name"], "node_pubkey": r["node_pubkey"],
              "issued_at": r["issued_at"], "expires_at": r["expires_at"],
              "signature": r["signature"]})
+    # Item 12: contested names are not gossiped as bindings. Their fork
+    # evidence still travels (below) so peers can see the split.
+    import name_fork
+    with _db_lock, _db() as conn:
+        name_fork.ensure_schema(conn)
+        payloads = [p for p in payloads
+                    if not name_fork.is_contested(conn, p["name"])]
     payloads = payloads[:NAMES_GOSSIP_BATCH_CAP]
     # F1: rotation certificates travel with the bindings. A contested name
     # that never received a winning binding still repeats its fork certs,

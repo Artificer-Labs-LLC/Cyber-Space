@@ -889,6 +889,11 @@ def init_db() -> None:
         import name_fork
         name_fork.ensure_schema(conn)
         name_fork.ensure_genesis_pin(conn)
+        # Startup guard (pin provenance): every live pin must resolve to
+        # the exact signed binding that created it. A failing pin becomes
+        # UNPINNED through an appended log entry; nothing is deleted.
+        for _n, _why in name_fork.startup_guard(conn):
+            print(f"[name-pin guard] refused pin {_n!r}: {_why}")
 
 def _seed_tone_vocab(conn) -> None:
     """Tone tags build item 2: seed the node vocabulary (docs/TONE_TAGS.md).

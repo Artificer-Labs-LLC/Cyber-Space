@@ -25,6 +25,22 @@ from fastapi.testclient import TestClient  # noqa: E402
 import core  # noqa: E402
 import core_serve  # noqa: E402
 core.init_db()
+
+# pin-rotation v2 (ART-42): name introduction is belted in
+# test_pin_rotation_v2.py. This belt exercises the gossip gates, so any
+# named sender may introduce a name here, and direct in-process calls
+# carry a fixed test sender (a gossiped binding always has one).
+import name_fork  # noqa: E402
+name_fork.sender_may_introduce = lambda s: s is not None
+_real_ingest_gossiped_binding = core.ingest_gossiped_binding
+
+
+def _ingest_with_sender(binding, *a, **k):
+    k.setdefault("sender_pub", "ee" * 32)
+    return _real_ingest_gossiped_binding(binding, *a, **k)
+
+
+core.ingest_gossiped_binding = _ingest_with_sender
 import app as appmod  # noqa: E402
 import federation  # noqa: E402
 import window_open as wo  # noqa: E402
@@ -119,7 +135,9 @@ def gossip_env(sender_priv, sender_pub, bindings, recipient=None, from_pub=None,
                ts=None):
     global _next_env_ts
     if ts is None:
-        _next_env_ts += 1
+        # Same wall-clock flake fix as the hardening belt: never let a
+        # minted envelope fall outside MAX_SKEW_SEC on a slow run.
+        _next_env_ts = max(_next_env_ts + 1, int(time.time()) - 60)
         ts = _next_env_ts
     body = {
         "from_node_pub": sender_pub if from_pub is None else from_pub,

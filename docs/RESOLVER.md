@@ -171,18 +171,51 @@ fail-closed by construction. The design note permits this.)
 - `.cyberspace` stays sacred in prose until the daemon runs somewhere
   real — the v0 note is a plan, not a place.
 
-## Fork rule
+## Fork rule (pin-rotation v2)
 
 The fork rule buys per-node consistency. It does not buy mirror agreement after a fork. It does not recover a stolen key.
 
-A second valid rotation certificate for the same (name, prior key) is
-stored as fork evidence and the name is marked CONTESTED. Resolve refuses
-a contested name and does not serve the local winner. Winner determination
-is by witness receipts only. Chain depth is never a tiebreak. Cross-node
-first-seen is never a tiebreak.
+Pins. A pin is created only by a binding that passed the claim gates or
+by a binding relayed from an out-of-band allowlisted node
+(`CYBERNET_OOB_NODE_PINS`, ships empty). A rotation certificate never
+creates a pin and never introduces a name: a certificate for a name this
+node has no pin for is kept only as capped, expiring evidence. Pins are
+permanent: a pin moves only by a rotation signed by the pinned key, and it
+dies only by a logged local unpin. At startup every pin is re-checked
+against the exact signed binding it came from; a pin that fails becomes
+unpinned through an appended log entry (the pin log is insert-only).
 
-Bootstrap does not pick a first-seen winner when more than one certificate
-for the same prior key arrives with the name. At most one rotation is
-accepted per name per gossip round. Anyone holding the pinned key can
-freeze the name by signing two certificates for that prior key until a
-witness-receipt rule exists.
+Rotation certificates (v2) are signed over a domain tag
+(`cyberspace-name-rotate/v2`), length-prefixed fields, a `seq`, and
+`prev_hash` = H(tag || signed fields || sig) of the previous link. The
+first link's `prev_hash` is the hash of the pinning binding.
+
+Two verified certificates on the same (name, prev_hash) with different
+new keys mark the name CONTESTED. Resolve refuses a contested name (409)
+and does not serve the local winner; `/names/{name}/reach` is also 409,
+and gossip-out stops repeating the name's binding (its fork evidence still
+travels). A certificate whose `prev_hash` this node does not know is
+PENDING, never CONTESTED; one catch-up pull goes to the node that sent it,
+and the fetched path is accepted only whole and only if it links to this
+node's own head. Chain depth is never a tiebreak. Cross-node first-seen is
+never a tiebreak.
+
+**A contested name has no recovery path in this build.** Once a name is
+CONTESTED on a node, that node will not serve it, will not accept a
+rotation for it, and will not accept a new claim for it, for anyone,
+including the rightful holder. Anyone holding the pinned key can freeze
+the name this way by signing two certificates on one link. Holders should
+treat key compromise as permanent loss of the name on every node that saw
+the fork. Contested-name recovery (witness-receipt determination) is a
+separate open board item and is not part of this fix.
+
+PIN-STALE. When a pinned name's binding has expired, the day-90 release
+has passed, and a claim arrives under a different key with no rotation
+certificate, the name is marked PIN-STALE (local and logged) and neither
+key is served. PIN-STALE never unpins.
+
+Round limit. At most one rotation is accepted per name per round, and the
+round is a persisted wall-clock window (`CYBERNET_NAME_ROTATION_ROUND_SEC`,
+default the announce interval). This is a RATE BOUND on hops, not a fork
+gate: it slows a fast chain so fork evidence can gossip. Fork safety comes
+from the prev_hash chain.

@@ -340,7 +340,20 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     payload = (b"name-claim|" + label.encode() + b"|" + new_pub.encode()
                + b"|" + issued_at.encode() + b"|" + expires_at.encode())
     sig = sign(payload, new_priv, bytes.fromhex(new_pub)).hex().lower()
+    # pin-rotation v2: the mirror only takes a cyberspace-name-rotate/v2
+    # certificate that signs the mirror's current seq and prev_hash. The
+    # old key is held here (submit happens before promote), so sign it now.
+    head = _get_json(mirror_url.rstrip("/") + f"/api/v1/names/{label}/head")
+    if not head or _normalize(str(head.get("pin", ""))) != old_pub:
+        return False, ("mirror has no pin for this name under the old key "
+                       "(or it is contested) — nothing was sent")
+    import name_fork as _nf
+    v2 = _nf.mint_cert(label, old_priv, new_pub, int(head["next_seq"]),
+                       str(head["head_hash"]), issued_at=record["issued_at"])
+    record = dict(record, signature=v2["signature"])
     fields = {"name": label, "old_pubkey": old_pub, "new_pubkey": new_pub,
+              "rotation_seq": str(v2["seq"]),
+              "rotation_prev_hash": v2["prev_hash"],
               "rotation_issued_at": record["issued_at"],
               "rotation_signature": record["signature"],
               "binding_issued_at": issued_at,

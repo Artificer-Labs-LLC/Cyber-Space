@@ -44,6 +44,22 @@ from fastapi.testclient import TestClient  # noqa: E402
 import core  # noqa: E402
 import core_serve  # noqa: E402
 core.init_db()
+
+# pin-rotation v2 (ART-42): name introduction is belted in
+# test_pin_rotation_v2.py. This belt exercises the gossip gates, so any
+# named sender may introduce a name here, and direct in-process calls
+# carry a fixed test sender (a gossiped binding always has one).
+import name_fork  # noqa: E402
+name_fork.sender_may_introduce = lambda s: s is not None
+_real_ingest_gossiped_binding = core.ingest_gossiped_binding
+
+
+def _ingest_with_sender(binding, *a, **k):
+    k.setdefault("sender_pub", "ee" * 32)
+    return _real_ingest_gossiped_binding(binding, *a, **k)
+
+
+core.ingest_gossiped_binding = _ingest_with_sender
 import app as appmod  # noqa: E402
 import federation  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
@@ -134,7 +150,12 @@ def binding_row(name):
 def gossip_env(sender_priv, sender_pub, bindings, ts=None):
     global _next_env_ts
     if ts is None:
-        _next_env_ts += 1
+        # Flake fix (Examiner 19/1 vs 67/0 on 7f7448e): the counter used to
+        # start at now-120 and step by 1, so on a slow or loaded run an
+        # envelope minted a few minutes in was older than MAX_SKEW_SEC and
+        # the route answered 400 "invalid envelope". Track wall time and
+        # stay strictly increasing so every envelope is unique and fresh.
+        _next_env_ts = max(_next_env_ts + 1, int(time.time()) - 60)
         ts = _next_env_ts
     body = {"from_node_pub": sender_pub, "bindings": bindings}
     return _fed_env.make_envelope(sender_priv, sender_pub, core._NODE_PUB, body, ts=ts)

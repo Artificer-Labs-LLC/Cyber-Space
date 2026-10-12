@@ -358,18 +358,29 @@ r = claimer.post("/api/v1/names/claim", data={
     "name": "weakrot", "node_pubkey": old_pub, "issued_at": ISSUED,
     "expires_at": EXPIRES, "signature": old_sig})
 check("holder claim for the rotate belt is 200", r.status_code == 200, r.text[:200])
+
+
+def v2_rotation(name, old_priv_hex, new_pub):
+    """pin-rotation v2: the cert signs seq and prev_hash of the local head."""
+    import name_fork
+    with core._db_lock, core._db() as conn:
+        st = name_fork.current_state(conn, name)
+    seq, prev = (st[1] + 1, st[2]) if st else (1, "00" * 32)
+    c = name_fork.mint_cert(name, bytes.fromhex(old_priv_hex), new_pub, seq,
+                            prev, issued_at=ISSUED)
+    return c["signature"], {"rotation_seq": str(seq), "rotation_prev_hash": prev}
+
 scalar_n = 0x2468ACE
 npub = mixed_pub(scalar_n)
 nmsg = core._name_claim_payload("weakrot", npub, ISSUED, EXPIRES)
 nsig = forge_sig(scalar_n, npub, nmsg).hex()
-rsig = _ed.sign(_rotate_payload("weakrot", old_pub, npub, ISSUED),
-                bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
+rsig, rot_v2 = v2_rotation("weakrot", old_priv, npub)
 before = bindings("weakrot")
 r = claimer.post("/api/v1/names/rotate", data={
     "name": "weakrot", "old_pubkey": old_pub, "new_pubkey": npub,
     "rotation_issued_at": ISSUED, "rotation_signature": rsig,
     "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
-    "binding_signature": nsig})
+    "binding_signature": nsig, **rot_v2})
 check("(d) mixed-order rotate is 400", r.status_code == 400, (r.status_code, r.text[:240]))
 check("(d) refused rotate wrote no binding change and no rotation row",
       bindings("weakrot") == before == (old_pub, 0), bindings("weakrot"))
@@ -383,13 +394,12 @@ claimer.post("/api/v1/names/claim", data={
     "expires_at": EXPIRES, "signature": hold_sig})
 strong_nsig = _ed.sign(core._name_claim_payload("strongrot", new_pub, ISSUED, EXPIRES),
                        bytes.fromhex(new_priv), bytes.fromhex(new_pub)).hex()
-strong_rsig = _ed.sign(_rotate_payload("strongrot", old_pub, new_pub, ISSUED),
-                       bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
+strong_rsig, strong_v2 = v2_rotation("strongrot", old_priv, new_pub)
 r = claimer.post("/api/v1/names/rotate", data={
     "name": "strongrot", "old_pubkey": old_pub, "new_pubkey": new_pub,
     "rotation_issued_at": ISSUED, "rotation_signature": strong_rsig,
     "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
-    "binding_signature": strong_nsig})
+    "binding_signature": strong_nsig, **strong_v2})
 check("(d) strong rotate is still accepted",
       r.status_code == 200 and bindings("strongrot")[0] == new_pub, (r.status_code, r.text[:200]))
 
@@ -611,16 +621,20 @@ record_mutant("signature checked after write",
 
 # 3. weak_reason skipped on rotate
 real_rot = rss._rotate_weak_reason
+import name_fork as _nf_mut
+real_keys_ok = _nf_mut._keys_ok
 rss._rotate_weak_reason = lambda pub: None
+_nf_mut._keys_ok = lambda rec: True  # v2: _norm_cert also refuses weak keys
 try:
     r = claimer.post("/api/v1/names/rotate", data={
         "name": "weakrot", "old_pubkey": old_pub, "new_pubkey": npub,
         "rotation_issued_at": ISSUED, "rotation_signature": rsig,
         "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
-        "binding_signature": nsig})
+        "binding_signature": nsig, **rot_v2})
     mutant_rot = r.status_code == 200 and bindings("weakrot") == (npub, 1)
 finally:
     rss._rotate_weak_reason = real_rot
+    _nf_mut._keys_ok = real_keys_ok
 record_mutant("weak_reason skipped on rotate",
               "mixed-order rotate is 400 and writes nothing",
               True, mutant_rot)
