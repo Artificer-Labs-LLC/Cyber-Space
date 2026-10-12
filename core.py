@@ -1518,7 +1518,8 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             # and speaks federation (liveness only; the ping envelope is
             # the master identity, not the name key). Then the claim
             # itself re-fetched from the address: the node must serve
-            # the SAME name key with a valid, unexpired signature. An
+            # the SAME name and name key with a valid, unexpired
+            # signature. An
             # address that cannot answer for its name is not the name's
             # home.
             ping = _resolve_peer_get_json(node_url + "/fed/ping")
@@ -1529,6 +1530,14 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             if not isinstance(live, dict):
                 return None
             if str(live.get("node_pubkey", "")).lower() != node_pubkey:
+                return None
+            # The live row must answer for THIS name: verification below
+            # runs over the served name itself, so without this pin a
+            # node holding two claims under one key could serve the
+            # OTHER name's binding at this label's URL and pass — the
+            # signature is valid, just for a different name (the step-5
+            # descriptor cross-name case, one step later).
+            if str(live.get("name", "")).lower() != label:
                 return None
             if not _name_binding_verify(
                     str(live.get("name", "")).lower(), node_pubkey,

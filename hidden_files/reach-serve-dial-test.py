@@ -168,12 +168,22 @@ def _rdesc(tamper=False):
     return d
 
 
+def _cross_binding():
+    # A binding for a DIFFERENT label, signed by the SAME name key
+    # (valid signature, live) — the step-6 cross-name probe.
+    sig = _ed.sign(core._name_claim_payload("dialbeltother", _name_pub,
+                                            ISSUED, LIVE),
+                   _name_seed, bytes.fromhex(_name_pub)).hex()
+    return {"name": "dialbeltother", "node_pubkey": _name_pub,
+            "issued_at": ISSUED, "expires_at": LIVE, "signature": sig}
+
+
 def _fake_factory(mode):
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester", {"pong": True})
     hits = {"directory": 0, "reach": 0}
     binding = _rbinding()
     desc = {"descriptor": _rdesc(), "bad-sig": _rdesc(tamper=True),
-            "absent": None}[mode]
+            "absent": None, "cross-name-live": _rdesc()}[mode]
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
@@ -187,7 +197,8 @@ def _fake_factory(mode):
         if url in (NODE + "/fed/ping", DESC_NODE + "/fed/ping"):
             return ping
         if url in (NODE + "/api/v1/names/" + RLABEL, DESC_NODE + "/api/v1/names/" + RLABEL):
-            return dict(_rbinding())
+            return dict(_cross_binding()) if mode == "cross-name-live" \
+                else dict(_rbinding())
         return None
     return fake, hits
 
@@ -210,6 +221,17 @@ def part_b():
                   got)
             check(f"{mode}: directory consulted {expect_dir_hits}x",
                   hits["directory"] == expect_dir_hits, hits)
+        # Step 6 cross-name: the node answers the label's URL with a
+        # binding for a DIFFERENT name under the same key (valid
+        # signature, live). Verification runs over the served name, so
+        # without a name pin this resolved — it must read as silence.
+        fake, hits = _fake_factory("cross-name-live")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("cross-name-live: step 6 refuses the other name's binding",
+              got is None, got)
     finally:
         core._resolve_get_json = real
         core._resolve_peer_get_json = real_peer
