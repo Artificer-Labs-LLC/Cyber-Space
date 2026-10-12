@@ -303,6 +303,30 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def _other_owner_response(self, txid=0x42):
+        """Valid question for node.cyberspace, answer owned by another name."""
+        resp = self._valid_response(txid)
+        q_end = 12 + len(b"\x04node\x0acyberspace\x00") + 4
+        head, tail = resp[:q_end], resp[q_end:]
+        self.assertEqual(tail[:2], b"\xc0\x0c")  # daemon pointer to question
+        other = b"\x05other\x0acyberspace\x00"
+        return head + other + tail[2:]
+
+    def test_parse_response_answer_owned_by_other_name_raises(self):
+        """Right question, but the A record belongs to another name:
+        its address must not be trusted for the asked name."""
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(
+                self._other_owner_response(), 0x42, "node.cyberspace", 1
+            )
+
+    def test_resolve_answer_owned_by_other_name_raises(self):
+        server = _tcp_server(
+            lambda q: self._other_owner_response(q["id"])
+        )
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_parse_response_different_qtype_raises_resolve_error(self):
         with self.assertRaises(client.ResolveError):
             client._parse_response(

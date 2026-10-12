@@ -145,6 +145,13 @@ def _parse_response(
     When qname/qtype are given (resolve() always gives both), the
     echoed question must match them exactly (name compared in the
     client's normalized lower-case form).
+
+    The same binding applies to each answer that would be trusted
+    (class IN, A/AAAA): its owner name must be the asked name. The
+    daemon builds every answer with a pointer back to the question
+    name, so a collected record owned by another name never came
+    from the daemon's verified answer for this question — trusting
+    it would let a correct question carry a stranger's address.
     """
     if len(data) < 12:
         raise ResolveError("short response")
@@ -177,7 +184,7 @@ def _parse_response(
                 raise ResolveError("response answers a different question")
         answers: list[tuple[int, bytes]] = []
         for _ in range(ancount):
-            _, off = _read_name(data, off)
+            owner, off = _read_name(data, off)
             if off + 10 > len(data):
                 raise ResolveError("truncated answer")
             rtype, rclass, _ttl, rdlen = struct.unpack_from(">HHIH", data, off)
@@ -187,6 +194,10 @@ def _parse_response(
             rdata = data[off : off + rdlen]
             off += rdlen
             if rclass == 1 and rtype in (QTYPE_A, QTYPE_AAAA):
+                if qname is not None and owner.lower() != qname:
+                    raise ResolveError(
+                        "response answer owned by a different name"
+                    )
                 answers.append((rtype, rdata))
     except (ValueError, struct.error) as exc:
         raise ResolveError(f"malformed response: {exc}") from exc
