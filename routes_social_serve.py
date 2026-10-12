@@ -18,6 +18,9 @@ from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX
 
 router = APIRouter()
 
+# Q1 fix: claim freshness window (24h) — claims must be signed fresh.
+NAME_CLAIM_FRESHNESS = timedelta(hours=24)
+
 from routes_social import _social_read_belt
 from rotate_name import verify_rotation as _rotation_verify_record
 
