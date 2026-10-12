@@ -57,9 +57,13 @@ Config (environment, bad values degrade to silence, never to a lie):
                            entry rides on the relay strategy, so with
                            no usable relay it is silently omitted by
                            _reach_build, and a bad epoch_len silently
-                           falls back to the frozen default; run()
-                           warns loudly on stderr at startup for both
-                           (see _rendezvous_warnings)
+                           falls back to the frozen default; an
+                           epoch_len set while rendezvous is off is
+                           held under but never advertised, so dialers
+                           deriving with the default never meet the
+                           points; run() warns loudly on stderr at
+                           startup for all three (see
+                           _rendezvous_warnings)
   CYBERNET_REACH_TTL       descriptor lifetime seconds (default 86400)
                            — set but not an integer -> _reach_build
                            silently falls back to 86400, and an integer
@@ -296,28 +300,49 @@ def _no_reach_warnings() -> list[str]:
 def _rendezvous_warnings() -> list[str]:
     """Loud rendezvous config mistakes, or []. Rendezvous is enabled
     only by exactly CYBERNET_RENDEZVOUS=1 (unset and "0" are silent —
-    off by choice). Three set-but-ineffective cases core._reach_build
-    otherwise hides: a value other than "1" (a "true"/"yes" the
-    operator believes enabled it); "1" with no usable relay strategy
-    (the descriptor entry rides on the relay strategy, so it is
-    omitted and no dialer ever probes the derived points); and a set
+    off by choice, unless an epoch_len is also set; see below). Four
+    set-but-ineffective cases core._reach_build otherwise hides: a
+    value other than "1" (a "true"/"yes" the operator believes
+    enabled it); "1" with no usable relay strategy (the descriptor
+    entry rides on the relay strategy, so it is omitted and no dialer
+    ever probes the derived points); a set
     CYBERNET_RENDEZVOUS_EPOCH_LEN that is not an integer in bounds
     (descriptor and hold-open both fall back to the frozen default, so
-    the operator's custom epoch silently never takes effect). Never
-    prints secret VALUES, only which var and why."""
+    the operator's custom epoch silently never takes effect); and a
+    set CYBERNET_RENDEZVOUS_EPOCH_LEN while rendezvous is NOT enabled
+    (the hold-open derives its points under it unconditionally, but
+    the descriptor never advertises it, so a dialer deriving with
+    the frozen default never meets the held points). Never prints
+    secret VALUES, only which var and why."""
     raw = os.environ.get("CYBERNET_RENDEZVOUS", "").strip()
-    if not raw or raw == "0":
-        return []
+    epoch_raw = os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "").strip()
     if raw != "1":
-        return ["CYBERNET_RENDEZVOUS is set but is not '1' — rendezvous "
-                "is NOT enabled (only exactly '1' enables it)"]
-    problems: list[str] = []
+        problems: list[str] = []
+        if raw and raw != "0":
+            problems.append(
+                "CYBERNET_RENDEZVOUS is set but is not '1' — rendezvous "
+                "is NOT enabled (only exactly '1' enables it)")
+        if epoch_raw:
+            # The hold-open derives its points under this value
+            # unconditionally (hold_open._rendezvous_epoch_len), but
+            # _reach_build advertises it only when rendezvous is
+            # enabled — set while off, a custom epoch is held under
+            # yet never advertised, so a dialer deriving with the
+            # frozen default never meets the held points.
+            problems.append(
+                "CYBERNET_RENDEZVOUS_EPOCH_LEN is set but rendezvous "
+                "is not enabled — the hold-open will derive points "
+                "under it, but it will NOT be advertised, so dialers "
+                f"deriving with the frozen default "
+                f"{rendezvous.EPOCH_LEN_DEFAULT} will not meet them "
+                "(set CYBERNET_RENDEZVOUS=1 to advertise it)")
+        return problems
+    problems = []
     if not _relay_strategy_present():
         problems.append(
             "CYBERNET_RENDEZVOUS=1 but no usable relay strategy — "
             "rendezvous will not be advertised (the descriptor entry "
             "rides on the relay strategy)")
-    epoch_raw = os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "").strip()
     if epoch_raw:
         try:
             epoch_ok = rendezvous._epoch_len_ok(int(epoch_raw))

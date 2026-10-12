@@ -10,7 +10,10 @@ that is out of bounds, believes derived-point rendezvous is live when
 it is not (or not as configured). _rendezvous_warnings names each
 mistake at startup: unset and "0" are silent (off by choice), a valid
 "1" with a usable relay and an in-bounds epoch_len is silent, and no
-warning ever echoes a secret value.
+warning ever echoes a secret value. An epoch_len set while rendezvous
+is off also warns: hold_open derives points under it unconditionally,
+but the descriptor never advertises it, so a dialer deriving with
+the frozen default never meets the held points.
 
 Run from the repo root:  ./venv/bin/python hidden_files/hostd-rendezvous-visibility-belt-test.py
 """
@@ -97,6 +100,31 @@ class TestRendezvousWarnings(unittest.TestCase):
             CYBERNET_RENDEZVOUS_EPOCH_LEN="banana", **_RELAY)
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_RENDEZVOUS_EPOCH_LEN", warns[0])
+
+    def test_epoch_len_set_while_unset_warns_not_advertised(self):
+        warns = self._warns(CYBERNET_RENDEZVOUS_EPOCH_LEN="600")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_RENDEZVOUS_EPOCH_LEN", warns[0])
+        self.assertIn("NOT be advertised", warns[0])
+        self.assertIn("3600", warns[0])
+
+    def test_epoch_len_set_while_zero_warns_not_advertised(self):
+        warns = self._warns(CYBERNET_RENDEZVOUS="0",
+                            CYBERNET_RENDEZVOUS_EPOCH_LEN="600")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("NOT be advertised", warns[0])
+
+    def test_epoch_len_set_with_non_one_warns_twice(self):
+        warns = self._warns(CYBERNET_RENDEZVOUS="true",
+                            CYBERNET_RENDEZVOUS_EPOCH_LEN="600")
+        self.assertEqual(len(warns), 2)
+        self.assertIn("NOT enabled", warns[0])
+        self.assertIn("NOT be advertised", warns[1])
+
+    def test_bad_epoch_len_while_off_warns_once_not_advertised(self):
+        warns = self._warns(CYBERNET_RENDEZVOUS_EPOCH_LEN="30")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("NOT be advertised", warns[0])
 
     def test_no_relay_and_bad_epoch_warns_twice(self):
         warns = self._warns(
