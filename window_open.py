@@ -135,24 +135,39 @@ def is_prerecorded_refusal(conn, source, row_key, pubkey) -> bool:
         (source, str(row_key), pubkey)).fetchone() is not None
 
 
-def _history_anchor(conn, name):
-    """Lodestar/Cipher rule (ART-40): if the name's name_rotations history
-    has ANY hop with a weak old_pubkey or new_pubkey, the name is reserved
-    for the earliest weak hop's old_pubkey - only if that key is non-weak.
-    Hops are ordered by node-side accepted_at (rowid tie-break), never the
-    signer's issued_at. If the earliest weak hop STARTS on a weak key, the
-    name is refused outright (no backward walk: the Z1->X->Z1 PoC showed a
-    walk lets an attacker X anchor a name first bound to a weak key).
+def _anchor_from_hops(hops):
+    """Lodestar/Cipher rule (ART-40) over one name's hops, already ordered
+    by node-side accepted_at (rowid tie-break), never the signer's
+    issued_at: reserve for the earliest weak hop's old_pubkey if that key
+    is non-weak; if the earliest weak hop STARTS on a weak key, refuse
+    with FLAG-VILLHAZE (no backward walk: the Z1->X->Z1 PoC showed a walk
+    lets an attacker X anchor a name first bound to a weak key).
     Returns (None, None) when the history has no weak hop."""
-    hops = conn.execute(
-        "SELECT old_pubkey, new_pubkey FROM name_rotations WHERE name=? "
-        "ORDER BY accepted_at ASC, rowid ASC", (name,)).fetchall()
     for old, new in hops:
         if is_weak_pubkey(old) or is_weak_pubkey(new):
             if is_weak_pubkey(old):
                 return None, "FLAG-VILLHAZE: chain starts on weak key"
             return old, None
     return None, None
+
+
+def _all_histories(conn):
+    """ONE indexed scan of name_rotations (PK prefix = name), grouped in
+    Python: {name: [(old, new), ...]} in accepted_at, rowid order. No
+    per-name query and no network call (Bulwark 44b3923c cost bound)."""
+    out = {}
+    for name, old, new in conn.execute(
+            "SELECT name, old_pubkey, new_pubkey FROM name_rotations "
+            "ORDER BY name ASC, accepted_at ASC, rowid ASC"):
+        out.setdefault(name, []).append((old, new))
+    return out
+
+
+def _history_anchor(conn, name):
+    hops = conn.execute(
+        "SELECT old_pubkey, new_pubkey FROM name_rotations WHERE name=? "
+        "ORDER BY accepted_at ASC, rowid ASC", (name,)).fetchall()
+    return _anchor_from_hops(hops)
 
 
 def snapshot_bindings(conn):
@@ -162,12 +177,22 @@ def snapshot_bindings(conn):
     hop - even if the current key is honest (K->Z->K2 reserves for K).
     A history whose earliest weak hop starts on a weak key is REFUSED with
     FLAG-VILLHAZE (no backward walk, so no loop/dead-end/hop-cap paths).
-    A weak key with no rotation history is REFUSED."""
+    A weak key with no rotation history is REFUSED.
+
+    ORPHAN PASS (board BLOCK on dd79315, Lodestar item 1 / Cipher /
+    Bulwark 44b3923c): _name_registry_has_room (core.py) reaps expired
+    name_bindings rows on any claim, so K->Z1 followed by Z1 expiring would
+    erase K's reservation. EVERY name in name_rotations therefore runs
+    through the same anchor rule; a name with history but no binding row is
+    reported reserved (current_pubkey None) or refused (FLAG), never
+    dropped. Names with no history and no binding appear nowhere."""
     held, refused, reserved = [], [], []
-    has_rot = _has_table(conn, "name_rotations")
+    hist = _all_histories(conn) if _has_table(conn, "name_rotations") else {}
+    seen = set()
     for row in conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings ORDER BY name"):
-        anchor, why = _history_anchor(conn, row[0]) if has_rot else (None, None)
+        seen.add(row[0])
+        anchor, why = _anchor_from_hops(hist.get(row[0], ()))
         if anchor:
             reserved.append({"name": row[0], "reserved_for": anchor, "current_pubkey": row[1],
                              "weak_pubkey": row[1] if is_weak_pubkey(row[1]) else None})
@@ -177,6 +202,13 @@ def snapshot_bindings(conn):
             refused.append(tuple(row))
         else:
             held.append(row)
+    for name in sorted(set(hist) - seen):  # orphan pass
+        anchor, why = _anchor_from_hops(hist[name])
+        if anchor:
+            reserved.append({"name": name, "reserved_for": anchor, "current_pubkey": None,
+                             "weak_pubkey": None, "orphan": True})
+        elif why:
+            refused.append((name, None, None, None, None, why))
     return {"held": held, "refused": refused, "reserved": reserved}
 
 

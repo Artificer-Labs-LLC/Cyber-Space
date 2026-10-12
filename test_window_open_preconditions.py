@@ -206,5 +206,31 @@ check("start after close refused 409 (account under cap)", start("late") == 409)
 check("late 4th start after close refused 409", start("acct") == 409)
 check("post-close refusals wrote no rows", rows_for("late") == 2 and rows_for("acct") == 3, (rows_for("late"), rows_for("acct")))
 wo._now_hook = None
+
+# Board BLOCK on dd79315 (orphan pass): expired bindings are reaped by
+# core._name_registry_has_room on any claim; the reservation must survive.
+OK_ = _ed.publickey(bytes.fromhex("31" * 32)).hex()
+OX = _ed.publickey(bytes.fromhex("32" * 32)).hex()
+OXP = _ed.publickey(bytes.fromhex("33" * 32)).hex()
+with core._db_lock, core._db() as conn:
+    conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     [("orphk", ZERO, PAST, PAST, "00" * 64), ("orphz", ZERO, PAST, PAST, "00" * 64),
+                      ("orphzx", OX, PAST, PAST, "00" * 64), ("orphre", ZERO, PAST, PAST, "00" * 64)])
+    for nm, o, n_ in (("orphk", OK_, ZERO), ("orphzx", ZERO, OX), ("orphre", OK_, ZERO)):
+        conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                     (nm, o, n_, PAST, "00" * 64, "2001-01-01T00:00:00+00:00"))
+    core._name_registry_has_room(conn)  # the reap any claimer can trigger
+    gone = {r[0] for r in conn.execute("SELECT name FROM name_bindings WHERE name LIKE 'orph%'")}
+    conn.execute("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                 ("orphre", OXP, PAST, FUT, "00" * 64))  # X' claims fresh
+    osnap = wo.snapshot_bindings(conn)
+ores = {r["name"]: r["reserved_for"] for r in osnap["reserved"]}
+oref = {r[0]: r[-1] for r in osnap["refused"]}
+ohel = {r[0] for r in osnap["held"]}
+check("orphan: reap removed the expired bindings", not gone, gone)
+check("orphan: K->Z1, Z1 reaped -> reserved for K", ores.get("orphk") == OK_, ores)
+check("orphan: Z1 claimed directly, reaped, no history -> in no list", "orphz" not in ores and "orphz" not in oref and "orphz" not in ohel)
+check("orphan: Z1->X, X reaped -> refused, FLAG starts on weak key", "starts on weak key" in str(oref.get("orphzx")), oref)
+check("orphan: K->Z1, Z1 reaped, X' claims fresh -> reserved for K", ores.get("orphre") == OK_ and "orphre" not in ohel, (ores, ohel))
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
