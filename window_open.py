@@ -600,7 +600,17 @@ def head_roots(conn) -> dict:
     rows = export_hop_rows(conn)
     return {"hops_root": lw.hops_root(rows),
             "bound_root": hop_certs.bound_root(export_bound_leaves(conn)),
-            "v1_frozen_root": hop_certs.v1_frozen_root(rows)}
+            "v1_frozen_root": hop_certs.v1_frozen_root(rows),
+            "orphans_root": hop_certs.orphans_root(export_orphan_leaves(conn))}
+
+
+def export_orphan_leaves(conn) -> list:
+    """Clean chains with no bound leaf (orphans_root, PENDING Villhaze)."""
+    import hop_certs
+    init_schema(conn)
+    exempt = {r[0] for r in conn.execute(
+        "SELECT name FROM window_kind_source WHERE disposition IN ('reserve-hold','name-refused')")}
+    return hop_certs.orphan_leaves(export_hop_rows(conn), export_bound_leaves(conn), exempt)
 
 
 def _append_kind_entries(conn, rows) -> list:

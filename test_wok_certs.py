@@ -10,7 +10,7 @@ it. Each mutant below is killed by a row in this file."""
 import json
 
 import hop_certs as hc
-from wok_common import (FUT, POOL, ZERO, b_accepts, b_proof, bind, check, clean_chain, core,
+from wok_common import (WITNESS_SIGNERS, FUT, POOL, ZERO, b_accepts, b_proof, bind, check, clean_chain, core,
                         finish, finish_window, lw, open_or, record_mutant, rot, sign_with,
                         wipe, wo)
 
@@ -313,9 +313,7 @@ if not mh:
     def resign():
         pr = json.loads(json.dumps(base[0]))
         h = pr["head"]["head"]
-        pub = core._NODE_PUB.lower()
-        pr["head"] = lw.sign_head(h, [lambda m: (pub, wo._ed.sign(
-            m, bytes.fromhex(core._NODE_PRIV), bytes.fromhex(pub)).hex())])
+        pr["head"] = lw.sign_head(h, WITNESS_SIGNERS)
         pr["bound"] = p2["bound"]
         pr["head"]["head"]["bound_root"] = p2["head"]["head"]["bound_root"]
         return accepts((pr, base[1], base[2]))[0]
@@ -354,19 +352,22 @@ record_mutant("no verify cache", "same proof twice: 0 verifies the second time",
 # ---------------------------------------------------------------- per-source charge before any verify
 seen = []
 hc._CACHE.clear()
+hc._KEY_OK.clear()
 hc.STATS["verifies"] = 0
+hc.STATS["weak"] = 0
 try:
     lw._rules(honest[0], "imp", honest[1], honest[2], (1, len(honest[0]["bound"]), 0),
-              charge=lambda n: seen.append((n, hc.STATS["verifies"])))
+              charge=lambda n: seen.append((n, hc.STATS["verifies"], hc.STATS["weak"])))
 except lw.WitnessRefused as e:
     seen.append(str(e))
-check("(charge) the per-source bucket is charged once per cert before the first verify",
-      seen == [(len(honest[0]["hops"]), 0)] and hc.STATS["verifies"] > 0, seen)
+check("(charge) the per-source bucket is charged 2*weak_reason+verify per cert before any weak_reason or verify",
+      seen == [(len(honest[0]["hops"]) * hc.CERT_COST_US, 0, 0)] and hc.STATS["verifies"] > 0, seen)
 
 # ---------------------------------------------------------------- libsodium stubbed out
 hc.STATS["verifies"] = 0
 so_ok, so_why = mutate(hc, "sodium", lambda: None, lambda: accepts(honest))
-real_so = (not so_ok) and "libsodium" in so_why and hc.STATS["verifies"] == 0
+real_so = (not so_ok) and so_why == "hop certs: " + hc.LIBSODIUM_MISSING \
+    and "libsodium is not installed" in so_why and hc.STATS["verifies"] == 0
 check("(sodium) libsodium missing: refused before any verify", real_so,
       (so_why, hc.STATS["verifies"]))
 
@@ -393,7 +394,14 @@ record_mutant("pure-Python fallback allowed", "libsodium stubbed: refused before
 drop_leaf = lambda name: (lambda lv: [x for x in lv if x[0] != name])  # noqa: E731
 # Pins here are the shipped leaf count, so the leaf-count check (Loom's
 # pair below) does not mask the diff under test.
-om = scenario(plant_pl, leaves_fn=drop_leaf("ch"))
+# The lying writer also hides the dropped name from the orphan leaves
+# (orphans_root), so the proof stays inside the pinned orphan count.
+_real_orph = wo.export_orphan_leaves
+wo.export_orphan_leaves = lambda conn: []
+try:
+    om = scenario(plant_pl, leaves_fn=drop_leaf("ch"))
+finally:
+    wo.export_orphan_leaves = _real_orph
 o_ok, o_why = accepts(om)
 real_om = (not o_ok) and "without a bound leaf" in o_why
 check("(omit) a held name dropped from bound_root without a FLAG is refused", real_om, o_why)
@@ -410,8 +418,11 @@ fl = scenario(plant_fl, leaves_fn=drop_leaf("fl"))
 f_ok, f_why = accepts(fl)
 real_fl = f_ok
 check("(omit) a FLAGged (hop-cap) name dropped from bound_root is accepted", real_fl, f_why)
-mo = mutate(hc, "bound_diff", lambda *a: None, lambda: accepts(om)[0])
-record_mutant("bound diff always passes", "held name omitted without a FLAG: refused",
+# bound_diff and the orphan-leaf compare are now two guards on this row;
+# the mutant removes both.
+mo = mutate(hc, "bound_diff", lambda *a: None,
+            lambda: mutate(hc, "orphans_match", lambda *a: True, lambda: accepts(om)[0]))
+record_mutant("bound diff and orphan-leaf compare always pass", "held name omitted without a FLAG: refused",
               real_om and real_fl, mo)
 
 # ---------------------------------------------------------------- 66-row bound

@@ -26,8 +26,10 @@ import os
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 import core
+import hop_certs
 import legacy_witness as lw
 import ratesrc
 import window_open
@@ -89,14 +91,34 @@ def charge_import_source(src: str) -> None:
     core._check_rate(f"import-legacy:{src}", limit=IMPORT_PER_SOURCE)
 
 
-IMPORT_CERTS_PER_SOURCE = 60 * 66 * 4
+# Pre-verify budget: 30 s of key-check/verify CPU per source per 60 s
+# window, in units of one cert (2 libsodium key checks + 1 verify =
+# hop_certs.CERT_COST_US, measured). Only the per-cert charge was
+# re-derived for the libsodium fast path.
+PREVERIFY_BUDGET_US = 30_000_000
 
 
-def charge_import_certs(src: str, n: int) -> None:
-    """Per-source bucket scaled by cert count, charged before any per-hop
-    verify (hop_certs.verify_hops calls this with the row count)."""
-    for _ in range(max(1, int(n))):
+def import_certs_per_source(cert_cost_us: int) -> int:
+    return PREVERIFY_BUDGET_US // cert_cost_us
+
+
+IMPORT_CERTS_PER_SOURCE = import_certs_per_source(hop_certs.CERT_COST_US)
+# Global per-window cap across all sources: 10x one source.
+IMPORT_CERTS_GLOBAL = 10 * IMPORT_CERTS_PER_SOURCE
+
+
+def charge_import_certs(src: str, cost_us: int) -> None:
+    """Per-source and global pre-verify buckets, charged in whole certs
+    (cost_us / CERT_COST_US) before any key check or verify runs."""
+    for _ in range(max(1, -(-int(cost_us) // hop_certs.CERT_COST_US))):
         core._check_rate(f"import-legacy:certs:{src}", limit=IMPORT_CERTS_PER_SOURCE)
+        core._check_rate("import-legacy:certs:global", limit=IMPORT_CERTS_GLOBAL)
+
+
+async def admit(verify, write):
+    """Bulwark: key checks / per-hop verify run off the event loop, so a
+    long import does not stall other routes."""
+    return await run_in_threadpool(window_open.run_admission, verify, write)
 
 
 def charge_import_scoped(log_id: str) -> None:
@@ -114,10 +136,11 @@ def pinned():
     log_id = os.environ.get("CYBERNET_GENESIS_LOG_ID", "").strip().lower()
     if not raw or len(log_id) != 64:
         return None
-    pubs = [p.strip() for p in raw.split(",") if p.strip()]
     try:
-        threshold = int(os.environ.get("CYBERNET_GENESIS_WITNESS_THRESHOLD", "1"))
-        return log_id, lw.WitnessSet(threshold, pubs)
+        # No default: an unset/invalid threshold, a duplicate key or the
+        # Genesis node key in the set is refused at load (fail closed, 503).
+        return log_id, lw.load_witness_set(
+            raw, os.environ.get("CYBERNET_GENESIS_WITNESS_THRESHOLD"))
     except (TypeError, ValueError):
         return None
 
@@ -153,6 +176,7 @@ def _signed_view(name: str | None):
         log_id, entries = window_open.export_log(conn)
         hop_rows = window_open.export_hop_rows(conn)
         leaves = window_open.export_bound_leaves(conn)
+        orphans = window_open.export_orphan_leaves(conn)
         roots = window_open.head_roots(conn)
     if not entries:
         return None
@@ -180,7 +204,7 @@ def _signed_view(name: str | None):
         return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
 
     body = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
-            "hops": hop_rows, "bound": leaves}
+            "hops": hop_rows, "bound": leaves, "orphans": orphans}
     _proof_cache[key] = body
     return body
 
@@ -282,7 +306,7 @@ async def legacy_log_observe(request: Request):
                 (h["log_id"], h["seq"], h["head_hash"], int(time.time())))
         return {"status": "observed", "log_id": h["log_id"], "seq": h["seq"]}
 
-    return window_open.run_admission(verify, write)
+    return await admit(verify, write)
 
 
 @router.post("/api/v1/agents/import-legacy")
@@ -332,7 +356,8 @@ async def import_legacy(request: Request):
             raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
         try:
             _h, _entries, ident = lw.check_identity(proof, name, wset, pinned_log,
-                                                 charge=lambda n: charge_import_certs(src, n))
+                                                 charge=lambda n: charge_import_certs(src, n),
+                                                 sender=src)
         except lw.WitnessRefused as e:
             raise HTTPException(status_code=400, detail=str(e))
         if not witnessed_inception_ok(ident, pub):
@@ -359,4 +384,4 @@ async def import_legacy(request: Request):
                 "k0_pub": ident["k0_pub"], "head_seq": ident["head_seq"],
                 "late": ident["late"]}
 
-    return window_open.run_admission(verify, write)
+    return await admit(verify, write)

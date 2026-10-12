@@ -403,7 +403,8 @@ def as_schedule(w) -> WitnessSchedule:
 
 
 # ART-42 hop-row BLOCK: the witnesses sign the three roots node B checks.
-HEAD_ROOT_FIELDS = ("hops_root", "bound_root", "v1_frozen_root")
+# orphans_root: Loom, PENDING Villhaze ratification (see hop_certs).
+HEAD_ROOT_FIELDS = ("hops_root", "bound_root", "v1_frozen_root", "orphans_root")
 
 
 def head_bytes(h: dict) -> bytes:
@@ -425,7 +426,7 @@ def sign_head(h: dict, signers) -> dict:
 
 # ------------------------------------------------------------- checks
 
-def verify_head(signed: dict, wset, log_id: str) -> dict:
+def verify_head(signed: dict, wset, log_id: str, sig_ok=None) -> dict:
     """The head dict, or WitnessRefused. Needs `threshold` distinct valid
     signatures from keys in the set the pinned schedule (or single pinned
     WitnessSet) puts in effect at the head's seq."""
@@ -449,17 +450,77 @@ def verify_head(signed: dict, wset, log_id: str) -> dict:
     wset = sched.for_seq(h["seq"])
     if h["witness_set"] != wset.id:
         raise WitnessRefused("head names a witness set this node does not pin for its seq")
+    eligible = eligible_witnesses(wset.pubs)
     good = set()
     for s in sigs if isinstance(sigs, list) else []:
         w = s.get("witness") if isinstance(s, dict) else None
         sig = s.get("sig") if isinstance(s, dict) else None
-        if isinstance(w, str) and isinstance(sig, str) and w in wset.pubs and w not in good \
-                and _sig_ok(w, msg, sig):
+        if isinstance(w, str) and isinstance(sig, str) and w in eligible and w not in good \
+                and (sig_ok or _sig_ok)(w, msg, sig):
             good.add(w)
-    if len(good) < wset.threshold:
-        raise WitnessRefused(f"head carries {len(good)} valid witness signature(s); "
-                             f"{wset.threshold} required")
+    if not head_quorum(len(good), len(eligible)) or len(good) < wset.threshold:
+        raise WitnessRefused(
+            f"head carries {len(good)} valid witness signature(s) of {len(eligible)} eligible "
+            f"(Genesis node key excluded); a strict majority is required")
     return h
+
+
+def genesis_node_pub() -> str | None:
+    """The Genesis node's own key: pinned CYBERNET_GENESIS_NODE_PUB, else
+    (on Genesis itself) core._NODE_PUB. It never counts as a witness."""
+    pinned = os.environ.get("CYBERNET_GENESIS_NODE_PUB", "").strip().lower()
+    if pinned:
+        return pinned
+    try:
+        import core
+        return (core._NODE_PUB or "").strip().lower() or None
+    except Exception:
+        return None
+
+
+class WitnessConfigRefused(ValueError):
+    pass
+
+
+GENESIS_IN_SET = "refused at config load: the Genesis node key is in the witness set"
+
+
+def load_witness_set(raw_pubs: str, raw_threshold) -> "WitnessSet":
+    """Examiner ART-42 ca4e0404: N independent keys, no Genesis node key,
+    threshold pinned (no default) and a strict majority of N (2-of-3 is the
+    reference shape). Anything else refuses here, at config load."""
+    pubs = [normalize_pub(p.strip()) for p in (raw_pubs or "").split(",") if p.strip()]
+    if not pubs:
+        raise WitnessConfigRefused("refused at config load: no witness keys")
+    if len(set(pubs)) != len(pubs):
+        raise WitnessConfigRefused("refused at config load: witness keys are not independent (duplicate)")
+    if genesis_in_set(pubs):
+        raise WitnessConfigRefused(GENESIS_IN_SET)
+    t = (raw_threshold or "").strip() if isinstance(raw_threshold, str) else ""
+    if not t.isdigit():
+        raise WitnessConfigRefused("refused at config load: witness threshold unset or invalid")
+    t = int(t)
+    if not 1 <= t <= len(pubs) or 2 * t <= len(pubs):
+        raise WitnessConfigRefused(
+            f"refused at config load: threshold {t} is not a strict majority of {len(pubs)}")
+    return WitnessSet(t, pubs)
+
+
+def genesis_in_set(pubs) -> bool:
+    node = genesis_node_pub()
+    return node is not None and node in pubs
+
+
+def eligible_witnesses(pubs) -> set:
+    """Villhaze ART-42 64157549: the set carries over from the legacy-log
+    signers; the Genesis node key never counts, even when listed."""
+    node = genesis_node_pub()
+    return {p for p in pubs if p != node}
+
+
+def head_quorum(good: int, eligible: int) -> bool:
+    """Strict majority of the eligible witness set."""
+    return eligible > 0 and 2 * good > eligible
 
 
 def _int(x, nullable=False) -> bool:
@@ -570,13 +631,14 @@ class HeadStore:
 
 
 def accept_legacy_identity(proof: dict, name: str, wset: WitnessSet, log_id: str,
-                           store) -> dict:
+                           store, held_names=None) -> dict:
     """Node B's rule (Loom 4b, Cipher's order; late path per 5fe976e8).
     Returns {name, k0_pub, agent_key_id, ...} or raises WitnessRefused,
     and only WitnessRefused: any other failure on hostile input is turned
-    into a clean refusal, never a crash."""
+    into a clean refusal, never a crash. held_names (ART-42 35e546b9) is
+    the set of names B already holds witnessed state for."""
     try:
-        return _accept(proof, name, wset, log_id, store)
+        return _accept(proof, name, wset, log_id, store, held_names=held_names)
     except WitnessRefused:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as e:
@@ -584,12 +646,14 @@ def accept_legacy_identity(proof: dict, name: str, wset: WitnessSet, log_id: str
 
 
 def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str,
-                   charge=None) -> tuple:
+                   charge=None, held_names=None, sender="local") -> tuple:
     """The 4a rules without touching any store: -> (head, entries, identity).
     Callers that persist the head (node B's import) use this, then run
-    their own store check and commit inside their transaction."""
+    their own store check and commit inside their transaction.
+    held_names: see check_held_name_diff (ART-42 35e546b9)."""
     try:
-        return _rules(proof, name, wset, log_id, charge=charge)
+        return _rules(proof, name, wset, log_id, charge=charge, held_names=held_names,
+                      sender=sender)
     except WitnessRefused:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as e:
@@ -772,7 +836,7 @@ def rederive_refusals(entries: list, hops: list | None = None) -> tuple:
     return True, refused
 
 
-def check_hop_certs(proof, h, entries, log_id, pins, charge=None) -> None:
+def check_hop_certs(proof, h, entries, log_id, pins, charge=None, sender="local") -> None:
     """Fourth check: the head's roots match the shipped rows and leaves,
     then every hop cert re-verifies (hop_certs.verify_hops)."""
     import hop_certs
@@ -787,22 +851,30 @@ def check_hop_certs(proof, h, entries, log_id, pins, charge=None) -> None:
         raise WitnessRefused("head bound_root does not match the bound leaves")
     if h["v1_frozen_root"] != hop_certs.v1_frozen_root(hop_rows):
         raise WitnessRefused("head v1_frozen_root does not match the v1 certs")
+    orphans = proof.get("orphans", [])
+    if not isinstance(orphans, list) or not all(
+            isinstance(x, list) and len(x) == 2 and all(isinstance(v, str) for v in x)
+            for x in orphans):
+        raise WitnessRefused("orphan leaves missing or malformed")
+    if h["orphans_root"] != hop_certs.orphans_root(orphans):
+        raise WitnessRefused("head orphans_root does not match the orphan leaves")
     view = rebuild_window_kinds(entries)
     exempt = {r["name"] for k in ("reserve-hold", "name-refused") for r in view[k]}
     ok, why = hop_certs.verify_hops(hop_rows, leaves, exempt, pins,
                                     cache_key=(log_id, h["head_hash"], h["hops_root"]),
-                                    charge=charge)
+                                    charge=charge, sender=sender, orphans=orphans)
     if not ok:
         raise WitnessRefused(f"hop certs: {why}")
 
 
 def pinned_sizing() -> tuple | None:
     """(accounts, bindings, orphans) the operator pinned for this log, or
-    None. Orphans default to 0 when unset (Loom: third pin still open)."""
+    None. All three are required (Villhaze ART-42 64157549): an unset
+    CYBERNET_GENESIS_ORPHANS refuses; a pinned 0 is a real pin."""
     try:
         a = int(os.environ.get("CYBERNET_GENESIS_LEGACY_ACCOUNTS", ""))
         b = int(os.environ.get("CYBERNET_GENESIS_LIVE_BINDINGS", ""))
-        o = int(os.environ.get("CYBERNET_GENESIS_ORPHANS", "0") or "0")
+        o = int(os.environ.get("CYBERNET_GENESIS_ORPHANS", ""))
     except ValueError:
         return None
     if a < 0 or b < 0 or o < 0:
@@ -810,11 +882,49 @@ def pinned_sizing() -> tuple | None:
     return a, b, o
 
 
+def proof_name_coverage(entries: list, hops: list | None = None) -> set:
+    """Names the closure accounts for: hop rows plus witness kind rows
+    (reserve-hold, name-refused / FLAG, origin-pin, origin-handoff)."""
+    names = set()
+    for r in ([] if hops is None else hops):
+        if isinstance(r, dict) and isinstance(r.get("name"), str):
+            names.add(r["name"])
+    view = rebuild_window_kinds(entries)
+    for kind in ("reserve-hold", "name-refused", "origin-pin", "origin-handoff"):
+        for r in view.get(kind, []):
+            n = r.get("name")
+            if isinstance(n, str):
+                names.add(n)
+    return names
+
+
+def check_held_name_diff(entries: list, hops: list | None = None,
+                         held_names=None) -> None:
+    """Villhaze ART-42 35e546b9: proof-vs-local diff for held names.
+
+    B refuses a closure that silently omits a name B already holds
+    witnessed state for. A FLAG (name-refused) row for that name covers
+    the omission. Names B has never seen remain a known limitation and
+    do not refuse."""
+    if not held_names:
+        return
+    held = {n for n in held_names if isinstance(n, str)}
+    if not held:
+        return
+    omitted = sorted(held - proof_name_coverage(entries, hops))
+    if omitted:
+        if len(omitted) == 1:
+            raise WitnessRefused(
+                f"held name omitted from closure (no FLAG): {omitted[0]!r}")
+        raise WitnessRefused(
+            f"held names omitted from closure (no FLAG): {omitted}")
+
+
 def check_size_limits(proof: dict, pins) -> None:
     """First check (Bulwark): nothing is hashed or counted before the
     proof's span, hop rows and bytes are inside the pinned ceilings."""
     if pins is None:
-        raise WitnessRefused("no pinned sizing (accounts / bindings) on this node")
+        raise WitnessRefused("no pinned sizing (accounts / bindings / orphans) on this node")
     accounts, bindings, orphans = pins
     span = proof.get("span")
     if not isinstance(span, list) or len(span) > max_log_entries(accounts, bindings, orphans):
@@ -825,22 +935,26 @@ def check_size_limits(proof: dict, pins) -> None:
     leaves = proof.get("bound", [])
     if not isinstance(leaves, list) or len(leaves) > int(bindings):
         raise WitnessRefused("bound leaves exceed the pinned bindings")
+    if len(proof.get("orphans") or []) > int(orphans):
+        raise WitnessRefused("orphan leaves exceed the pinned orphans")
     if len(json.dumps(proof).encode()) > proof_max_bytes(accounts, bindings, orphans):
         raise WitnessRefused("proof exceeds proof_max_bytes")
 
 
-def _accept(proof, name, wset, log_id, store) -> dict:
-    h, entries, ident = _rules(proof, name, wset, log_id)
+def _accept(proof, name, wset, log_id, store, held_names=None) -> dict:
+    h, entries, ident = _rules(proof, name, wset, log_id, held_names=held_names)
     store.check(h, entries)
     store.commit(h)
     return ident
 
 
-def _rules(proof, name, wset, log_id, pins=None, charge=None) -> tuple:
+def _rules(proof, name, wset, log_id, pins=None, charge=None, held_names=None,
+           sender="local") -> tuple:
     if not isinstance(proof, dict):
         raise WitnessRefused("proof is not an object")
     # ART-42 node B order: size limits, then verify_rows_root, then
-    # rederive_refusals. Size first, before any entry or row is hashed.
+    # rederive_refusals, then held-name proof-vs-local (35e546b9), then the
+    # hop certs. Size first, before any entry or row is hashed.
     pins = pinned_sizing() if pins is None else pins
     check_size_limits(proof, pins)
     h = verify_head(proof.get("head") or {}, wset, log_id)
@@ -861,7 +975,8 @@ def _rules(proof, name, wset, log_id, pins=None, charge=None) -> tuple:
     ok, why = rederive_refusals(entries, hop_rows)
     if not ok:
         raise WitnessRefused(f"hop-cap refusals do not re-derive: {why}")
-    check_hop_certs(proof, h, entries, log_id, pins, charge)
+    check_held_name_diff(entries, hop_rows, held_names)
+    check_hop_certs(proof, h, entries, log_id, pins, charge, sender)
     o, c = h["window_open_seq"], h["window_close_seq"]
     kinds = [e["kind"] for e in entries]
     if kinds.count("window-open") != 1 or kinds.count("window-close") != 1 \

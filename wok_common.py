@@ -72,9 +72,10 @@ def record_mutant(name, row, real_ok, mutant_fails):
 
 def finish(file_label):
     print("mutant table:")
-    print(f"  {'mutant':<52} {'row':<62} real mutant-fails")
+    print("  mutant | row | real passes | mutant fails | killed")
     for name, row, real_ok, mutant_fails in _state["mutants"]:
-        print(f"  {name:<52} {row:<62} {str(real_ok):<5} {mutant_fails}")
+        print(f"  {name} | {row} | {bool(real_ok)} | {bool(mutant_fails)} | "
+              f"{'KILLED' if real_ok and mutant_fails else 'NOT KILLED'}")
     el = time.monotonic() - _state["t0"]
     print(f"{file_label}: {_state['pass']} passed, {_state['fail']} failed in {el:.1f}s")
     sys.exit(1 if _state["fail"] else 0)
@@ -219,6 +220,22 @@ def finish_window(fillers=0):
         wo.time = real_time
 
 
+# Villhaze ART-42 64157549: the head needs a strict majority of the
+# legacy-log signer set, and the Genesis node key never counts. Belt set:
+# three witness keys (the node key not listed); heads carry two of three.
+WITNESS_PUBS = [keypair(bytes([0xA0 + j]) * 32) for j in range(3)]
+WITNESS_SET = lw.WitnessSet(1, WITNESS_PUBS)
+
+
+def witness_signer(pub):
+    def sign(msg, _pub=pub):
+        return _pub, sign_with(_pub, msg)
+    return sign
+
+
+WITNESS_SIGNERS = [witness_signer(p) for p in WITNESS_PUBS[:2]]
+
+
 def b_proof():
     """(proof, wset, log_id) exactly as node B receives it: signed head,
     full span, hop rows. Round-tripped through JSON."""
@@ -226,8 +243,8 @@ def b_proof():
     with core._db_lock, core._db() as conn:
         roots = wo.head_roots(conn)
         leaves = wo.export_bound_leaves(conn)
-    pub = core._NODE_PUB.lower()
-    wset = lw.WitnessSet(1, [pub])
+        orphans = wo.export_orphan_leaves(conn)
+    wset = WITNESS_SET
     kinds = [e["kind"] for e in entries]
     head = {"log_id": log_id, "witness_set": wset.id, "seq": len(entries),
             "head_hash": entries[-1]["entry_hash"],
@@ -235,21 +252,20 @@ def b_proof():
             "window_close_seq": kinds.index("window-close") + 1, "window_state": "closed",
             **roots}
 
-    def _sign(msg, sk=core._NODE_PRIV, pk=pub):
-        return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
-
-    proof = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
-             "hops": exported_hops(), "bound": leaves}
+    proof = {"head": lw.sign_head(head, WITNESS_SIGNERS), "span": [lw.full(e) for e in entries],
+             "hops": exported_hops(), "bound": leaves, "orphans": orphans}
     return json.loads(json.dumps(proof)), wset, log_id
 
 
-def b_accepts(proof, wset, log_id, pins=None, orphans=0):
+def b_accepts(proof, wset, log_id, pins=None, orphans=0, held_names=None):
     """(accepted, ident-or-reason) through node B's real _rules. Default
-    pins: one account, bindings = the shipped leaf count, orphans 0."""
+    pins: one account, bindings = the shipped leaf count, orphans 0.
+    held_names: names B holds witnessed state for (ART-42 35e546b9)."""
     if pins is None:
         pins = (1, len(proof.get("bound", [])), orphans)
     try:
-        return True, lw._rules(proof, IMP_NAME, wset, log_id, pins)[2]
+        return True, lw._rules(proof, IMP_NAME, wset, log_id, pins,
+                               held_names=held_names)[2]
     except lw.WitnessRefused as e:
         return False, str(e)
 

@@ -22,6 +22,8 @@ os.environ.pop("CYBERNET_GENESIS_LOG_ID", None)
 # ART-42 node B wiring: _rules checks the pinned sizing first.
 os.environ["CYBERNET_GENESIS_LEGACY_ACCOUNTS"] = "1000"
 os.environ["CYBERNET_GENESIS_LIVE_BINDINGS"] = "0"
+os.environ["CYBERNET_GENESIS_ORPHANS"] = "0"
+os.environ["CYBERNET_GENESIS_WITNESS_THRESHOLD"] = "1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -163,7 +165,8 @@ class Builder:
 
 
 EMPTY_ROOTS = {"hops_root": lw.hops_root([]), "bound_root": hop_certs.bound_root([]),
-               "v1_frozen_root": hop_certs.v1_frozen_root([])}
+               "v1_frozen_root": hop_certs.v1_frozen_root([]),
+               "orphans_root": hop_certs.orphans_root([])}
 
 
 def add_closure(b):
