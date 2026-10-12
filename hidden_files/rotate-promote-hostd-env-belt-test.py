@@ -163,6 +163,25 @@ class TestInstalledEnvNote(unittest.TestCase):
                 td, mint_name._hostd_env_text(LABEL, NEW.hex(), MIRROR))
             self.assertIn("already holds the new key", msg)
 
+    def test_installed_other_name_old_key_is_not_stale(self):
+        # Singleton trap: the installed env hosts a DIFFERENT name.
+        # Its key matching this rotation's OLD key must not trigger
+        # the stale -> re-install remedy (that would evict the other).
+        with tempfile.TemporaryDirectory() as td:
+            other = mint_name._hostd_env_text("othername", OLD.hex(), MIRROR)
+            msg, installed = self._promote(td, other)
+            self.assertIn("hosts othername.cyberspace", msg)
+            self.assertIn("do NOT copy", msg)
+            self.assertNotIn("still holds the OLD key", msg)
+            self.assertEqual(installed.read_text(), other)
+
+    def test_installed_other_name_new_key_is_not_confirmed(self):
+        with tempfile.TemporaryDirectory() as td:
+            other = mint_name._hostd_env_text("othername", NEW.hex(), MIRROR)
+            msg, _ = self._promote(td, other)
+            self.assertIn("hosts othername.cyberspace", msg)
+            self.assertNotIn("already holds the new key", msg)
+
     def test_installed_absent_adds_no_noise(self):
         with tempfile.TemporaryDirectory() as td:
             msg, _ = self._promote(td, None)

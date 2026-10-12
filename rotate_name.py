@@ -227,7 +227,7 @@ _INSTALLED_HOSTD_ENV = Path("/etc/cybernet-hostd/hostd.env")
 
 
 def _installed_env_note(installed_path: Path, old_hex: str,
-                        new_hex: str) -> str:
+                        new_hex: str, label: str = "") -> str:
     """Read-only check of the INSTALLED hostd env after a promote.
 
     install-agent.sh copies the staging env to /etc/cybernet-hostd/
@@ -236,7 +236,13 @@ def _installed_env_note(installed_path: Path, old_hex: str,
     never writes there (an unprivileged CLI has no business in /etc);
     it only makes the summary tell the truth: stale -> re-install,
     current -> say so, foreign/unreadable -> warn. Absent -> "" (the
-    staging note already covers the manual case)."""
+    staging note already covers the manual case).
+
+    The installed file is a SINGLETON: it hosts exactly one name, named
+    by its CYBERNET_HOSTED_NAME. If that name is not the rotated label,
+    the key comparison is meaningless for this rotation — the file is
+    another name's hostd env, 're-install over it' would evict that
+    name, and 'restart hostd' would do nothing for this one. Say so."""
     if not installed_path.exists():
         return ""
     try:
@@ -246,9 +252,19 @@ def _installed_env_note(installed_path: Path, old_hex: str,
                 f"unreadable — check its CYBERNET_NAME_PRIVKEY manually; "
                 f"hostd reads that file, not the staging env")
     cur = None
+    hosted = None
     for line in text.splitlines():
         if line.startswith("CYBERNET_NAME_PRIVKEY="):
             cur = line.split("=", 1)[1].strip().lower()
+        elif line.startswith("CYBERNET_HOSTED_NAME="):
+            hosted = line.split("=", 1)[1].strip().lower()
+    if label and hosted is not None and hosted != label.lower():
+        return (f"; NOTE: installed hostd env at {installed_path} hosts "
+                f"{hosted}.cyberspace, not {label.lower()}.cyberspace — "
+                f"it is NOT this name's env, NOT touched; do NOT copy "
+                f"this name's env over it (that would evict "
+                f"{hosted}.cyberspace); this name is not hosted from "
+                f"the installed env")
     if cur == new_hex.lower():
         return (f"; installed hostd env at {installed_path} already "
                 f"holds the new key — restart hostd")
@@ -369,7 +385,7 @@ def promote_rotation(label: str, home: Path,
                     "runs from an installed env elsewhere, update its "
                     "CYBERNET_NAME_PRIVKEY to the new key and restart it")
     env_note += _installed_env_note(installed_env, old_priv.hex(),
-                                    new_priv.hex())
+                                    new_priv.hex(), label)
     return True, (f"promoted {label}.cyberspace: "
                   f"{old_pub[:16]}... -> {new_pub[:16]}...; "
                   f"old key kept at {prev_path}{env_note}")
