@@ -1,10 +1,21 @@
 # RESOLVER_RUNBOOK.md — the live end-to-end (resolver build item 3)
 
-Status: written-not-run. The gates: (1) an approved code deploy of the
-current tree to HQ (`/home/villhaze/cybernet/node`, genesis is still 0.1.0 —
-`/api/v1/names/genesis` 404s at the router, so the daemon's only source of
-truth isn't deployed yet), (2) a client machine for the split-horizon wiring
-(the tunnel to her machine has been down since 2026-10-07 12:00 EDT).
+Status: **RUN — 2026-10-12, on HQ (Villhaze).** The full chain is live:
+registry binding → cybernet-resolver (UDP+TCP, tailnet 100.86.209.63:5354)
+→ HQ systemd-resolved split-horizon (`~cyberspace`) → `getent hosts
+genesis.cyberspace` = 185.143.228.228 → `curl http://genesis.cyberspace/`
+serves the node. Smoke PASS on both wires (registered name NOERROR + 1 A
+answer; junk label NXDOMAIN). Two live lessons, both now law:
+(1) **the resolver daemon holds its code in memory** — after any node
+redeploy, restart `cybernet-resolver.service` too, or it keeps answering
+with the old code (the Oct-08 process NXDOMAINed a healthy registry for
+four days and had no TCP face). (2) **Caddy site addresses need explicit
+`http://`** — the on-disk Caddyfile's bare-IP block had drifted from the
+running config; a restart silently upgraded the IP face to an HTTPS
+redirect. Also: `systemctl reload caddy` cannot reach this instance's
+admin socket — restart the unit instead. Remaining client half: her
+current Windows machine is not wired yet (NRPT rule for the cyberspace
+suffix → 100.86.209.63:5354 is the path; her machine is hers to open).
 
 When both gates open, run these steps in order. Every step fails closed —
 stop at the first red line and fix it before moving on.

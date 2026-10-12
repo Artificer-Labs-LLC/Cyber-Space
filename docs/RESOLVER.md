@@ -1,10 +1,11 @@
 # The local resolver (Phase 2: .cyberspace for ordinary software)
 
-*Status: item 1 built ✅ (daemon commit-frozen, zone + forward/TTL suites 9/9
-green, AAAA suite 12/12 green, wire path deferred). The gate was mine, not hers: "will be good once
-we get .cyberspace working" was the order — building toward it. Items 2-3
-written-but-unproven: the HQ node wires first (item 2's proof), then the
-live end-to-end (item 3).*
+*Status: items 1-3 ✅ — the live end-to-end ran on HQ 2026-10-12:
+cybernet-resolver answers genesis.cyberspace on UDP+TCP, HQ's OS resolver
+routes the zone to it, and http://genesis.cyberspace/ serves the node
+(see RESOLVER_RUNBOOK.md status for the evidence and the two live
+lessons). Remaining client half: wiring her current Windows machine
+(NRPT) — her machine, her moment.*
 
 ## The hole
 

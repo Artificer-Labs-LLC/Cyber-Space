@@ -23,3 +23,24 @@
         -Server
     }
 }
+
+# The node's own .cyberspace name — enable on the node that owns the name
+# (live on the genesis host since 2026-10-12). The name resolves only
+# through the house resolver stack (cybernet-resolver), so there is no
+# ACME/public DNS for it: the explicit http:// scheme is REQUIRED, both
+# here and on the PUBLIC_HOSTNAME block if it is a bare IP — without it
+# Caddy silently upgrades the site to HTTPS-on-restart and the plain-HTTP
+# face becomes a redirect to an untrusted internal cert.
+#
+# http://genesis.cyberspace {
+#     reverse_proxy 127.0.0.1:8471
+#
+#     encode gzip
+#
+#     header {
+#         X-Content-Type-Options nosniff
+#         X-Frame-Options DENY
+#         Referrer-Policy no-referrer
+#         -Server
+#     }
+# }
