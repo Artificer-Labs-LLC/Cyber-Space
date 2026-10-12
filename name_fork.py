@@ -33,12 +33,15 @@ FORKS
   Chain depth is never a tiebreak. An unknown prev_hash is PENDING, never
   CONTESTED. A contested name has no recovery path in this build.
 
-RATE BOUND (not a fork gate)
+FORK GATE (round pause)
   At most one accepted rotation per name per round, where a round is a
   wall-clock window (CYBERNET_NAME_ROTATION_ROUND_SEC, default the
-  announce interval), persisted in name_rotation_round. This is a RATE
-  BOUND on hops: it holds a chain still long enough for fork evidence to
-  gossip. Fork safety comes from the prev_hash chain, not from this limit.
+  announce interval), persisted in name_rotation_round. The round pause
+  is a FORK GATE, not just a rate bound: a fast chain A->B->C cannot move
+  past B in the round that fork evidence for A->B' can still arrive in,
+  so the fork contests the name before C is ever resolved or logged.
+  The slot is written only on acceptance, in the same transaction as the
+  chain advance and the name_pin_log append.
 """
 
 from __future__ import annotations
@@ -124,7 +127,7 @@ def bootstrap_picks_first() -> bool:
 
 
 def rotations_per_round() -> int:
-    """RATE BOUND, not a fork gate."""
+    """FORK GATE (round pause): one accepted hop per name per round."""
     return 1
 
 
@@ -253,7 +256,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             sender TEXT NOT NULL,
             requested_ts REAL NOT NULL
         )""")
-    # RATE BOUND (not a fork gate): last round a rotation was accepted.
+    # FORK GATE (round pause): last round a rotation was accepted.
     conn.execute(
         """CREATE TABLE IF NOT EXISTS name_rotation_round (
             name TEXT PRIMARY KEY,
@@ -652,7 +655,7 @@ def _store_fork(conn, rec) -> str:
 
 
 def _round_held(conn, name, rnd) -> bool:
-    """RATE BOUND: True when this name already moved in this round."""
+    """FORK GATE: True when this name already moved in this round."""
     row = conn.execute("SELECT last_round FROM name_rotation_round WHERE name=?",
                        (name,)).fetchone()
     return row is not None and int(row[0]) >= rnd and rotations_per_round() <= 1
@@ -663,6 +666,25 @@ def _note_round(conn, name, rnd) -> None:
         "INSERT INTO name_rotation_round (name, last_round) VALUES (?,?)"
         " ON CONFLICT(name) DO UPDATE SET last_round=excluded.last_round",
         (name, rnd))
+
+
+def _accept_hop(conn, rec, rnd) -> bool:
+    """Acceptance, after every check has passed (decode, verify, weak_reason
+    on both keys, seq/prev_hash, fork checks, FORK GATE). Fork evidence, the
+    chain advance, the name_pin_log append and the round slot are one
+    transaction (a SAVEPOINT): if any write raises, nothing is kept and the
+    slot is still free for a retry in the same round."""
+    conn.execute("SAVEPOINT accept_hop")
+    try:
+        _store_fork(conn, rec)
+        _append_rotation(conn, rec)
+        _note_round(conn, rec["name"], rnd)
+    except sqlite3.Error:
+        conn.execute("ROLLBACK TO SAVEPOINT accept_hop")
+        conn.execute("RELEASE SAVEPOINT accept_hop")
+        return False
+    conn.execute("RELEASE SAVEPOINT accept_hop")
+    return True
 
 
 def _append_rotation(conn, rec) -> None:
@@ -721,7 +743,7 @@ def _keep_evidence(conn, rec, sender, now=None) -> str:
 
 
 def pending_ttl() -> int:
-    """A pending cert must outlive the RATE BOUND wait for the hop before
+    """A pending cert must outlive the FORK GATE wait for the hop before
     it, so it lives at least three rounds."""
     return max(PENDING_TTL_SEC, 3 * round_seconds())
 
@@ -822,7 +844,7 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                                 (E1 birth contest only with a held key)
       * contested            -> fork evidence only
       * prev_hash == head     -> contiguity (old == pin, seq == head+1),
-                                fork check, RATE BOUND, accept
+                                fork check, FORK GATE, accept
       * prev_hash an earlier link -> replay (same hop) or fork (new key)
       * prev_hash unknown    -> PENDING (bounded), one pull at the sender
     """
@@ -919,15 +941,16 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                 out["outcomes"].append("contested")
                 continue
             if _round_held(conn, name, rnd) or name in out["accepted"] and rotations_per_round() <= 1:
-                # RATE BOUND. The cert is kept as fork evidence for this
+                # FORK GATE. The cert is kept as fork evidence for this
                 # link so a competing cert still contests the name.
                 _store_fork(conn, rec)
                 out["refused"] += 1
                 out["outcomes"].append("rate-held")
                 continue
-            _store_fork(conn, rec)
-            _append_rotation(conn, rec)
-            _note_round(conn, name, rnd)
+            if not _accept_hop(conn, rec, rnd):
+                out["refused"] += 1
+                out["outcomes"].append("refused-log-error")
+                continue
             out["accepted"][name] = rec["new_pubkey"]
             out["outcomes"].append("accepted")
             continue
@@ -1037,11 +1060,19 @@ def accept_catchup(conn, name, path, sender_pub=None,
     rnd = current_round(now)
     if _round_held(conn, name, rnd):
         return "rate-held"
-    for rec in recs:
-        _store_fork(conn, rec)
-        _append_rotation(conn, rec)
-    # A caught-up path is one rate event: the name moved in this round.
-    _note_round(conn, name, rnd)
+    # A caught-up path is one gated event: the name moved in this round.
+    # Evidence, chain, log and slot are one SAVEPOINT, as in _accept_hop.
+    conn.execute("SAVEPOINT accept_path")
+    try:
+        for rec in recs:
+            _store_fork(conn, rec)
+            _append_rotation(conn, rec)
+        _note_round(conn, name, rnd)
+    except sqlite3.Error:
+        conn.execute("ROLLBACK TO SAVEPOINT accept_path")
+        conn.execute("RELEASE SAVEPOINT accept_path")
+        return "refused"
+    conn.execute("RELEASE SAVEPOINT accept_path")
     conn.execute("DELETE FROM name_pending WHERE name=? AND cert_hash IN (%s)"
                  % ",".join("?" * len(recs)),
                  (name, *[r["cert_hash"] for r in recs]))

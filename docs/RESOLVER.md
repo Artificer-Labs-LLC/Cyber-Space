@@ -216,6 +216,10 @@ key is served. PIN-STALE never unpins.
 
 Round limit. At most one rotation is accepted per name per round, and the
 round is a persisted wall-clock window (`CYBERNET_NAME_ROTATION_ROUND_SEC`,
-default the announce interval). This is a RATE BOUND on hops, not a fork
-gate: it slows a fast chain so fork evidence can gossip. Fork safety comes
-from the prev_hash chain.
+default the announce interval). The round pause is a FORK GATE, not just a
+rate bound: a fast chain A->B->C cannot move past B in the round where fork
+evidence for A->B' can still arrive, so the fork contests the name before C
+is resolved or written to name_pin_log. The round slot is written only on
+acceptance (after decode, verify, weak-key checks on both keys, seq/prev_hash
+and fork checks), in one transaction with the chain advance and the
+name_pin_log append. Rejected or failed certificates never consume it.

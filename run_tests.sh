@@ -36,6 +36,15 @@ if grep -nE 'CYBERNET_TEST_HOOK|CYBERNET_LIVE_HOOK|names_gossip_test_hook' \
   exit 1
 fi
 
+# Standing rule (Villhaze 5f028f12 / Cipher): fed/envelope.py self-test
+# must run in the suite. A check outside the suite is a check that does
+# not exist. Run before the file list so a missing module fails the suite.
+if ! "$PY" -m fed.envelope; then
+  echo "FAIL: fed/envelope.py self-test"
+  exit 1
+fi
+echo "PASS: fed/envelope.py (self-test)"
+
 TESTS=(
   "test_dial.py"
   "test_name_claim.py"
@@ -48,10 +57,15 @@ TESTS=(
   "test_names_gossip_receive.py"
   "test_names_gossip_hardening.py"
   "test_fed_route_parity.py"
-  "test_pin_rotation_v2.py"
-  # fed/envelope.py self-test (RFC 8032 vector, kind binding). It uses a
-  # package-relative import, so it runs as a module.
-  "-m fed.envelope"
+  # Pin-rotation v2 belt, split by mutant group (each file well under the
+  # suite timeout; every mutant is killed inside a single file).
+  "test_pin_rotation_v2_items12.py"
+  "test_pin_rotation_v2_item3.py"
+  "test_pin_rotation_v2_items45.py"
+  "test_pin_rotation_v2_items678.py"
+  "test_pin_rotation_v2_items9_10.py"
+  "test_pin_rotation_v2_items11_12.py"
+  "test_pin_rotation_v2_gate.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
@@ -68,8 +82,7 @@ fail=0
 failed_files=()
 
 for t in "${TESTS[@]}"; do
-  # shellcheck disable=SC2086  # "-m fed.envelope" must split
-  if (cd "$ROOT" && "$PY" $t) >/dev/null 2>&1; then
+  if "$PY" "$t" >/dev/null 2>&1; then
     echo "PASS: $t"
     pass=$((pass + 1))
   else

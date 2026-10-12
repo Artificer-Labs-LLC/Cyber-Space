@@ -128,7 +128,7 @@ def binding_row(name):
 # Each call mints a distinct ts. A same-second repeat would be one
 # signature, and the replay seen-set would refuse it before the kept
 # merge this belt is measuring.
-_next_env_ts = int(time.time()) - 120
+_next_env_ts = int(time.time()) - 30  # stay well inside MAX_SKEW under load
 
 
 def gossip_env(sender_priv, sender_pub, bindings, recipient=None, from_pub=None,
@@ -137,7 +137,7 @@ def gossip_env(sender_priv, sender_pub, bindings, recipient=None, from_pub=None,
     if ts is None:
         # Same wall-clock flake fix as the hardening belt: never let a
         # minted envelope fall outside MAX_SKEW_SEC on a slow run.
-        _next_env_ts = max(_next_env_ts + 1, int(time.time()) - 60)
+        _next_env_ts = max(int(time.time()), _next_env_ts + 1)
         ts = _next_env_ts
     body = {
         "from_node_pub": sender_pub if from_pub is None else from_pub,
