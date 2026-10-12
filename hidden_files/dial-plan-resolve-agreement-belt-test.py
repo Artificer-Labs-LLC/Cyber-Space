@@ -15,6 +15,10 @@ The two divergences this belt locks:
   2. directory shape: the real mirror serves {"entries": [...]}; the planner
      must read "entries" like the resolver does, not dead "nodes"/"agents"
      keys that never fire against a real mirror.
+  3. cross-name descriptor: a descriptor signed by the RIGHT key but for a
+     DIFFERENT name (the name is inside the signed canonical form) must be
+     skipped by both seats — a mirror cross-serving it would otherwise
+     redirect the dial to the other name's reach.
 
 Step 6 (live verification) is monkeypatched at the transport edge only
 (_resolve_peer_get_json + _fed_env.verify_envelope) — the belt's subject is
@@ -170,6 +174,21 @@ class AgreementBelt(unittest.TestCase):
                         [{"kind": "direct", "url": "http://8.8.8.8:8471"}])
         code, lines, result = self._both(label, _routes(label, b, d), _peer_routes(b))
         self.assertEqual(code, 3, lines)  # silent host, never a guess
+        self.assertIsNone(result)
+
+    def test_cross_name_descriptor_is_silence_both_seats(self):
+        # Descriptor signed by the binding's own key but for a different
+        # name: both seats skip it; with no directory entry the name is
+        # a silent host (dial exit 3, resolver None), never a redirect
+        # to the other name's direct URL.
+        label = "agreef"
+        priv, pub = _name_key()
+        b = _binding(label, priv, pub)
+        d = _descriptor("othername", priv, pub,
+                        [{"kind": "direct", "url": "http://8.8.4.4:8471"}])
+        code, lines, result = self._both(label, _routes(label, b, d), _peer_routes(b))
+        self.assertEqual(code, 3, lines)
+        self.assertTrue(any("different name" in l for l in lines), lines)
         self.assertIsNone(result)
 
     def test_unparseable_issued_at_agrees_absent(self):

@@ -216,6 +216,25 @@ class DialPlanTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertTrue(any("different key" in l for l in lines), lines)
 
+    def test_descriptor_naming_other_name_falls_through(self):
+        # A descriptor signed by the RIGHT key but for a DIFFERENT name
+        # (the name is inside the signed canonical form) is not this
+        # name's mouth moving: a mirror cross-serving it could redirect
+        # this dial to the other name's reach. The planner skips it and
+        # falls to the directory scan, like the different-key case.
+        priv, pub = _name_key()
+        issued, expires = _live_times()
+        binding = _signed_binding(LABEL, priv, pub, issued, expires)
+        desc = core._reach_mint(
+            priv, pub, "othername",
+            [{"kind": "direct", "url": "https://93.184.216.34/"}],
+            issued, expires)
+        with _fixture(binding=binding, desc=desc):
+            code, lines = dial.plan(ADDR, MIRROR)
+        self.assertEqual(code, 3)
+        self.assertTrue(any("different name" in l for l in lines), lines)
+        self.assertFalse(any("93.184.216.34" in l for l in lines), lines)
+
     def test_legacy_directory_fallback(self):
         priv, pub = _name_key()
         issued, expires = _live_times()

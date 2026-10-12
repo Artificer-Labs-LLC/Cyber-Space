@@ -131,6 +131,17 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
             # plan previews that instead of vetoing the dial.
             out.append("note: descriptor names a different key — directory fallback")
             desc = None
+        elif str(desc.get("name", "")).lower() != label:
+            # A descriptor that verifies under the right key but was
+            # signed for a DIFFERENT name is not this name's mouth
+            # moving either: the name is inside the signed canonical
+            # form, so a mirror cross-serving one name's descriptor
+            # under another name (same key, two claims) could otherwise
+            # redirect this dial to the other name's reach. The daemon
+            # (resolve_cyberspace step 5) skips it the same way, so the
+            # plan previews the directory fallback instead.
+            out.append("note: descriptor names a different name — directory fallback")
+            desc = None
     else:
         desc = None
 

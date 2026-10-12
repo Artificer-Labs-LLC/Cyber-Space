@@ -1423,7 +1423,8 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         # name-key-signed reach descriptor served by the mirror carries
         # the hoster's dial strategies in dial-preference order; the
         # dialer verifies it fail-closed (signature against the canonical
-        # form, node_pubkey EQUAL to the binding's key, live — the
+        # form, node_pubkey EQUAL to the binding's key AND the signed
+        # name EQUAL to the asked label, live — the
         # mirror's word alone is never enough). Direct strategies dial
         # first; unknown strategy kinds are skipped (protocols grow by
         # addition). When the descriptor path fails at any point, the
@@ -1435,7 +1436,8 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         via_rendezvous = None
         desc = _resolve_get_json(mirror + "/api/v1/names/" + label + "/reach")
         if isinstance(desc, dict) and _reach_descriptor_verify(desc):
-            if str(desc.get("node_pubkey", "")).lower() == node_pubkey:
+            if (str(desc.get("node_pubkey", "")).lower() == node_pubkey
+                    and str(desc.get("name", "")).lower() == label):
                 for strat in desc.get("reach", []) or []:
                     if not isinstance(strat, dict):
                         continue
