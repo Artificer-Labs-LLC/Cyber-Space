@@ -131,6 +131,10 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
         return "grammar"
     if _length_refused(label):
         return "length"
+    # B2 (Q1 fix, ART-29): issued_at must be present and canonical.
+    # A missing or malformed issued_at refuses the binding (expiry-cap).
+    if not _canonical_time_ok(row.get("issued_at")):
+        return "expiry-cap"
     if not _canonical_time_ok(row.get("expires_at")):
         return "expiry-cap"
     if label not in manifest_labels:
