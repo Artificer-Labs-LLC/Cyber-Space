@@ -77,7 +77,7 @@ def iso(dt):
 NOW = datetime.now(timezone.utc)
 ISSUED = iso(NOW - timedelta(minutes=1))
 EXPIRES = iso(NOW + timedelta(days=30))
-_next_env_ts = int(time.time()) - 120
+_next_env_ts = int(time.time()) - 30  # stay well inside MAX_SKEW under load
 
 
 def mint(name, priv_hex, issued=ISSUED, expires=EXPIRES):
@@ -923,6 +923,48 @@ finally:
 record_mutant("mandatory allowlist skipped",
               "an unlisted sender is refused before any verify",
               allow_real_ok and allow_row_ok, allow_mutant_fails)
+
+# (5d) Examiner mutant d: empty allowlist admits all. Run FIRST among
+# the provisional-CLEAR holdouts (Villhaze 5f028f12). The belt above
+# patches the whole pre_verify_gate; this one patches only
+# _gossip_allowlisted so an empty list returns True.
+print("mutant d (empty allowlist admits all):")
+reset_hits()
+federation._gossip_seen.clear()
+saved_d = os.environ.get("CYBERNET_PEER_ALLOWLIST", "")
+os.environ["CYBERNET_PEER_ALLOWLIST"] = ""
+d_binding = mint("emptyd", secrets.token_hex(32))
+# Real: empty -> False -> 403, 0 verifies.
+d_calls = {"n": 0}
+real_d_verify = _fed_env.verify_envelope
+def _count_d(env, *a, **k):
+    d_calls["n"] += 1
+    return real_d_verify(env, *a, **k)
+_fed_env.verify_envelope = _count_d
+try:
+    d_real_r = post(gossip_env(sender_priv, sender_pub, [d_binding]))
+    d_real_ok = (d_real_r.status_code == 403
+                 and "allowlist" in (detail(d_real_r) or "")
+                 and binding_row("emptyd") is None
+                 and d_calls["n"] == 0)
+finally:
+    _fed_env.verify_envelope = real_d_verify
+check("empty allowlist (mutant-d baseline): 403, 0 verifies, no row",
+      d_real_ok, (d_real_r.status_code, detail(d_real_r), d_calls["n"]))
+real_allowlisted = federation._gossip_allowlisted
+federation._gossip_allowlisted = lambda sender_pub: True
+try:
+    d_mut_r = post(gossip_env(sender_priv, sender_pub, [d_binding]))
+    d_body = d_mut_r.json() if d_mut_r.status_code == 200 else {}
+    d_mutant_fails = (d_mut_r.status_code == 200
+                      and d_body.get("outcomes") == ["inserted"]
+                      and binding_row("emptyd") is not None)
+finally:
+    federation._gossip_allowlisted = real_allowlisted
+    os.environ["CYBERNET_PEER_ALLOWLIST"] = saved_d
+record_mutant("empty allowlist admits all",
+              "empty allowlist refuses before any verify",
+              d_real_ok, d_mutant_fails)
 
 # (6) client.host CI guard covers federation.py and app.py
 print("client.host guard:")
