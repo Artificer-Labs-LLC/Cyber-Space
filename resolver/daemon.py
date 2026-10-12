@@ -21,8 +21,14 @@ one bad connection can never kill the zone. SIGINT/SIGTERM stop it cleanly.
 
 Config (environment, bad values fall back to defaults):
   CYBERNET_MIRROR_URL    mirror registry for resolve_cyberspace()
-                         (default http://127.0.0.1:8000 — the genesis node
+                         (default http://127.0.0.1:8471 — the genesis node
                          when the daemon runs beside it; set this for real)
+                         — set but not an http(s) URL with a host ->
+                         _env_str passes it through verbatim, so every
+                         .cyberspace query fails at the mirror fetch and
+                         answers NXDOMAIN while the daemon looks healthy;
+                         run() warns loudly on stderr at startup
+                         (see _daemon_config_warnings)
   CYBERNET_UPSTREAM_DNS  "host:port" upstream for everything outside
                          .cyberspace (default 1.1.1.1:53)
   CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1)
@@ -50,6 +56,7 @@ import signal
 import socket
 import struct
 import sys
+import urllib.parse
 
 from .answer import handle_query
 from .dns import error_response
@@ -88,15 +95,21 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
 
 def _daemon_config_warnings() -> list[str]:
     """Loud config mistakes, or []. Unset/empty means the documented
-    default (silent, a choice). Three set-but-ineffective cases the
+    default (silent, a choice). Four set-but-ineffective cases the
     parsers otherwise hide: CYBERNET_RESOLVER_PORT not an integer
     (falls back to 5353, so the daemon listens somewhere the operator
     never chose), below 1 (clamped to 1), or above 65535 (honored by
     _env_int, so the bind then fails); CYBERNET_TTL_CAP not an integer
-    (300) or below 0 (clamped to 0); and CYBERNET_UPSTREAM_DNS set but
+    (300) or below 0 (clamped to 0); CYBERNET_UPSTREAM_DNS set but
     malformed (_parse_upstream substitutes 1.1.1.1:53, so every
-    non-.cyberspace query is forwarded somewhere unchosen). Mirrors
-    _env_int/_parse_upstream exactly; never prints the values."""
+    non-.cyberspace query is forwarded somewhere unchosen); and
+    CYBERNET_MIRROR_URL set but not an http(s) URL with a host
+    (_env_str passes it through verbatim and _resolve_get_json can
+    never fetch it, so every .cyberspace query answers NXDOMAIN
+    while the daemon looks healthy — a loopback mirror is honest
+    here, so unlike a node_url this gate is shape only, no
+    public-address check). Mirrors _env_int/_parse_upstream and the
+    fetch's scheme/host need exactly; never prints the values."""
     problems: list[str] = []
     raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
     if raw:
@@ -136,6 +149,18 @@ def _daemon_config_warnings() -> list[str]:
             problems.append(
                 "CYBERNET_UPSTREAM_DNS is not a valid host:port — the "
                 "1.1.1.1:53 default will be used instead")
+    raw = os.environ.get("CYBERNET_MIRROR_URL", "").strip()
+    if raw:
+        try:
+            parts = urllib.parse.urlsplit(raw)
+            mirror_ok = parts.scheme in ("http", "https") and bool(parts.hostname)
+        except ValueError:
+            mirror_ok = False
+        if not mirror_ok:
+            problems.append(
+                "CYBERNET_MIRROR_URL is not a valid http(s) URL with a "
+                "host — no mirror can be fetched at it, so every "
+                ".cyberspace query will answer NXDOMAIN")
     return problems
 
 

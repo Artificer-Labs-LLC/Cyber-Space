@@ -6,6 +6,9 @@ _env_int and CYBERNET_UPSTREAM_DNS via _parse_upstream — every bad
 value falls back silently: a typo'd port listens on 5353, a malformed
 upstream forwards all non-zone queries to 1.1.1.1:53 unchosen, a
 port above 65535 is honored and the bind fails with no hint why.
+CYBERNET_MIRROR_URL is worse: _env_str passes it through verbatim,
+so a scheme-less or host-less mirror is never fetched and every
+.cyberspace query answers NXDOMAIN while the daemon looks healthy.
 _daemon_config_warnings names each mistake at startup: unset/empty
 and valid values are silent, and no warning echoes the value.
 
@@ -20,7 +23,8 @@ sys.path.insert(0, REPO)
 
 from resolver import daemon  # noqa: E402
 
-_VARS = ("CYBERNET_RESOLVER_PORT", "CYBERNET_TTL_CAP", "CYBERNET_UPSTREAM_DNS")
+_VARS = ("CYBERNET_RESOLVER_PORT", "CYBERNET_TTL_CAP", "CYBERNET_UPSTREAM_DNS",
+         "CYBERNET_MIRROR_URL")
 
 
 class TestDaemonConfigWarnings(unittest.TestCase):
@@ -100,6 +104,36 @@ class TestDaemonConfigWarnings(unittest.TestCase):
     def test_upstream_whitespace_padded_valid_is_silent(self):
         self.assertEqual(
             self._warns(CYBERNET_UPSTREAM_DNS=" 10.0.0.3 : 5354 "), [])
+
+    def test_mirror_loopback_default_is_silent(self):
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="http://127.0.0.1:8471"), [])
+
+    def test_mirror_https_with_host_is_silent(self):
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="https://mirror.example:8443"), [])
+
+    def test_mirror_bare_word_warns_no_echo(self):
+        warns = self._warns(CYBERNET_MIRROR_URL="notaurl")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+        self.assertIn("NXDOMAIN", warns[0])
+        self.assertNotIn("notaurl", warns[0])
+
+    def test_mirror_no_scheme_warns(self):
+        warns = self._warns(CYBERNET_MIRROR_URL="127.0.0.1:8471")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+
+    def test_mirror_non_http_scheme_warns(self):
+        warns = self._warns(CYBERNET_MIRROR_URL="ftp://mirror.example")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+
+    def test_mirror_scheme_without_host_warns(self):
+        warns = self._warns(CYBERNET_MIRROR_URL="http://")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_MIRROR_URL", warns[0])
 
     def test_run_wires_the_warning(self):
         src = open(os.path.join(REPO, "resolver", "daemon.py")).read()
