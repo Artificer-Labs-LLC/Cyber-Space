@@ -358,6 +358,25 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def test_parse_response_rd_clear_raises_resolve_error(self):
+        """An RD-clear packet is not the daemon's reply to this query —
+        the client always sends RD and build_response echoes it."""
+        resp = bytearray(self._valid_response())
+        flags = struct.unpack(">H", bytes(resp[2:4]))[0] & ~0x0100
+        resp[2:4] = struct.pack(">H", flags)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_resolve_rd_clear_raises_resolve_error(self):
+        def tamper(q):
+            resp = _a_response(q)
+            flags = struct.unpack(">H", resp[2:4])[0] & ~0x0100
+            return resp[:2] + struct.pack(">H", flags) + resp[4:]
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_parse_response_different_question_raises_resolve_error(self):
         """Right txid, answers for ANOTHER name: a mistransaction."""
         other = dns.parse_query(
