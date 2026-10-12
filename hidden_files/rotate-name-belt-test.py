@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Belt test for rotate_name.py: the identity half of primitive 4.
 
-15 checks against real Ed25519 rotation records:
+20 checks against real Ed25519 rotation records:
 valid rotation verifies, tampered new/old pub fail, signature by the NEW
 key fails (wrong side vouches), garbage sig fails, bad label fails,
 self-rotation refused at mint AND verify, uppercase keys normalize,
@@ -117,6 +117,16 @@ check("future-dated rotation not yet in force",
 r10 = dict(rec); r10["issued_at"] = "not-a-time"
 check("unparseable issued_at fails",
       rotate_name.verify_rotation(r10) is not None)
+
+# 10b. non-canonical issued_at spellings fail even when correctly signed —
+# fromisoformat accepted them while every mirror seat (strict canonical
+# UTC parse) read the same record as malformed
+for _spell in ("2026-10-12T10:00:00+05:00", "2026-10-12 10:00:00",
+               "2026-10-12T10:00:00", "2026-10-12T10:00:00.123456+00:00",
+               "2026-10-12"):
+    _r, _, _ = _mint(issued=_spell)
+    check(f"non-canonical issued_at {_spell!r} fails",
+          rotate_name.verify_rotation(_r) is not None)
 
 # 11. name-claim payload cannot pass as rotation (prefix confusion)
 op2 = os.urandom(32)

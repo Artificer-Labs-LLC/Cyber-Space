@@ -80,6 +80,33 @@ def _normalize(s: str) -> str:
     return s.strip().lower()
 
 
+def _parse_canonical_ts(s: str) -> datetime:
+    """Strict twin of core_serve._parse_claim_time / verify_name._parse_ts:
+    exactly `YYYY-MM-DDTHH:MM:SS` with a UTC stamp (`Z` or `+00:00`), and
+    nothing else. `datetime.fromisoformat` is NOT used — it accepts ~12
+    spellings (space separators, naive stamps read as UTC here, fractional
+    seconds, non-UTC offsets, date-only) that every mirror seat refuses:
+    the rotate route re-parses rotation_issued_at with _parse_claim_time
+    and the gossip helpers do the same, so a rotation signed over a
+    non-canonical stamp verified here (and walked clean in
+    resolve_chain) while every mirror read it as malformed. Raises
+    ValueError on any non-canonical input."""
+    import re
+    m = re.match(
+        r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+        r"([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)\Z", s)
+    if not m:
+        raise ValueError(f"issued_at is not canonical UTC timestamp: {s!r}")
+    year, mon, day, hr, mi, se = (int(m.group(i)) for i in range(1, 7))
+    if not (1 <= mon <= 12 and 1 <= day <= 31 and hr <= 23
+            and mi <= 59 and se <= 59):
+        raise ValueError(f"issued_at out of range: {s!r}")
+    try:
+        return datetime(year, mon, day, hr, mi, se, tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(f"issued_at invalid date: {s!r}")
+
+
 def _rotate_payload(name: str, old_pub: str, new_pub: str,
                     issued_at: str) -> bytes:
     """The canonical bytes the OLD key signs. Distinct prefix from
@@ -183,11 +210,9 @@ def verify_rotation(record: dict) -> str | None:
     if old_pub == new_pub:
         return "rotation to the same key is a no-op"
     try:
-        issued = datetime.fromisoformat(record["issued_at"])
+        issued = _parse_canonical_ts(record["issued_at"])
     except (ValueError, TypeError):
-        return "issued_at is not ISO 8601"
-    if issued.tzinfo is None:
-        issued = issued.replace(tzinfo=timezone.utc)
+        return "issued_at is not a canonical UTC timestamp"
     if issued > datetime.now(timezone.utc):
         return "rotation is dated in the future — not yet in force"
     payload = _rotate_payload(name, old_pub, new_pub, record["issued_at"])
