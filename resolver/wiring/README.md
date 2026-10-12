@@ -6,15 +6,18 @@ Wiring it in means telling the machine's own resolver to send it the
 runs the daemon; the three copy-paste split-horizon configs (sections
 1–3) do the telling. Pick one config.
 
-**Status (2026-10-07):** these are written, not yet proven — they get
-their first live run on the HQ node (genesis resolving its own name is
-a fine smoke test), then on her machine. The port-suffix question in the
+**Status (2026-10-12):** live-proven on the HQ node — the daemon runs
+there under systemd, HQ's own systemd-resolved split-horizon routes
+`~cyberspace` to it, and the full chain (DNS UDP+TCP → address →
+`getent hosts` → HTTP) was verified end to end; run
+`resolver/wiring/smoke.py` (UDP and `--tcp`) against the daemon after
+every deploy, because a green unit state alone proved nothing there.
+Not yet wired on any other machine. The port-suffix question in the
 systemd-resolved unit is settled from the docs (resolved.conf(5): each
 DNS= address can take an optional ":port" — `DNS=127.0.0.1:5353` is
-valid; `resolvectl status` confirms it at wiring time). The remaining
-untested corner is the live run itself.
+valid; `resolvectl status` confirms it at wiring time).
 
-## 0. The daemon as a service (new — untested on a live host)
+## 0. The daemon as a service (live on the HQ node since 2026-10-12)
 
 File: `cybernet-resolver.service` in this directory. Written against the
 genesis node's own host layout (`User=villhaze`,
@@ -89,7 +92,8 @@ python resolver/wiring/smoke.py [--name genesis.cyberspace]        # UDP path
 python resolver/wiring/smoke.py --tcp [--name genesis.cyberspace]  # DNS-over-TCP path (RFC 7766)
 ```
 
-1. registered name → NOERROR with at least one A record
+1. registered name → NOERROR with at least one A record, or an AAAA
+   record when A is NODATA (a v6-only hosted node passes)
 2. random never-registered `.cyberspace` label → NXDOMAIN (fail-closed)
 3. run both: the daemon serves UDP and TCP on the same port; check each wire
 
