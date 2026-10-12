@@ -139,9 +139,13 @@ def _parse_response(
     IN); anything else in the section is skipped, never trusted.
 
     A matching txid alone never sufficed: a packet with the QR bit
-    clear is a query, not an answer, and an echoed question naming a
-    DIFFERENT name (or family) than the one asked is a mistransaction
-    even with the right txid — its answers belong to another question.
+    clear is a query, not an answer, a packet with the AA bit clear
+    is not the daemon's authoritative answer for this zone (every
+    reply the daemon builds — answers, NXDOMAIN, SERVFAIL — sets AA;
+    an AA-clear packet is some other responder's word), and an echoed
+    question naming a DIFFERENT name (or family) than the one asked
+    is a mistransaction even with the right txid — its answers belong
+    to another question.
     When qname/qtype are given (resolve() always gives both), the
     echoed question must match them exactly (name compared in the
     client's normalized lower-case form).
@@ -160,6 +164,8 @@ def _parse_response(
         raise ResolveError("transaction id mismatch")
     if not flags & 0x8000:
         raise ResolveError("not a response (QR bit clear)")
+    if not flags & 0x0400:
+        raise ResolveError("not authoritative (AA bit clear)")
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
