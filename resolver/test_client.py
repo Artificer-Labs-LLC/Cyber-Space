@@ -779,6 +779,21 @@ class ClientTests(unittest.TestCase):
             ["10.9.8.7"],
         )
 
+    def test_oversize_port_udp_fallback_raises_resolve_error(self):
+        """Port >65535: sendto raises OverflowError, not OSError — it
+        must surface as ResolveError (after the TCP wire fails the
+        same way), never as a raw OverflowError out of resolve()."""
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", port=70000, timeout=1.0)
+
+    def test_oversize_port_tcp_only_raises_resolve_error(self):
+        """Port >65535 on the TCP wire alone: whatever the transport
+        raises for it, the contract is ResolveError, no fallback."""
+        with self.assertRaises(client.ResolveError):
+            client.resolve(
+                "node.cyberspace", port=70000, timeout=1.0, tcp_only=True
+            )
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)

@@ -364,7 +364,11 @@ def _query_udp(
             raise ResolveError("udp response from an unexpected source")
     except ResolveError:
         raise
-    except OSError as exc:
+    except (OSError, OverflowError) as exc:
+        # OverflowError rides along: a port above 65535 (honored from
+        # CYBERNET_RESOLVER_PORT, see _client_port_warnings) makes
+        # sendto raise OverflowError, NOT OSError — uncaught it would
+        # escape resolve() as a raw crash instead of a ResolveError.
         raise ResolveError(f"udp transport failed: {exc}") from exc
     finally:
         if sock is None and s is not None:
@@ -393,7 +397,11 @@ def _query_tcp(
         s.sendall(struct.pack(">H", len(packet)) + packet)
         (body_len,) = struct.unpack(">H", _read_exact(s, 2))
         data = _read_exact(s, body_len)
-    except OSError as exc:
+    except (OSError, OverflowError) as exc:
+        # OverflowError for parity with the UDP wire: create_connection
+        # itself wraps an oversize port through getaddrinfo (OSError),
+        # but a caller-supplied socket's send/recv path can still raise
+        # OverflowError for one — a transport failure either way.
         raise ResolveError(f"tcp transport failed: {exc}") from exc
     finally:
         if sock is None and s is not None:
