@@ -1122,8 +1122,24 @@ def _names_claim_check_rate(request: Request) -> None:
     ip = client.host if client else "unknown"
     # ART-38 (Bulwark BLOCK on 86256ae): claim and rotate share ONE bucket,
     # so alternating the two routes cannot double the per-IP budget.
+    # This bucket stays on request.client.host. ART-40 re-keys the legacy
+    # witness routes, not this names-write bucket.
     _check_rate(f"names-write:{ip}", limit=NAME_CLAIM_RATE_LIMIT,
                 window=NAME_CLAIM_RATE_WINDOW)
+
+
+def _claim_weak_reason(pub: str):
+    """ART-40: claim refuses a weak name key before any name_bindings write.
+    Tests replace this; do not skip it on the claim path."""
+    import window_open
+    return window_open.weak_reason(pub)
+
+
+def _rotate_weak_reason(pub: str):
+    """ART-40: rotate refuses a weak old or new key before any write.
+    The belt's rotate mutant replaces this with a no-op."""
+    import window_open
+    return window_open.weak_reason(pub)
 
 
 @router.post("/api/v1/names/claim")
@@ -1175,39 +1191,51 @@ async def names_claim(request: Request):
     admission_reason = _name_binding_admission_ok(issued_dt, expires_dt, now_dt)
     if admission_reason is not None:
         raise HTTPException(status_code=400, detail=f"Refused: {admission_reason}.")
-    if not _name_binding_verify(name, node_pubkey, issued_at, expires_at, signature):
-        raise HTTPException(status_code=400, detail="Signature does not verify against node_pubkey; binding refused.")
     binding = {"name": name, "node_pubkey": node_pubkey, "issued_at": issued_at,
                "expires_at": expires_at, "signature": signature}
-    with _db_lock, _db() as conn:
-        cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (name,))
-        old = cur.fetchone()
-        old = dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), old)) if old else None
-        # r3 (Bulwark High, ART-29): live foreign incumbent is ALWAYS kept.
-        # A challenger signing issued_at = incumbent - 1s passes the 24h
-        # freshness gate but must not steal a live name via the route
-        # either. The rejected claim is logged as a conflict and refused
-        # with 409. Same-key updates (renewals) flow through
-        # _old_binding_beaten below.
-        if (old is not None and _incumbent_is_live(old, now_dt)
-                and old["node_pubkey"].lower() != node_pubkey.lower()):
-            _log_name_conflict(conn, name, old, binding,
-                               "live-foreign-incumbent")
-            raise HTTPException(status_code=409, detail="Name already claimed — live incumbent held by another key; challenger logged as conflict.")
-        # Q1 fix (Examiner's block): _old_binding_beaten decides; an
-        # unparseable stored row is beaten only by the same key.
-        old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)
-        if old_beaten:
-            if old is None and not _name_registry_has_room(conn):
-                raise HTTPException(status_code=400, detail="Name registry is full; renewals of known names still merge.")
-            conn.execute(
-                "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
-                "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-                "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
-                "expires_at=excluded.expires_at, signature=excluded.signature",
-                (name, node_pubkey, issued_at, expires_at, signature))
-            return {**binding, "status": "claimed"}
-        raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
+
+    def _verify_claim():
+        # Signature, then weak_reason. Both before any name_bindings write
+        # (including the conflict log). ART-40 admission.
+        if not _name_binding_verify(name, node_pubkey, issued_at, expires_at, signature):
+            raise HTTPException(status_code=400, detail="Signature does not verify against node_pubkey; binding refused.")
+        why = _claim_weak_reason(node_pubkey)
+        if why:
+            raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
+
+    def _write_claim():
+        with _db_lock, _db() as conn:
+            cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (name,))
+            old = cur.fetchone()
+            old = dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), old)) if old else None
+            # r3 (Bulwark High, ART-29): live foreign incumbent is ALWAYS kept.
+            # A challenger signing issued_at = incumbent - 1s passes the 24h
+            # freshness gate but must not steal a live name via the route
+            # either. The rejected claim is logged as a conflict and refused
+            # with 409. Same-key updates (renewals) flow through
+            # _old_binding_beaten below.
+            if (old is not None and _incumbent_is_live(old, now_dt)
+                    and old["node_pubkey"].lower() != node_pubkey.lower()):
+                _log_name_conflict(conn, name, old, binding,
+                                   "live-foreign-incumbent")
+                raise HTTPException(status_code=409, detail="Name already claimed — live incumbent held by another key; challenger logged as conflict.")
+            # Q1 fix (Examiner's block): _old_binding_beaten decides; an
+            # unparseable stored row is beaten only by the same key.
+            old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)
+            if old_beaten:
+                if old is None and not _name_registry_has_room(conn):
+                    raise HTTPException(status_code=400, detail="Name registry is full; renewals of known names still merge.")
+                conn.execute(
+                    "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                    "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
+                    "expires_at=excluded.expires_at, signature=excluded.signature",
+                    (name, node_pubkey, issued_at, expires_at, signature))
+                return {**binding, "status": "claimed"}
+            raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
+
+    import window_open
+    return window_open.run_admission(_verify_claim, _write_claim)
 
 
 # ART-38: names/rotate is gated by the SAME names-write:{ip} bucket and the
@@ -1297,40 +1325,54 @@ async def names_rotate(request: Request):
         raise HTTPException(status_code=400, detail="binding issued_at is in the future; the claim must be signed now.")
     if b_issued_dt < rotation_dt:
         raise HTTPException(status_code=400, detail="The new binding cannot predate the rotation that designated its key — the chain must move forward in time.")
-    if not _name_binding_verify(name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature):
-        raise HTTPException(status_code=400, detail="New binding signature does not verify against new_pubkey; rotation refused.")
-    # 2: the old key must actually hold the name, right now. Dead names
-    # read as absent (mirror of names_resolve's contract); a rotation for a
-    # name the old key does not hold is refused — never guessed.
-    with _db_lock, _db() as conn:
-        cur = conn.execute("SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?", (name,))
-        row = cur.fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="No such name.")
-    stored_pub, stored_expires = row
-    try:
-        live = _parse_claim_time(stored_expires) > datetime.now(timezone.utc)
-    except ValueError:
-        live = False
-    if not live:
-        raise HTTPException(status_code=404, detail="No such name.")
-    if stored_pub != old_pubkey:
-        raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
-    accepted_at = _now()
-    with _db_lock, _db() as conn:
-        conn.execute(
-            "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
-            "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-            "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
-            "expires_at=excluded.expires_at, signature=excluded.signature",
-            (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
-        conn.execute(
-            "INSERT OR IGNORE INTO name_rotations "
-            "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
-    return {"name": name, "status": "rotated",
-            "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
+
+    def _verify_rotate():
+        # Binding signature, then weak_reason on both keys, before any write.
+        # The rotation record was already verified above (it is the old
+        # key's signature). ART-40 admission.
+        if not _name_binding_verify(name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature):
+            raise HTTPException(status_code=400, detail="New binding signature does not verify against new_pubkey; rotation refused.")
+        for pub in (old_pubkey, new_pubkey):
+            why = _rotate_weak_reason(pub)
+            if why:
+                raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
+
+    def _write_rotate():
+        # 2: the old key must actually hold the name, right now. Dead names
+        # read as absent (mirror of names_resolve's contract); a rotation for a
+        # name the old key does not hold is refused — never guessed.
+        with _db_lock, _db() as conn:
+            cur = conn.execute("SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?", (name,))
+            row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such name.")
+        stored_pub, stored_expires = row
+        try:
+            live = _parse_claim_time(stored_expires) > datetime.now(timezone.utc)
+        except ValueError:
+            live = False
+        if not live:
+            raise HTTPException(status_code=404, detail="No such name.")
+        if stored_pub != old_pubkey:
+            raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
+        accepted_at = _now()
+        with _db_lock, _db() as conn:
+            conn.execute(
+                "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                "node_pubkey=excluded.node_pubkey, issued_at=excluded.issued_at, "
+                "expires_at=excluded.expires_at, signature=excluded.signature",
+                (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
+            conn.execute(
+                "INSERT OR IGNORE INTO name_rotations "
+                "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
+        return {"name": name, "status": "rotated",
+                "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
+
+    import window_open
+    return window_open.run_admission(_verify_rotate, _write_rotate)
 
 
 @router.get("/api/v1/names/{name}/rotations")
