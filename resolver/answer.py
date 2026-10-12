@@ -20,6 +20,7 @@ own. A lying mirror can withhold a name (→ NXDOMAIN) but never redirect
 one — the same guarantee Phase 1 makes to agent clients.
 """
 
+import ipaddress
 import socket
 import urllib.parse
 from datetime import datetime, timezone
@@ -91,7 +92,17 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
     the monkeypatched-socket harness instead. Exercise the real wire path
     on the HQ node when wiring it up."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # An IPv6-literal upstream (daemon._parse_upstream's "[v6]:port"
+        # form, stored unbracketed) needs an AF_INET6 socket — an AF_INET
+        # sendto to it raises and every forward would SERVFAIL. Hostnames
+        # and IPv4 literals keep AF_INET.
+        try:
+            family = (socket.AF_INET6
+                      if ipaddress.ip_address(upstream[0]).version == 6
+                      else socket.AF_INET)
+        except ValueError:
+            family = socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_DGRAM)
         try:
             sock.settimeout(UPSTREAM_TIMEOUT)
             sock.sendto(raw, upstream)

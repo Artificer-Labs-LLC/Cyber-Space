@@ -108,6 +108,30 @@ def test_forward_passthrough():
           f"got {resp!r}")
 
 
+def test_forward_v6_upstream_uses_inet6():
+    """An IPv6-literal upstream is dialed on an AF_INET6 socket (an
+    AF_INET sendto to it would raise and SERVFAIL every forward)."""
+    raw = _query_packet("example.com")
+    canned = b"\x00" * 12 + b"v6 upstream says hi"
+    seen = {}
+
+    def factory(family, *a, **k):
+        seen["family"] = family
+        return _CannedSocket(canned)
+
+    real = answer.socket.socket
+    answer.socket.socket = factory
+    try:
+        resp = answer.handle_query(
+            raw, mirror_url="http://mirror.invalid", upstream=("::1", 5353))
+    finally:
+        answer.socket.socket = real
+    check("forward: v6 upstream -> AF_INET6 socket",
+          seen.get("family") == answer.socket.AF_INET6,
+          f"got {seen.get('family')}")
+    check("forward: v6 reply passthrough", resp == canned, f"got {resp!r}")
+
+
 def test_forward_failure_servfail():
     """A dead upstream is a SERVFAIL, never an invented answer."""
     raw = _query_packet("example.com")
@@ -191,6 +215,7 @@ def test_mx_nodata():
 def main():
     print("forward + ttl unit tests (resolver/answer.py):")
     test_forward_passthrough()
+    test_forward_v6_upstream_uses_inet6()
     test_forward_failure_servfail()
     test_ttl_cap()
     test_ttl_remaining()

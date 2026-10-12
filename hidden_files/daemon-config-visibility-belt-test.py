@@ -103,6 +103,15 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_UPSTREAM_DNS", warns[0])
 
+    def test_upstream_bracketed_v6_is_silent(self):
+        self.assertEqual(
+            self._warns(CYBERNET_UPSTREAM_DNS="[::1]:5353"), [])
+
+    def test_upstream_bracketed_v6_bad_port_warns(self):
+        warns = self._warns(CYBERNET_UPSTREAM_DNS="[::1]:dns")
+        self.assertEqual(len(warns), 1)
+        self.assertIn("CYBERNET_UPSTREAM_DNS", warns[0])
+
     def test_upstream_whitespace_padded_valid_is_silent(self):
         self.assertEqual(
             self._warns(CYBERNET_UPSTREAM_DNS=" 10.0.0.3 : 5354 "), [])

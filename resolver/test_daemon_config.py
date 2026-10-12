@@ -7,10 +7,11 @@ and _config() never touches the wire. Importing resolver.daemon pulls in
 core.py (clean import, threads only spawn on demand — proven at 19:25).
 
 Frozen behaviors recorded, not all blessed:
-  * _parse_upstream() splits on the FIRST colon, so bracketed IPv6 upstreams
-    ("[::1]:5353") fall back to 1.1.1.1:53 — the wired-in default, never a
-    silent half-parse. If IPv6 upstream is ever wanted, this parser is the
-    seam to fix, not the loop.
+  * _parse_upstream() accepts bracketed IPv6 upstreams ("[::1]:5353" ->
+    ("::1", 5353), stored unbracketed so answer._forward picks AF_INET6);
+    a bare IPv6 literal ("::1") has no unambiguous port split and still
+    falls back to 1.1.1.1:53 — the wired-in default, never a silent
+    half-parse.
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python resolver/test_daemon_config.py
 """
@@ -85,9 +86,12 @@ check("upstream: empty port -> default", _p("10.0.0.4:") == D)
 check("upstream: port 0 -> default", _p("10.0.0.5:0") == D)
 check("upstream: port 99999 -> default", _p("10.0.0.6:99999") == D)
 check("upstream: non-digit port -> default", _p("10.0.0.7:dns") == D)
-check("upstream: bracketed v6 -> default (documented gap, not silent)",
-      _p("[::1]:5353") == D)
-check("upstream: bare v6 -> default (documented gap, not silent)", _p("::1") == D)
+check("upstream: bracketed v6 parsed, unbracketed", _p("[::1]:5353") == ("::1", 5353))
+check("upstream: bracketed v6 no port -> default", _p("[::1]") == D)
+check("upstream: bracketed v6 bad port -> default", _p("[::1]:dns") == D)
+check("upstream: bracketed v4 -> default", _p("[10.0.0.1]:53") == D)
+check("upstream: bracketed garbage -> default", _p("[nope]:53") == D)
+check("upstream: bare v6 -> default (no port split)", _p("::1") == D)
 
 # --- _config: full pass — defaults, overrides, malformed all fall back ---
 

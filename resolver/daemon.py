@@ -29,8 +29,8 @@ Config (environment, bad values fall back to defaults):
                          answers NXDOMAIN while the daemon looks healthy;
                          run() warns loudly on stderr at startup
                          (see _daemon_config_warnings)
-  CYBERNET_UPSTREAM_DNS  "host:port" upstream for everything outside
-                         .cyberspace (default 1.1.1.1:53)
+  CYBERNET_UPSTREAM_DNS  "host:port" (or "[ipv6]:port") upstream for
+                         everything outside .cyberspace (default 1.1.1.1:53)
   CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1)
                          — set but not a bindable IPv4 address or
                          hostname -> _env_str passes it through
@@ -91,10 +91,24 @@ def _env_int(name: str, default: int, floor: int = 0) -> int:
 
 
 def _parse_upstream(raw: str) -> tuple[str, int]:
-    """Parse "host:port". Malformed -> the documented default."""
-    host, _, port = raw.partition(":")
-    host = host.strip()
-    port_n = int(port.strip()) if port.strip().isdigit() else 0
+    """Parse "host:port" or "[ipv6]:port". Malformed -> the documented
+    default. A bracketed host must be a real IPv6 literal (returned
+    unbracketed, so answer._forward can pick AF_INET6); a bare IPv6
+    literal has no unambiguous port split and stays malformed."""
+    raw = raw.strip()
+    if raw.startswith("["):
+        host, _, rest = raw[1:].partition("]")
+        host = host.strip()
+        port_s = rest[1:] if rest.startswith(":") else ""
+        try:
+            if ipaddress.ip_address(host).version != 6:
+                return ("1.1.1.1", 53)
+        except ValueError:
+            return ("1.1.1.1", 53)
+    else:
+        host, _, port_s = raw.partition(":")
+        host = host.strip()
+    port_n = int(port_s.strip()) if port_s.strip().isdigit() else 0
     if not host or not (1 <= port_n <= 65535):
         return ("1.1.1.1", 53)
     return (host, port_n)
@@ -159,9 +173,10 @@ def _daemon_config_warnings() -> list[str]:
                     "used instead")
     raw = os.environ.get("CYBERNET_UPSTREAM_DNS", "").strip()
     if raw:
-        host, _, port_s = raw.partition(":")
-        port_ok = port_s.strip().isdigit() and 1 <= int(port_s.strip()) <= 65535
-        if not host.strip() or not port_ok:
+        # Mirror _parse_upstream exactly (incl. the [ipv6]:port form):
+        # it fell back iff the parse yields the default while the raw
+        # value is not the default written out.
+        if _parse_upstream(raw) == ("1.1.1.1", 53) and raw != "1.1.1.1:53":
             problems.append(
                 "CYBERNET_UPSTREAM_DNS is not a valid host:port — the "
                 "1.1.1.1:53 default will be used instead")
