@@ -154,12 +154,18 @@ def verify_rotation_cert(cert, agent_key_id_: str, old_pub: str, new_pub: str) -
 LOG_FORMAT = "cyberspace-legacy-migration-log/v1"
 HEAD_FORMAT = "cyberspace-legacy-migration-head/v1"
 WITNESS_SET_FORMAT = "cyberspace-witness-set/v1"
-# Extension point (Lodestar, NOT ruled, not implemented): reserve-hold,
-# name-refused, origin-pin, origin-handoff would be added to this tuple,
-# and the ENTRIES_PER_* ceilings below would count them. Do not add them
-# until the board rules.
+# Domain tag for a witness record. The kind is an exact KINDS byte string
+# with no '|', so it cannot smuggle another field into the tag. Callers
+# check the kind BEFORE any signature verification over this tag.
+WITNESS_DOMAIN = "cyberspace-witness/v0"
+# Ruled in with the writer in window_open.open_window. Hold-closure and
+# resolution stay out: that record is pending a ruling.
 KINDS = ("window-open", "hold", "binding-hold", "migrate-pending", "late-migrate-pending",
-         "withdraw", "contest", "window-close", "cutover", "expire", "activation-refused")
+         "withdraw", "contest", "window-close", "cutover", "expire", "activation-refused",
+         "reserve-hold", "name-refused", "origin-pin", "origin-handoff")
+WITNESS_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
+if any((not isinstance(k, str)) or ("|" in k) or (k.encode("ascii") != k.encode()) for k in KINDS):
+    raise RuntimeError("KINDS must be exact ASCII byte strings with no '|'")
 LATE_CANCEL_SEC = 86400
 WINDOW_SEC = 30 * 86400  # db78304f; B checks window-close is no earlier
 HOLD_AFTER_CLOSE_SEC = 90 * 86400  # db78304f; a late start must fall inside it
@@ -180,6 +186,11 @@ BODY_FIELDS = ("name", "migration_id", "k0_pub", "detail", "logged_at")
 MAX_STARTS_PER_ACCOUNT = 3
 ENTRIES_PER_ACCOUNT = 9
 ENTRIES_PER_BINDING = 2
+# One slot each for reserve-hold, name-refused, origin-pin, origin-handoff.
+# A name carries at most these four; it does not carry all four at once,
+# and the ceiling counts the worst case. Orphans are not in `bindings`
+# (the binding row was reaped), so the operator pins that count separately.
+ENTRIES_PER_NAME = 4
 WINDOW_EDGES = 2
 MAX_NAME_LEN = 32          # core NAME_RE: 3-32 chars of [a-z0-9_-]
 MAX_DETAIL_BYTES = 512     # compact JSON; lm.log refuses anything larger
@@ -189,8 +200,15 @@ MAX_WITNESSES = 16
 HEAD_BUDGET = 1024 + MAX_WITNESSES * (256 + 72)
 
 
-def max_log_entries(accounts: int, bindings: int) -> int:
-    return ENTRIES_PER_ACCOUNT * int(accounts) + ENTRIES_PER_BINDING * int(bindings) + WINDOW_EDGES
+def max_log_entries(accounts: int, bindings: int, orphans: int = 0) -> int:
+    """Ceiling for a log sized by accounts, live bindings, and a pinned
+    orphan count. Orphans come from the same name_rotations scan
+    snapshot_bindings uses; they are not implied by `bindings`."""
+    names = int(bindings) + int(orphans)
+    return (ENTRIES_PER_ACCOUNT * int(accounts)
+            + ENTRIES_PER_BINDING * int(bindings)
+            + ENTRIES_PER_NAME * names
+            + WINDOW_EDGES)
 
 
 def _worst_entry(full_body: bool) -> dict:
@@ -218,14 +236,49 @@ MAX_FULL_BYTES = _json_len(_worst_entry(True)) + 2
 FULL_ENTRIES_PER_PROOF = ENTRIES_PER_ACCOUNT + WINDOW_EDGES  # the agent's own + edges
 
 
-def proof_max_bytes(accounts: int, bindings: int) -> int:
+def proof_max_bytes(accounts: int, bindings: int, orphans: int = 0) -> int:
     """Upper bound on a serialized {head, span} proof for a log sized by
-    (accounts, bindings): every entry as a skeleton, the agent's own and
-    the window edges full, plus the rotation chain and key state (item 7,
-    KEY_STATE_BUDGET: up to MAX_ROTATIONS steps)."""
-    return (HEAD_BUDGET + max_log_entries(accounts, bindings) * MAX_SKELETON_BYTES
-            + FULL_ENTRIES_PER_PROOF * (MAX_FULL_BYTES - MAX_SKELETON_BYTES) + 64
+    (accounts, bindings, orphans): every entry as a skeleton, the agent's
+    own, the window edges, and the per-name witness kinds full, plus the
+    rotation chain and key state (item 7, KEY_STATE_BUDGET: up to
+    MAX_ROTATIONS steps)."""
+    names = int(bindings) + int(orphans)
+    full_slots = FULL_ENTRIES_PER_PROOF + ENTRIES_PER_NAME * names
+    return (HEAD_BUDGET + max_log_entries(accounts, bindings, orphans) * MAX_SKELETON_BYTES
+            + full_slots * (MAX_FULL_BYTES - MAX_SKELETON_BYTES) + 64
             + KEY_STATE_BUDGET)
+
+
+def kind_exact(kind) -> bool:
+    """True when kind is an exact KINDS byte string and contains no '|'."""
+    return isinstance(kind, str) and "|" not in kind and kind in KINDS
+
+
+def witness_message(kind: str, fields: dict) -> bytes:
+    """cyberspace-witness/v0|<kind> plus sorted key=value lines.
+
+    The caller has already admitted `kind`. This does not verify a signature.
+    """
+    if not kind_exact(kind):
+        raise ValueError("kind is not an exact witness kind")
+    lines = [f"{WITNESS_DOMAIN}|{kind}"]
+    for key in sorted(fields):
+        if not isinstance(key, str) or "|" in key:
+            raise ValueError("witness field name")
+        lines.append(f"{key}={fields[key]}")
+    return "\n".join(lines).encode()
+
+
+def verify_witness_signature(kind, message: bytes, pub_hex: str, sig_hex: str) -> bool:
+    """Admit the kind, then verify. An unknown kind never reaches checkvalid."""
+    if not kind_exact(kind):
+        return False
+    if not isinstance(message, (bytes, bytearray)):
+        return False
+    prefix = f"{WITNESS_DOMAIN}|{kind}\n".encode()
+    if not bytes(message).startswith(prefix) and bytes(message) != f"{WITNESS_DOMAIN}|{kind}".encode():
+        return False
+    return _sig_ok(pub_hex, bytes(message), sig_hex)
 
 
 class WitnessRefused(Exception):
@@ -501,6 +554,48 @@ def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str) -> tup
         raise WitnessRefused(f"malformed proof ({type(e).__name__})") from None
 
 
+def migration_matches_cutover(start: dict, cut: dict) -> bool:
+    """The cutover activates this migration only when seq, id, and k0 agree."""
+    if start["seq"] > cut["seq"]:
+        return False
+    if start["migration_id"] != cut["migration_id"]:
+        return False
+    if start["k0_pub"] != cut["k0_pub"]:
+        return False
+    return True
+
+
+def rebuild_window_kinds(entries: list) -> dict:
+    """Node B's view of the window kinds from the log span alone.
+
+    No database. reserve-hold carries reserved_for and orphan; name-refused,
+    origin-pin, and origin-handoff are returned the same way.
+    """
+    out = {k: [] for k in WITNESS_KINDS}
+    if not isinstance(entries, list):
+        return out
+    for e in entries:
+        if not isinstance(e, dict) or e.get("kind") not in WITNESS_KINDS or not is_full(e):
+            continue
+        try:
+            detail = json.loads(e["detail"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(detail, dict):
+            continue
+        out[e["kind"]].append({
+            "name": e.get("name"),
+            "k0_pub": e.get("k0_pub"),
+            "detail": detail,
+            "reserved_for": detail.get("reserved_for"),
+            "orphan": detail.get("orphan"),
+            "reason": detail.get("reason"),
+            "origin": detail.get("origin"),
+            "successor": detail.get("successor"),
+        })
+    return out
+
+
 def _accept(proof, name, wset, log_id, store) -> dict:
     h, entries, ident = _rules(proof, name, wset, log_id)
     store.check(h, entries)
@@ -533,6 +628,8 @@ def _rules(proof, name, wset, log_id) -> tuple:
     if entries[c - 1]["logged_at"] - entries[o - 1]["logged_at"] < WINDOW_SEC:
         raise WitnessRefused("window-close is earlier than the 30-day window allows")
     nh = name_hash(name)
+    if any(e["kind"] == "name-refused" and e.get("name_sha256") == nh for e in entries):
+        raise WitnessRefused("name-refused")
     holds = [e for e in entries if e["kind"] == "hold" and e["name_sha256"] == nh]
     if len(holds) != 1 or not o < holds[0]["seq"] < c or not is_full(holds[0]) \
             or holds[0]["name"] != name:
@@ -573,12 +670,19 @@ def _rules(proof, name, wset, log_id) -> tuple:
             raise WitnessRefused("late start after the 90-day hold")
         if cut["logged_at"] - start["logged_at"] < LATE_CANCEL_SEC:
             raise WitnessRefused("late cutover before its 24h cancel window passed")
-    if start["seq"] > cut["seq"] or start["migration_id"] != cut["migration_id"] \
-            or start["k0_pub"] != cut["k0_pub"]:
+    if not migration_matches_cutover(start, cut):
         raise WitnessRefused("cutover does not match the migration it activates")
     detail = json.loads(cut["detail"])
     if detail.get("window_close_seq") != c:
         raise WitnessRefused("cutover names another window-close")
+    for e in entries:
+        if e["kind"] != "reserve-hold" or e.get("name_sha256") != nh:
+            continue
+        if not is_full(e):
+            raise WitnessRefused("span withholds a reserve-hold body")
+        reserved_for = json.loads(e["detail"]).get("reserved_for")
+        if reserved_for != cut["k0_pub"]:
+            raise WitnessRefused("reserve-hold key does not match the cutover")
     return h, entries, {"name": name, "k0_pub": cut["k0_pub"], "agent_key_id": agent_key_id(cut["k0_pub"]),
             "recovery_set_sha256": detail.get("recovery_set_sha256"),
             "late": start["kind"] == "late-migrate-pending", "cutover_seq": cut["seq"],

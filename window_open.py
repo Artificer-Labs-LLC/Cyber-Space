@@ -43,12 +43,17 @@ import core
 from fed import ed25519 as _ed
 
 MAX_STARTS_PER_ACCOUNT = 3
+# The snapshot counts against these. There is no per-source overflow
+# column: exceeding either cap refuses open_window whole.
+SNAPSHOT_PER_NAME = 64
+SNAPSHOT_GLOBAL_CAP = 1024
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS window_open_log (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         opened_at TEXT NOT NULL,
-        opened_by TEXT NOT NULL)""",
+        opened_by TEXT NOT NULL,
+        orphan_count INTEGER NOT NULL DEFAULT 0)""",
     """CREATE TABLE IF NOT EXISTS window_refused_bindings (
         window_id INTEGER NOT NULL,
         source TEXT NOT NULL,
@@ -56,6 +61,22 @@ _SCHEMA = (
         pubkey TEXT NOT NULL,
         reason TEXT NOT NULL,
         PRIMARY KEY (source, row_key, pubkey))""",
+    # Frozen snapshot for reserve-hold / name-refused. FLAG and orphan
+    # refusals have no pubkey, and window_refused_bindings.pubkey is NOT
+    # NULL, so those rows are keyed by name + source (name_rotations when
+    # the binding was reaped). pubkey/reserved_for/origin/successor are the
+    # exact 32 signed key bytes, or NULL. Never a re-encoded point.
+    """CREATE TABLE IF NOT EXISTS window_kind_source (
+        name TEXT NOT NULL,
+        source TEXT NOT NULL,
+        disposition TEXT NOT NULL,
+        pubkey BLOB,
+        reserved_for BLOB,
+        origin BLOB,
+        successor BLOB,
+        orphan INTEGER NOT NULL,
+        reason TEXT,
+        PRIMARY KEY (name, source))""",
     """CREATE TABLE IF NOT EXISTS window_close_log (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         closed_at TEXT NOT NULL,
@@ -108,6 +129,9 @@ _SCHEMA = (
 def init_schema(conn) -> None:
     for s in _SCHEMA:
         conn.execute(s)
+    if _has_table(conn, "window_open_log") and "orphan_count" not in _cols(conn, "window_open_log"):
+        conn.execute(
+            "ALTER TABLE window_open_log ADD COLUMN orphan_count INTEGER NOT NULL DEFAULT 0")
 
 
 def weak_reason(pubkey_hex) -> str | None:
@@ -211,6 +235,44 @@ def _history_anchor(conn, name):
     return _anchor_from_hops(hops)
 
 
+def _exact32(text):
+    """The 32 signed key bytes, or None. Hex decode only: never encodepoint."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    if len(s) != 64:
+        return None
+    try:
+        raw = bytes.fromhex(s)
+    except ValueError:
+        return None
+    if len(raw) != 32:
+        return None
+    return raw
+
+
+def _kind_source_row(name, hops, disposition, *, orphan, reason, reserved_for, pubkey):
+    """One frozen row. Orphan and FLAG rows are keyed by name_rotations
+    because window_refused_bindings.pubkey is NOT NULL."""
+    origin = hops[0][0] if hops else None
+    successor = hops[0][1] if hops else None
+    return {
+        "name": name,
+        "source": "name_rotations" if orphan else "name_bindings",
+        "disposition": disposition,
+        "orphan": bool(orphan),
+        "reason": reason,
+        "reserved_for": reserved_for,
+        "pubkey": pubkey,
+        "origin": origin,
+        "successor": successor,
+        "reserved_for_raw": _exact32(reserved_for),
+        "pubkey_raw": _exact32(pubkey),
+        "origin_raw": _exact32(origin),
+        "successor_raw": _exact32(successor),
+    }
+
+
 def snapshot_bindings(conn):
     """All name_bindings rows (no SQL expires filter). Weak keys are never
     held. Any name whose rotation history touches a weak key (old or new,
@@ -226,31 +288,59 @@ def snapshot_bindings(conn):
     erase K's reservation. EVERY name in name_rotations therefore runs
     through the same anchor rule; a name with history but no binding row is
     reported reserved (current_pubkey None) or refused (FLAG), never
-    dropped. Names with no history and no binding appear nowhere."""
-    held, refused, reserved = [], [], []
+    dropped. Names with no history and no binding appear nowhere.
+
+    kind_source, orphan_count, and hops_per_name come from this same scan.
+    open_window must not scan again to decide what to write."""
+    held, refused, reserved, kind_source = [], [], [], []
     hist = _all_histories(conn) if _has_table(conn, "name_rotations") else {}
     seen = set()
     for row in conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings ORDER BY name"):
         seen.add(row[0])
-        anchor, why = _anchor_from_hops(hist.get(row[0], ()))
+        hops = hist.get(row[0], ())
+        anchor, why = _anchor_from_hops(hops)
         if anchor:
             reserved.append({"name": row[0], "reserved_for": anchor, "current_pubkey": row[1],
                              "weak_pubkey": row[1] if is_weak_pubkey(row[1]) else None})
+            kind_source.append(_kind_source_row(
+                row[0], hops, "reserve-hold", orphan=False, reason=None,
+                reserved_for=anchor, pubkey=row[1]))
         elif why:
             refused.append(tuple(row) + (why,))
+            kind_source.append(_kind_source_row(
+                row[0], hops, "name-refused", orphan=False, reason=why,
+                reserved_for=None, pubkey=row[1]))
         elif is_weak_pubkey(row[1]):
             refused.append(tuple(row))
+            kind_source.append(_kind_source_row(
+                row[0], hops, "name-refused", orphan=False, reason=weak_reason(row[1]) or "weak-key",
+                reserved_for=None, pubkey=row[1]))
         else:
             held.append(row)
-    for name in sorted(set(hist) - seen):  # orphan pass
-        anchor, why = _anchor_from_hops(hist[name])
+    orphan_names = set(hist) - seen
+    for name in sorted(orphan_names):  # orphan pass
+        hops = hist[name]
+        anchor, why = _anchor_from_hops(hops)
         if anchor:
             reserved.append({"name": name, "reserved_for": anchor, "current_pubkey": None,
                              "weak_pubkey": None, "orphan": True})
+            kind_source.append(_kind_source_row(
+                name, hops, "reserve-hold", orphan=True, reason=None,
+                reserved_for=anchor, pubkey=None))
         elif why:
             refused.append((name, None, None, None, None, why))
-    return {"held": held, "refused": refused, "reserved": reserved}
+            kind_source.append(_kind_source_row(
+                name, hops, "name-refused", orphan=True, reason=why,
+                reserved_for=None, pubkey=None))
+    return {
+        "held": held,
+        "refused": refused,
+        "reserved": reserved,
+        "kind_source": kind_source,
+        "orphan_count": len(orphan_names),
+        "hops_per_name": {name: len(hops) for name, hops in hist.items()},
+    }
 
 
 def window_entry(conn):
@@ -277,6 +367,87 @@ class StartRefused(Exception):
     status_code = 409
 
 
+class WindowRefused(Exception):
+    """open_window refused the whole snapshot. Nothing was written."""
+    status_code = 409
+
+
+def bounds_problem(snap) -> str | None:
+    """None when the snapshot fits. Per-name hop cap, then the global ceiling
+    on saved kind rows. No per-source column, so this never demotes a row."""
+    for name, n in snap.get("hops_per_name", {}).items():
+        if n > SNAPSHOT_PER_NAME:
+            return f"per-name cap exceeded for {name} ({n}/{SNAPSHOT_PER_NAME})"
+    if len(snap.get("kind_source", ())) > SNAPSHOT_GLOBAL_CAP:
+        return f"global ceiling exceeded ({len(snap['kind_source'])}/{SNAPSHOT_GLOBAL_CAP})"
+    return None
+
+
+def _overflow(snap, why: str) -> None:
+    """Real policy: refuse whole. A mutant may return and demote instead."""
+    raise WindowRefused(why)
+
+
+def _hex32(raw: bytes | None) -> str | None:
+    return None if raw is None else raw.hex()
+
+
+def _plan_entries(row: dict) -> list:
+    """Log entries for one frozen row. At most the four ruled-in kinds.
+    No hold-closure and no resolution record."""
+    orphan = 1 if row["orphan"] else 0
+    out = []
+    if row["disposition"] == "reserve-hold" and row["reserved_for_raw"] is not None:
+        k = _hex32(row["reserved_for_raw"])
+        out.append(("reserve-hold", k, {"reserved_for": k, "orphan": orphan}))
+    elif row["disposition"] == "name-refused":
+        out.append(("name-refused", _hex32(row["pubkey_raw"]), {
+            "reason": row["reason"] or "refused",
+            "orphan": orphan,
+            "source": row["source"],
+        }))
+    else:
+        return out
+    if row["origin_raw"] is not None:
+        origin = _hex32(row["origin_raw"])
+        out.append(("origin-pin", origin, {"origin": origin, "orphan": orphan}))
+        if row["successor_raw"] is not None:
+            out.append(("origin-handoff", origin, {
+                "origin": origin,
+                "successor": _hex32(row["successor_raw"]),
+                "orphan": orphan,
+            }))
+    return out
+
+
+def _sign_witness(kind: str, fields: dict) -> str:
+    import legacy_witness as lw
+    # Kind is admitted before the signature is produced.
+    msg = lw.witness_message(kind, {k: fields[k] for k in fields})
+    return _ed.sign(msg, bytes.fromhex(core._NODE_PRIV), bytes.fromhex(core._NODE_PUB)).hex()
+
+
+def _save_kind_source(conn, rows) -> None:
+    conn.executemany(
+        "INSERT INTO window_kind_source "
+        "(name, source, disposition, pubkey, reserved_for, origin, successor, orphan, reason) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        [(r["name"], r["source"], r["disposition"], r["pubkey_raw"], r["reserved_for_raw"],
+          r["origin_raw"], r["successor_raw"], 1 if r["orphan"] else 0, r["reason"])
+         for r in rows])
+
+
+def _append_kind_entries(conn, rows) -> int:
+    n = 0
+    for row in rows:
+        for kind, k0, detail in _plan_entries(row):
+            signed = dict(detail)
+            signed["witness_sig"] = _sign_witness(kind, {k: detail[k] for k in detail})
+            append_log_entry(conn, kind=kind, name=row["name"], k0_pub=k0, detail=signed)
+            n += 1
+    return n
+
+
 # Private clock hook: tests may set window_open._now_hook; no public
 # caller-supplied `now` exists on open_window/record_start (ART-41 BLOCK).
 _now_hook = None
@@ -289,19 +460,49 @@ def _now() -> str:
 
 
 def open_window(opened_by: str) -> dict:
-    """Record the window-open anchor + refused-bindings entry, once."""
+    """Record the window-open anchor, the refused-bindings entry, and the
+    witness kinds, once, in one transaction.
+
+    snapshot_bindings runs once. Its reserved and refused rows are the
+    frozen source for reserve-hold and name-refused (plus origin-pin and
+    origin-handoff from that same scan). The orphan count pinned on the
+    anchor is that scan's orphan count. If the saved rows would exceed
+    the per-name cap or the global ceiling, this raises WindowRefused
+    before any write.
+    """
+    import legacy_witness as lw
     with core._db_lock, core._db() as conn:
         init_schema(conn)
         existing = window_entry(conn)
         if existing:
             return {"id": existing[0], "opened_at": existing[1], "opened_by": existing[2],
                     "already_open": True}
+        snap = snapshot_bindings(conn)
+        why = bounds_problem(snap)
+        if why:
+            # Raises WindowRefused before any write. A mutant may return
+            # after rewriting dispositions; there is still no per-source
+            # column, and the real function never does that.
+            _overflow(snap, why)
+        rows = snap["kind_source"]
+        planned = sum(len(_plan_entries(r)) for r in rows)
+        live = sum(1 for r in rows if not r["orphan"])
+        # orphan_count is the orphan pass this snapshot just ran, not a
+        # second query.
+        budget = lw.max_log_entries(0, live, snap["orphan_count"])
+        existing_n = conn.execute("SELECT COUNT(*) FROM legacy_migration_log").fetchone()[0]
+        if existing_n + planned > budget:
+            _overflow(snap, "snapshot exceeds the pinned log ceiling")
         opened_at = _now()
-        conn.execute("INSERT INTO window_open_log (id, opened_at, opened_by) VALUES (1,?,?)",
-                     (opened_at, opened_by))
+        conn.execute(
+            "INSERT INTO window_open_log (id, opened_at, opened_by, orphan_count) VALUES (1,?,?,?)",
+            (opened_at, opened_by, snap["orphan_count"]))
         n = record_refused_bindings(conn, 1)
+        _save_kind_source(conn, rows)
+        kinds_n = _append_kind_entries(conn, rows)
     return {"id": 1, "opened_at": opened_at, "opened_by": opened_by,
-            "refused_recorded": n, "already_open": False}
+            "refused_recorded": n, "already_open": False,
+            "orphan_count": snap["orphan_count"], "kinds_recorded": kinds_n}
 
 
 def check_start_cap(conn, account: str) -> tuple[bool, str]:
