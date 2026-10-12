@@ -54,14 +54,18 @@ def fake_daemon(stop):
             qname, off = _read_name(q, 12)
             (qtype,) = struct.unpack(">H", q[off : off + 2])
             question = q[12:]
+            # flags are the daemon's own shape (resolver/dns.py: QR|AA|RD
+            # echo|rcode, no RA): resolver.client refuses AA-clear and
+            # RA-set packets — a stock 0x8180 recursive-resolver reply
+            # is not the daemon's authoritative answer.
             if qname == "alice.cyberspace" and qtype == 1:
-                flags, answers = 0x8180, [(1, socket.inet_aton("93.184.216.34"))]
+                flags, answers = 0x8500, [(1, socket.inet_aton("93.184.216.34"))]
             elif qname == "alice.cyberspace" and qtype == 28:
-                flags, answers = 0x8180, [(28, socket.inet_pton(socket.AF_INET6, "fd00::1"))]
+                flags, answers = 0x8500, [(28, socket.inet_pton(socket.AF_INET6, "fd00::1"))]
             elif qname == "broken.cyberspace":
-                flags, answers = 0x8182, []
+                flags, answers = 0x8502, []
             else:
-                flags, answers = 0x8183, []
+                flags, answers = 0x8503, []
             hdr = struct.pack(">HHHHHH", txid, flags, 1, len(answers), 0, 0)
             body = hdr + question
             for rtype, rdata in answers:
