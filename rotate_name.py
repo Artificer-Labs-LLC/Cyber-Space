@@ -4,9 +4,25 @@
 A name binding is self-authenticating: the name key vouches for itself.
 Rotation must be too. A rotation record is:
 
-  name-rotate|<label>|<old_pub>|<new_pub>|<issued_at>
+  name-rotate|<label>|<old_pub>|<new_pub>|<issued_at>          (v1, history)
 
-signed by the OLD key. Continuity lives in that one signature: anyone who
+signed by the OLD key. A v1 record is history only: it still verifies
+for chain walking, but it never moves a pin.
+
+The v2 certificate (ART-29, Villhaze 524ef05b item 3) is what moves a pin.
+Its signed bytes are length-prefixed, open with a domain tag, and carry the
+pin generation and the hash of the cert it continues:
+
+  lp("cyberspace/name-rotate/v2") lp(label) lp(old_pub) lp(new_pub)
+  lp(issued_at) u64(seq) lp(prev_hash)
+
+seq is the pin generation this cert creates (the first rotation off a
+claimed key is seq 1). prev_hash is rotation_cert_hash() of the cert at
+seq-1 — sha256 over that cert's signed bytes plus its signature — or, at
+seq 1, pin_anchor_hash(label, first_pin). A replayed old cert carries an
+old seq and an old prev_hash, so it never continues the current pin.
+
+The OLD key signs. Continuity lives in that one signature: anyone who
 trusts the old binding can see "the holder of the old key designated this
 new key" — no mirror, no registry, no ceremony. The new key then signs the
 next claim, and the chain is unbroken.
@@ -47,6 +63,7 @@ Exit codes: 0 = done; 1 = refused (reason on stderr); 2 = usage / unreadable.
 import os
 import sys
 import json
+import hashlib
 import argparse
 import urllib.parse
 import urllib.request
@@ -89,6 +106,49 @@ def _rotate_payload(name: str, old_pub: str, new_pub: str,
             + b"|" + new_pub.encode() + b"|" + issued_at.encode())
 
 
+ROTATE_V2_TAG = b"cyberspace/name-rotate/v2"
+PIN_ANCHOR_TAG = b"cyberspace/name-pin-anchor/v2"
+_SEQ_MAX = (1 << 63) - 1
+
+
+def _lp(b: bytes) -> bytes:
+    """4-byte big-endian length prefix. No field can bleed into the next."""
+    return len(b).to_bytes(4, "big") + b
+
+
+def _rotate_payload_v2(name: str, old_pub: str, new_pub: str,
+                       issued_at: str, seq: int, prev_hash: str) -> bytes:
+    """v2 signed bytes: domain tag, length-prefixed fields, seq, prev_hash.
+    The tag differs from name-claim| and name-rotate| so no other payload
+    verifies as a v2 cert."""
+    return (_lp(ROTATE_V2_TAG) + _lp(name.encode()) + _lp(bytes.fromhex(old_pub))
+            + _lp(bytes.fromhex(new_pub)) + _lp(issued_at.encode())
+            + int(seq).to_bytes(8, "big") + _lp(bytes.fromhex(prev_hash)))
+
+
+def pin_anchor_hash(name: str, pin_pub: str) -> str:
+    """prev_hash for the seq-1 cert: binds the chain to (label, first pin)."""
+    return hashlib.sha256(
+        _lp(PIN_ANCHOR_TAG) + _lp(_normalize(name).encode())
+        + _lp(bytes.fromhex(_normalize(pin_pub)))).hexdigest()
+
+
+def is_v2(record: dict) -> bool:
+    return isinstance(record, dict) and (
+        "seq" in record or "prev_hash" in record or record.get("v") == 2)
+
+
+def rotation_cert_hash(record: dict) -> str:
+    """sha256 over the v2 signed fields plus the signature. The next cert's
+    prev_hash must equal this value."""
+    payload = _rotate_payload_v2(
+        _normalize(record["name"]), _normalize(record["old_pubkey"]),
+        _normalize(record["new_pubkey"]), record["issued_at"],
+        int(record["seq"]), _normalize(record["prev_hash"]))
+    return hashlib.sha256(
+        payload + bytes.fromhex(_normalize(record["signature"]))).hexdigest()
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
@@ -125,8 +185,13 @@ def _get_json(url: str, timeout: float = 30.0) -> dict | None:
 
 
 def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
-                  issued_at: str | None = None) -> dict:
-    """Mint a rotation record dict. Raises ValueError on a refused input."""
+                  issued_at: str | None = None, seq: int = 1,
+                  prev_hash: str | None = None) -> dict:
+    """Mint a v2 rotation certificate. Raises ValueError on a refused input.
+
+    seq defaults to 1 (the first rotation off a claimed key) and prev_hash
+    to pin_anchor_hash(label, old key). A later hop passes the mirror's
+    pin_seq + 1 and pin_head (GET /api/v1/names/<label>/rotations)."""
     if len(old_priv) != 32:
         raise ValueError("old key is not a 32-byte seed")
     label = _normalize(label)
@@ -144,11 +209,24 @@ def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
         raise ValueError("rotation to the same key is a no-op — renew the "
                          "claim instead")
     issued_at = issued_at or _iso_now()
-    payload = _rotate_payload(label, old_pub_hex, new_pub_hex, issued_at)
+    if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= _SEQ_MAX:
+        raise ValueError("seq must be an integer >= 1")
+    if prev_hash is None:
+        if seq != 1:
+            raise ValueError("prev_hash is required past seq 1")
+        prev_hash = pin_anchor_hash(label, old_pub_hex)
+    prev_hash = _normalize(prev_hash)
+    try:
+        if len(bytes.fromhex(prev_hash)) != 32:
+            raise ValueError
+    except ValueError:
+        raise ValueError("prev_hash is not 64 hex chars")
+    payload = _rotate_payload_v2(label, old_pub_hex, new_pub_hex, issued_at,
+                                 seq, prev_hash)
     sig = sign(payload, old_priv, bytes.fromhex(old_pub_hex)).hex().lower()
-    return {"name": label, "old_pubkey": old_pub_hex,
+    return {"v": 2, "name": label, "old_pubkey": old_pub_hex,
             "new_pubkey": new_pub_hex, "issued_at": issued_at,
-            "signature": sig}
+            "seq": seq, "prev_hash": prev_hash, "signature": sig}
 
 
 def verify_rotation(record: dict) -> str | None:
@@ -190,7 +268,27 @@ def verify_rotation(record: dict) -> str | None:
         issued = issued.replace(tzinfo=timezone.utc)
     if issued > datetime.now(timezone.utc):
         return "rotation is dated in the future — not yet in force"
-    payload = _rotate_payload(name, old_pub, new_pub, record["issued_at"])
+    if is_v2(record):
+        seq = record.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int):
+            return "seq is not an integer"
+        if not 1 <= seq <= _SEQ_MAX:
+            return "seq is out of range"
+        prev = record.get("prev_hash")
+        if not isinstance(prev, str):
+            return "prev_hash is not a string"
+        prev = _normalize(prev)
+        try:
+            if len(bytes.fromhex(prev)) != 32:
+                return "prev_hash is not 64 hex chars"
+        except ValueError:
+            return "prev_hash is not hex"
+        if record.get("v", 2) != 2:
+            return "unknown certificate version"
+        payload = _rotate_payload_v2(name, old_pub, new_pub,
+                                     record["issued_at"], seq, prev)
+    else:
+        payload = _rotate_payload(name, old_pub, new_pub, record["issued_at"])
     if not checkvalid(bytes.fromhex(sig), payload, bytes.fromhex(old_pub)):
         return ("signature does not verify: this rotation is not vouched "
                 "for by the old name key")
@@ -340,8 +438,14 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     payload = (b"name-claim|" + label.encode() + b"|" + new_pub.encode()
                + b"|" + issued_at.encode() + b"|" + expires_at.encode())
     sig = sign(payload, new_priv, bytes.fromhex(new_pub)).hex().lower()
+    if not is_v2(record):
+        return False, ("rotation record is v1 — a v1 record never moves a "
+                       "pin; mint a v2 certificate (rotate_name.py "
+                       f"{label})")
     fields = {"name": label, "old_pubkey": old_pub, "new_pubkey": new_pub,
               "rotation_issued_at": record["issued_at"],
+              "rotation_seq": str(record["seq"]),
+              "rotation_prev_hash": record["prev_hash"],
               "rotation_signature": record["signature"],
               "binding_issued_at": issued_at,
               "binding_expires_at": expires_at, "binding_signature": sig}
@@ -399,6 +503,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--expiry-days", type=int, default=_DEFAULT_EXPIRY_DAYS,
                     help="liveness window of the new binding on submit "
                          f"(default {_DEFAULT_EXPIRY_DAYS})")
+    ap.add_argument("--seq", type=int, default=1,
+                    help="pin generation this cert creates (mirror pin_seq + 1; "
+                         "default 1, the first rotation off a claimed key)")
+    ap.add_argument("--prev-hash", default=None,
+                    help="mirror pin_head (64 hex) — required past seq 1")
     ap.add_argument("--promote", action="store_true",
                     help="promote <label>-name.key.next to the name key "
                          "after the record is seen in the wild")
@@ -451,7 +560,8 @@ def main(argv: list[str]) -> int:
     else:
         new_priv = os.urandom(32)
     try:
-        record = mint_rotation(label, old_priv, publickey(new_priv).hex())
+        record = mint_rotation(label, old_priv, publickey(new_priv).hex(),
+                               seq=args.seq, prev_hash=args.prev_hash)
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
