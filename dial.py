@@ -101,6 +101,15 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     if not core._name_binding_verify(name, node_pubkey, issued_at,
                                      expires_at, signature):
         return 1, ["name-side: binding signature does not verify"]
+    # The daemon's step 4 parses issued_at too (its floor fix: an
+    # unparseable issued_at reads as absent, never live) — a signer can
+    # sign a garbage issued_at and pass step 3, so without this check
+    # the plan previewed a dial (exit 0) for a binding the resolver
+    # itself reads as no binding at all.
+    try:
+        core._parse_claim_time(issued_at)
+    except ValueError:
+        return 1, ["name-side: malformed binding"]
     try:
         live = core._parse_claim_time(expires_at) > datetime.now(timezone.utc)
     except ValueError:

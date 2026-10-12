@@ -172,6 +172,25 @@ class AgreementBelt(unittest.TestCase):
         self.assertEqual(code, 3, lines)  # silent host, never a guess
         self.assertIsNone(result)
 
+    def test_unparseable_issued_at_agrees_absent(self):
+        # A signer can sign a garbage issued_at and pass signature
+        # verification; the resolver's step 4 parses issued_at and reads
+        # the row as absent. The planner must agree (exit 1), not
+        # preview a direct dial the resolver would never make.
+        label = "agreee"
+        priv, pub = _name_key()
+        _, expires = _live_times()
+        sig = core._fed_ed25519.sign(
+            core._name_claim_payload(label, pub, "not-a-time", expires),
+            bytes.fromhex(priv), bytes.fromhex(pub)).hex()
+        b = {"name": label, "node_pubkey": pub, "issued_at": "not-a-time",
+             "expires_at": expires, "signature": sig}
+        d = _descriptor(label, priv, pub,
+                        [{"kind": "direct", "url": "http://8.8.4.4:8471"}])
+        code, lines, result = self._both(label, _routes(label, b, d), _peer_routes(b))
+        self.assertEqual(code, 1, lines)
+        self.assertIsNone(result)
+
     def test_directory_entries_shape_resolves(self):
         # No descriptor at all; the directory carries the name-key entry in
         # the REAL "entries" shape. The planner must read it.

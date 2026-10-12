@@ -134,6 +134,22 @@ class DialPlanTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("expired", lines[0])
 
+    def test_unparseable_issued_at_is_absent(self):
+        # The signature verifies (it was signed over the garbage value),
+        # but the daemon's resolver parses issued_at and reads an
+        # unparseable row as absent — the plan must agree, not preview
+        # a dial the resolver would never make.
+        priv, pub = _name_key()
+        _, expires = _live_times()
+        binding = _signed_binding(LABEL, priv, pub, "not-a-time", expires)
+        desc = core._reach_mint(
+            priv, pub, LABEL, [{"kind": "direct", "url": "https://93.184.216.34/"}],
+            _iso(datetime.now(timezone.utc) - timedelta(hours=1)), expires)
+        with _fixture(binding=binding, desc=desc):
+            code, lines = dial.plan(ADDR, MIRROR)
+        self.assertEqual(code, 1)
+        self.assertIn("malformed binding", lines[0])
+
     def test_direct_plan_from_descriptor(self):
         priv, pub = _name_key()
         issued, expires = _live_times()
