@@ -83,7 +83,8 @@ check("challenger first", core.ingest_gossiped_binding(
     mint("belt-contest", k3a, iso_z(NOW - timedelta(hours=2)),
          iso_z(NOW + timedelta(days=30)))), "inserted")
 late = mint("belt-contest", k3b, live_issued, iso_z(NOW + timedelta(days=30)))
-check("later issued_at kept out", core.ingest_gossiped_binding(late), "kept")
+check("later issued_at -> conflict (live incumbent, audit logged)",
+      core.ingest_gossiped_binding(late), "conflict")
 early = mint("belt-contest", k3b, iso_z(NOW - timedelta(hours=5)),
              iso_z(NOW + timedelta(days=30)))
 check("earlier issued_at replaces", core.ingest_gossiped_binding(early),

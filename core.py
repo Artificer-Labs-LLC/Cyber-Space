@@ -835,10 +835,20 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
     written to name_conflicts — an audit trail of steal attempts. The
     mirror never acts on these rows; they exist for operators.
     Append-only; never raises (a logging failure must not break the
-    claim path)."""
+    claim path).
+
+    Bulwark MEDIUM (ART-29 r3): the table is writable from the
+    unauthenticated gossip path, so it is bounded — duplicate challenger
+    claims are ignored (UNIQUE on name/challenger_pubkey/challenger_issued_at)
+    and each name keeps at most 32 rows (oldest dropped when the cap is hit).
+    """
+    # r3: per-name cap — drop the oldest rows beyond 32 before inserting,
+    # so a malicious peer cannot grow the DB without limit via the
+    # unauthenticated gossip path.
+    NAME_CONFLICT_CAP = 32
     try:
         conn.execute(
-            "INSERT INTO name_conflicts (name, incumbent_pubkey,"
+            "INSERT OR IGNORE INTO name_conflicts (name, incumbent_pubkey,"
             " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
             " challenger_expires_at, reason, recorded_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
@@ -847,6 +857,12 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
              challenger["node_pubkey"], challenger["issued_at"],
              challenger["expires_at"], reason,
              datetime.now(timezone.utc).isoformat()))
+        # Enforce cap: delete oldest rows for this name beyond the cap.
+        conn.execute(
+            "DELETE FROM name_conflicts WHERE id IN ("
+            " SELECT id FROM name_conflicts WHERE name=? "
+            " ORDER BY id DESC LIMIT -1 OFFSET ?)",
+            (name, NAME_CONFLICT_CAP))
         conn.commit()  # r3: commit immediately — the caller may raise
         # (409 on the route) after logging, which would roll back the
         # conflict record if we relied on the context manager.

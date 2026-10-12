@@ -722,6 +722,23 @@ def init_db() -> None:
             recorded_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_name_conflicts_name ON name_conflicts(name);
+        -- Bulwark MEDIUM (ART-29 r3): the conflicts table is writable from
+        -- the unauthenticated gossip path. Bound it: dedupe identical
+        -- challenger claims and cap per-name rows so a malicious peer
+        -- cannot grow the DB without limit.
+        -- Dedupe pre-existing rows before creating the unique index.
+        DELETE FROM name_conflicts WHERE id NOT IN (
+            SELECT MIN(id) FROM name_conflicts
+            GROUP BY name, challenger_pubkey, challenger_issued_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_name_conflicts_dedupe
+            ON name_conflicts(name, challenger_pubkey, challenger_issued_at);
+        -- Enforce the per-name cap on pre-existing rows: keep the 32 most
+        -- recent per name.
+        DELETE FROM name_conflicts WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY name ORDER BY id DESC) AS rn
+                FROM name_conflicts) WHERE rn > 32);
         """)
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")

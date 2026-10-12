@@ -230,5 +230,38 @@ check("unparseable row beaten by same key",
           old_bad, new_foreign, old_bad["node_pubkey"], NOW),
       True)
 
+# --- Bulwark MEDIUM (r3): name_conflicts table is bounded ---
+# The conflicts table is writable from the unauthenticated gossip path.
+# (a) Duplicate challenger claims are ignored via the UNIQUE index.
+# (b) Per-name cap (32) is enforced — oldest dropped when cap is hit.
+def _conflict_count(nm):
+    with core._db_lock, core._db() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM name_conflicts WHERE name=?",
+            (nm,)).fetchone()[0]
+
+# (a) Log the same conflict twice — second is ignored.
+k_dup_inc = os.urandom(32).hex()
+k_dup_ch = os.urandom(32).hex()
+dup_inc = {"node_pubkey": _ed.publickey(bytes.fromhex(k_dup_inc)).hex(),
+           "issued_at": live_issued}
+dup_ch = {"node_pubkey": _ed.publickey(bytes.fromhex(k_dup_ch)).hex(),
+          "issued_at": live_issued, "expires_at": live_expires}
+with core._db_lock, core._db() as conn:
+    core._log_name_conflict(conn, "belt-dup", dup_inc, dup_ch, "live-foreign-incumbent")
+    core._log_name_conflict(conn, "belt-dup", dup_inc, dup_ch, "live-foreign-incumbent")
+check("duplicate conflict ignored (UNIQUE)", _conflict_count("belt-dup"), 1)
+
+# (b) Spam 40 distinct conflicts for one name — cap at 32.
+for i in range(40):
+    k_spam = os.urandom(32).hex()
+    spam_ch = {"node_pubkey": _ed.publickey(bytes.fromhex(k_spam)).hex(),
+               "issued_at": iso_z(NOW - timedelta(minutes=i)),
+               "expires_at": live_expires}
+    with core._db_lock, core._db() as conn:
+        core._log_name_conflict(conn, "belt-cap", dup_inc, spam_ch,
+                                "live-foreign-incumbent")
+check("per-name conflict cap enforced at 32", _conflict_count("belt-cap"), 32)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
