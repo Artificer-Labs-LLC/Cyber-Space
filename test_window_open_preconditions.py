@@ -348,5 +348,71 @@ finally:
     core._gossip_old_key_weak = _real_old
 check("MUTANT (old-key check removed) fails the Z1->X row: both helpers return True",
       mok is True and mcok is True, (mok, mcok))
+
+# Cipher (30a9457 re-check, optional): mid-chain weak OLD key. K -> M -> Z1 -> X
+# where hop 0 (old K) and hop 1 (old M) are strong and only hop 2's old key
+# (Z1 = a*B + T2, signature ground for even h) is mixed-order. NOTE: hop 2's old
+# key is hop 1's new key, so with the new-key check intact a "hop 0 only"
+# old-key mutant is still caught by _gossip_new_key_weak. The discriminating
+# rows therefore disable the new-key check in BOTH arms and compare
+# old-key-on-every-hop vs old-key-on-hop-0-only.
+MCK_SEED, MCM_SEED = bytes.fromhex("d1" * 32), bytes.fromhex("d2" * 32)
+MCK, MCM = _ed.publickey(MCK_SEED).hex(), _ed.publickey(MCM_SEED).hex()
+MCX = _ed.publickey(bytes.fromhex("d3" * 32)).hex()
+
+def midchain(label):
+    ch = [mint_rotation(label, MCK_SEED, MCM, issued_at=PAST),
+          mint_rotation(label, MCM_SEED, MXK, issued_at=PAST),
+          forge_mixed(label, MCX)]
+    with core._db_lock, core._db() as conn:
+        conn.execute("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     (label, MCK, PAST, FUT, "00" * 64))
+        before = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+        r = core._gossiped_rotation_chain_designates(ch, label, MCK, MCX, FUT, conn=conn)
+        hops = conn.execute("SELECT COUNT(*) FROM name_rotations WHERE name=?", (label,)).fetchone()[0]
+        bound = conn.execute("SELECT node_pubkey FROM name_bindings WHERE name=?", (label,)).fetchone()[0]
+        after = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+        snap = wo.snapshot_bindings(conn)
+    flag = {x[0]: x[-1] for x in snap["refused"]}.get(label)
+    res = {x["name"]: x["reserved_for"] for x in snap["reserved"]}.get(label)
+    held = label in {x[0] for x in snap["held"]}
+    return r, hops, bound, before == after, flag, res, held
+
+_SRC_CHAIN = inspect.getsource(core._gossiped_rotation_chain_designates)
+_OLD_ANY = 'if any(_gossip_old_key_weak(rec["old_pubkey"]) for rec in chain):'
+assert _SRC_CHAIN.count(_OLD_ANY) == 1, "old-key any(...) line moved"
+
+def _chain_variant(src):
+    loc = {}  # globals = live core module, so monkeypatches are seen
+    exec(compile(src, core.__file__, "exec"), core.__dict__, loc)
+    return loc["_gossiped_rotation_chain_designates"]
+
+_HOP0_ONLY = _chain_variant(_SRC_CHAIN.replace(_OLD_ANY, 'if _gossip_old_key_weak(chain[0]["old_pubkey"]):'))
+_real_chain = core._gossiped_rotation_chain_designates
+
+check("mid-chain premise: hop 2 forged record verifies under strict checkvalid; K, M strong; Z1 mixed-order",
+      core._verify_rotation_record(forge_mixed("midprem", MCX)) is None and wo.weak_reason(MCK) is None
+      and wo.weak_reason(MCM) is None and wo.weak_reason(MXK) == "mixed-order")
+r, nh2, b2, noreap2, fl2, rs2, hd2 = midchain("midweak")
+check("mid-chain K->M->Z1->X (only hop 2 old key weak) -> False", r is False, r)
+check("mid-chain: all 3 hops recorded in name_rotations", nh2 == 3, nh2)
+check("mid-chain: name_bindings untouched (still K, no write, no reap)", b2 == MCK and noreap2, (b2, noreap2))
+check("mid-chain: snapshot FLAGs the name: reserved for M (last non-weak), not held", rs2 == MCM and not hd2, (fl2, rs2, hd2))
+
+_real_new = core._gossip_new_key_weak
+core._gossip_new_key_weak = lambda p: False  # isolate the OLD-key loop in both arms
+try:
+    r_every, *_ = midchain("midev")
+    core._gossiped_rotation_chain_designates = _HOP0_ONLY
+    r_hop0, *_ = midchain("midh0")
+    old_rows_hop0 = mixed_handoff("h0")
+finally:
+    core._gossiped_rotation_chain_designates = _real_chain
+    core._gossip_new_key_weak = _real_new
+check("mid-chain, old-key loop alone (new-key check off): every-hop check -> False", r_every is False, r_every)
+check("MUTANT (old-key check on hop 0 only) fails the mid-chain row: chain helper returns True",
+      r_hop0 is True, r_hop0)
+check("old Z1->X rows cannot tell hop-0-only from every-hop (both still False under the mutant)",
+      old_rows_hop0[0] is False and old_rows_hop0[1] is False, old_rows_hop0[:2])
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
