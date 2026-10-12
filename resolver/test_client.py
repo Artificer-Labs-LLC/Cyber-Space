@@ -532,6 +532,63 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def _rdlen_offset(self, resp):
+        q_end = 12 + len(b"\x04node\x0acyberspace\x00") + 4
+        off = q_end + 2 + 8  # owner pointer + type/class/ttl
+        self.assertEqual(resp[off : off + 2], struct.pack(">H", 4))
+        return off
+
+    def test_parse_response_a_rdlen_too_long_raises_resolve_error(self):
+        """An A record carrying 5 rdata bytes is not a daemon reply —
+        build_response always emits exactly 4; until now this was
+        caught only downstream in _textify, and only for the asked
+        family."""
+        resp = bytearray(self._valid_response() + b"\x00")
+        resp[self._rdlen_offset(resp) : self._rdlen_offset(resp) + 2] = (
+            struct.pack(">H", 5)
+        )
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_parse_response_a_rdlen_too_short_raises_resolve_error(self):
+        """Same for 3 bytes, with the packet ending exactly at the
+        short rdata so only the length check can catch it."""
+        resp = bytearray(self._valid_response()[:-1])
+        off = self._rdlen_offset(resp)
+        resp[off : off + 2] = struct.pack(">H", 3)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_parse_response_aaaa_rdlen_wrong_raises_resolve_error(self):
+        """An AAAA record is exactly 16 bytes in every daemon reply;
+        15 (packet ending exactly there) is refused at parse time."""
+        q = dns.parse_query(client._build_query(0x42, "node.cyberspace", 28))
+        resp = bytearray(
+            dns.build_response(
+                q,
+                [(28, 120, socket.inet_pton(socket.AF_INET6, "2001:db8::7"))],
+                rcode=0,
+            )[:-1]
+        )
+        q_end = 12 + len(b"\x04node\x0acyberspace\x00") + 4
+        off = q_end + 2 + 8
+        self.assertEqual(resp[off : off + 2], struct.pack(">H", 16))
+        resp[off : off + 2] = struct.pack(">H", 15)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 28)
+
+    def test_resolve_a_rdlen_too_long_raises_resolve_error(self):
+        def tamper(q):
+            resp = bytearray(_a_response(q) + b"\x00")
+            q_end = 12 + len(b"\x04node\x0acyberspace\x00") + 4
+            off = q_end + 2 + 8
+            resp[off : off + 2] = struct.pack(">H", 5)
+            return bytes(resp)
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_parse_response_different_question_raises_resolve_error(self):
         """Right txid, answers for ANOTHER name: a mistransaction."""
         other = dns.parse_query(

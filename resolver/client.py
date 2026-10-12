@@ -172,7 +172,12 @@ def _parse_response(
     (neither daemon response builder ever emits any — build_response
     ends exactly at its last answer's rdata and error_response is a
     bare 12-byte header; trailing bytes the parser would only ignore
-    can carry nothing the daemon meant), and an echoed
+    can carry nothing the daemon meant), an answer whose rdata
+    length does not match its type (an A record is exactly 4 bytes
+    and an AAAA record exactly 16 in every reply the daemon builds;
+    a different length was until now caught only downstream, in
+    _textify, and only for the asked family — at parse time it is
+    refused for any collected record), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -248,6 +253,10 @@ def _parse_response(
             rdata = data[off : off + rdlen]
             off += rdlen
             if rclass == 1 and rtype in (QTYPE_A, QTYPE_AAAA):
+                if len(rdata) != (4 if rtype == QTYPE_A else 16):
+                    raise ResolveError(
+                        "answer rdata length does not match its type"
+                    )
                 if qname is not None and owner.lower() != qname:
                     raise ResolveError(
                         "response answer owned by a different name"
