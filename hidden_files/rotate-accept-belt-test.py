@@ -252,6 +252,21 @@ past_b = _mint_binding(LABEL2, SK5, PK5, _iso(early), _iso(LATER))
 st, out = _rotate(LABEL2, rec7, past_b)
 check("pre-dated new binding refused", st == 400, f"{st} {out}")
 
+# --- over-cap new binding (401d lifetime) refused, never stored ------------
+# Twin of the claim route's admission cap: every client seat refuses a
+# binding over 365 days, so a stored over-cap rotation would strand the
+# name — the mirror must refuse it and keep the old binding.
+rec_oc = rotate_name.mint_rotation(LABEL2, SK4, PK5)
+oc_b = _mint_binding(LABEL2, SK5, PK5, _fresh_iso(),
+                     _iso(NOW + datetime.timedelta(days=401)))
+st, out = _rotate(LABEL2, rec_oc, oc_b)
+check("over-cap new binding (401d lifetime) refused", st == 400, f"{st} {out}")
+stored_oc = _stored_binding(LABEL2)
+check("binding untouched after over-cap attempt",
+      stored_oc is not None and stored_oc["node_pubkey"] == PK4, repr(stored_oc))
+check("no rotation row written for over-cap attempt",
+      _stored_rotations(LABEL2) == [], _stored_rotations(LABEL2))
+
 # --- rotate an unclaimed name: 404, not a guess ---------------------------
 SK7, PK7 = _keypair()
 SK8, PK8 = _keypair()

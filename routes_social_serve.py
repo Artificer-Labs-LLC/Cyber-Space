@@ -1264,6 +1264,12 @@ async def names_rotate(request: Request):
         raise HTTPException(status_code=400, detail="New binding is expired on arrival; only live bindings are stored.")
     if b_issued_dt > now_dt:
         raise HTTPException(status_code=400, detail="binding issued_at is in the future; the claim must be signed now.")
+    # Lifetime cap, twin of _name_binding_admission_ok (claim route +
+    # gossip): a rotated binding over the 365-day cap would be stored
+    # here yet read as absent by every client seat (verify_name,
+    # resolve steps 4+6, dial all refuse it) — refuse it at the door.
+    if (b_expires_dt - b_issued_dt) > timedelta(days=NAME_EXPIRY_DAYS):
+        raise HTTPException(status_code=400, detail="New binding lifetime exceeds 365 days; rotation refused.")
     if b_issued_dt < rotation_dt:
         raise HTTPException(status_code=400, detail="The new binding cannot predate the rotation that designated its key — the chain must move forward in time.")
     if not _name_binding_verify(name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature):
