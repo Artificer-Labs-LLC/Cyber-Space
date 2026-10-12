@@ -434,6 +434,44 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def test_parse_response_ad_set_raises_resolve_error(self):
+        """An AD-set packet reports a DNSSEC check the client never
+        asked for — neither daemon builder ever sets AD."""
+        resp = bytearray(self._valid_response())
+        flags = struct.unpack(">H", bytes(resp[2:4]))[0] | 0x0020
+        resp[2:4] = struct.pack(">H", flags)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_parse_response_cd_set_raises_resolve_error(self):
+        """A CD-set packet reports checking disabled — the client's
+        query never sends CD and neither daemon builder echoes it."""
+        resp = bytearray(self._valid_response())
+        flags = struct.unpack(">H", bytes(resp[2:4]))[0] | 0x0010
+        resp[2:4] = struct.pack(">H", flags)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_resolve_ad_set_raises_resolve_error(self):
+        def tamper(q):
+            resp = _a_response(q)
+            flags = struct.unpack(">H", resp[2:4])[0] | 0x0020
+            return resp[:2] + struct.pack(">H", flags) + resp[4:]
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
+    def test_resolve_cd_set_raises_resolve_error(self):
+        def tamper(q):
+            resp = _a_response(q)
+            flags = struct.unpack(">H", resp[2:4])[0] | 0x0010
+            return resp[:2] + struct.pack(">H", flags) + resp[4:]
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_parse_response_different_question_raises_resolve_error(self):
         """Right txid, answers for ANOTHER name: a mistransaction."""
         other = dns.parse_query(

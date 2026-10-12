@@ -159,7 +159,11 @@ def _parse_response(
     with the Z bit set uses a header bit reserved for future use
     that neither daemon response builder ever sets (its replies are
     QR | AA | RD echo | rcode only — a Z-set packet is not one of
-    them), and an echoed
+    them), a packet with the AD or CD bit set reports DNSSEC
+    checking states the client never asked for (its query sends RD
+    only, no AD/CD) and neither daemon response builder ever sets
+    (an AD/CD-set packet carries a recursive checker's marks, not
+    the daemon's), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -193,6 +197,8 @@ def _parse_response(
         raise ResolveError("response claims recursion available (RA set)")
     if flags & 0x0040:
         raise ResolveError("response sets the reserved Z bit")
+    if flags & 0x0030:
+        raise ResolveError("response sets AD/CD bits the daemon never sets")
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
