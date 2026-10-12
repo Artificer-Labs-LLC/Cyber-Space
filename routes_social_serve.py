@@ -1120,7 +1120,9 @@ NAME_CLAIM_RATE_WINDOW = float(_os.environ.get("CYBERNET_NAME_CLAIM_RATE_WINDOW"
 def _names_claim_check_rate(request: Request) -> None:
     client = request.client
     ip = client.host if client else "unknown"
-    _check_rate(f"names-claim:{ip}", limit=NAME_CLAIM_RATE_LIMIT,
+    # ART-38 (Bulwark BLOCK on 86256ae): claim and rotate share ONE bucket,
+    # so alternating the two routes cannot double the per-IP budget.
+    _check_rate(f"names-write:{ip}", limit=NAME_CLAIM_RATE_LIMIT,
                 window=NAME_CLAIM_RATE_WINDOW)
 
 
@@ -1208,18 +1210,15 @@ async def names_claim(request: Request):
         raise HTTPException(status_code=409, detail="Name already claimed — deterministic conflict rule: earlier issued_at wins, ties by lower pubkey.")
 
 
-# ART-38 (Bulwark/Cipher 2026-10-12): the same per-IP gate on names/rotate,
-# first before parse/verify. Parallel env pair, same defaults (30 per 60s),
-# separate bucket so claim floods and rotation floods are counted apart.
-NAME_ROTATE_RATE_LIMIT = int(_os.environ.get("CYBERNET_NAME_ROTATE_RATE_LIMIT", "30"))
-NAME_ROTATE_RATE_WINDOW = float(_os.environ.get("CYBERNET_NAME_ROTATE_RATE_WINDOW", "60"))
+# ART-38: names/rotate is gated by the SAME names-write:{ip} bucket and the
+# single CYBERNET_NAME_CLAIM_RATE_LIMIT/WINDOW pair. The ROTATE names are
+# read-only aliases kept for callers; there is no separate rotate env.
+NAME_ROTATE_RATE_LIMIT = NAME_CLAIM_RATE_LIMIT
+NAME_ROTATE_RATE_WINDOW = NAME_CLAIM_RATE_WINDOW
 
 
 def _names_rotate_check_rate(request: Request) -> None:
-    client = request.client
-    ip = client.host if client else "unknown"
-    _check_rate(f"names-rotate:{ip}", limit=NAME_ROTATE_RATE_LIMIT,
-                window=NAME_ROTATE_RATE_WINDOW)
+    _names_claim_check_rate(request)
 
 
 @router.post("/api/v1/names/rotate")

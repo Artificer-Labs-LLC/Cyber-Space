@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""ART-40 / ART-41 belt for window_open.py. Scratch DB only."""
+"""ART-40 / ART-41 belt for window_open.py (post-BLOCK). Scratch DB only."""
 import os, sys, tempfile
 os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="wop-")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import inspect  # noqa: E402
 import core  # noqa: E402
 core.init_db()
 import core_serve  # noqa: E402,F401
@@ -15,64 +16,119 @@ def check(label, cond, extra=""):
     if cond: PASS += 1; print(f"  ok  {label}")
     else: FAIL += 1; print(f"  FAIL {label} {extra}")
 
-GOOD = _ed.publickey(bytes.fromhex("66" * 32)).hex()
-ZERO = "00" * 32                       # y=0: small-order (order 4)
-IDENT = "01" + "00" * 31               # identity point
-NONCANON = "ed" + "ff" * 30 + "7f"     # y = p (>= p), non-canonical
-check("good key not weak", wo.weak_reason(GOOD) is None)
-check("zero key small-order", wo.weak_reason(ZERO) == "small-order", wo.weak_reason(ZERO))
-check("identity small-order", wo.weak_reason(IDENT) == "small-order", wo.weak_reason(IDENT))
-check("y>=p non-canonical", wo.weak_reason(NONCANON) == "non-canonical", wo.weak_reason(NONCANON))
+def order(P):
+    Q, n = P, 1
+    while Q != _ed._IDENT and n <= 8:
+        Q = _ed._edwards(Q, P); n += 1
+    return n
+
+HONEST_P = _ed._scalarmult(_ed._BPOINT, 0x1234567)
+GOOD = _ed._encodepoint(HONEST_P).hex()
+T2 = (0, _ed._Q - 1)
+T4 = (_ed._I, 0)
+T8 = _ed._decodepoint_strict(bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"))
+check("torsion orders 2/4/8", (order(T2), order(T4), order(T8)) == (2, 4, 8), (order(T2), order(T4), order(T8)))
+MIXED = {n: _ed._encodepoint(_ed._edwards(HONEST_P, T)).hex() for n, T in ((2, T2), (4, T4), (8, T8))}
+ZERO = "00" * 32
+IDENT = "01" + "00" * 31
+NONCANON = "ed" + "ff" * 30 + "7f"
+check("honest key not weak", wo.weak_reason(GOOD) is None, wo.weak_reason(GOOD))
+for n, k in MIXED.items():
+    check(f"honest+order-{n} torsion -> mixed-order", wo.weak_reason(k) == "mixed-order", wo.weak_reason(k))
+check("zero key small-order", wo.weak_reason(ZERO) == "small-order")
+check("identity small-order", wo.weak_reason(IDENT) == "small-order")
+check("y>=p non-canonical", wo.weak_reason(NONCANON) == "non-canonical")
 check("bad hex weak", wo.weak_reason("zz") == "not-hex")
 
+K = _ed.publickey(bytes.fromhex("77" * 32)).hex()
 FUT, PAST = "2099-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00"
 with core._db_lock, core._db() as conn:
     wo.init_schema(conn)
-    rows = [("alive", GOOD, FUT), ("zeroname", ZERO, FUT), ("identname", IDENT, FUT), ("oldgood", GOOD, PAST)]
+    rows = [("alive", GOOD, FUT), ("zeroclaim", ZERO, FUT), ("oldgood", GOOD, PAST),
+            ("rotzero", ZERO, FUT), ("rotmixed", MIXED[8], FUT),
+            ("chain", MIXED[4], FUT), ("loop", MIXED[2], FUT), ("rotzero2", ZERO, FUT)]
     conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
                      [(n, p, PAST, e, "00" * 64) for n, p, e in rows])
+    for nm, newk in (("rotzero", ZERO), ("rotmixed", MIXED[8])):
+        conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                     (nm, K, newk, PAST, "00" * 64, PAST))
+    # Loom chain: K -> Z1 (zero) -> Z2 (mixed-order); loop: M2 -> ID -> M2
+    K2 = _ed.publickey(bytes.fromhex("88" * 32)).hex()
+    FORGER = _ed.publickey(bytes.fromhex("99" * 32)).hex()
+    conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                 ("rotzero2", K2, ZERO, PAST, "00" * 64, PAST))
+    # Examiner: forged hop into "chain" with a backdated-but-newest-looking
+    # issued_at and an OLDER node-side accepted_at -> must not win
+    conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                 ("chain", FORGER, ZERO, "2098-01-01T00:00:00+00:00", "00" * 64, "1999-01-01T00:00:00+00:00"))
+    for nm, o, n_, t in (("chain", K, ZERO, "2001"), ("chain", ZERO, MIXED[4], "2002"),
+                         ("loop", MIXED[2], IDENT, "2001"), ("loop", IDENT, MIXED[2], "2002")):
+        conn.execute("INSERT INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                     (nm, o, n_, PAST, "00" * 64, t + "-01-01T00:00:00+00:00"))
     cc = wo._cols(conn, "name_conflicts")
-    vals = {"name": "alive", "incumbent_pubkey": GOOD, "challenger_pubkey": ZERO}
+    vals = {"name": "alive", "incumbent_pubkey": GOOD, "challenger_pubkey": MIXED[2]}
     for c in cc - set(vals) - {"id"}:
         vals[c] = "x"
     conn.execute(f"INSERT INTO name_conflicts ({','.join(vals)}) VALUES ({','.join('?'*len(vals))})", list(vals.values()))
-    # this tree's agents table has no agent_pubkey (api-key auth); scanner
-    # must skip it cleanly, then pick it up once the identity column exists
     check("agents without agent_pubkey skipped", not any(r[0].startswith("agents") for r in wo.scan_weak(conn)))
     conn.execute("ALTER TABLE agents ADD COLUMN agent_pubkey TEXT")
     conn.executemany("INSERT INTO agents (name,api_key_hash,salt,created_at,agent_pubkey) VALUES (?,?,?,?,?)",
                      [("a1", "h", "s", PAST, GOOD), ("a2", "h", "s", PAST, NONCANON)])
     snap = wo.snapshot_bindings(conn)
-held = [r[0] for r in snap["held"]]; refused = [r[0] for r in snap["refused"]]
-check("snapshot: weak keys refused, never held", set(refused) == {"zeroname", "identname"} and not set(refused) & set(held), snap)
-check("snapshot: no SQL expires filter (expired good row still read)", "oldgood" in held, held)
+held = {r[0] for r in snap["held"]}; refused = {r[0] for r in snap["refused"]}
+reserved = {r["name"]: r["reserved_for"] for r in snap["reserved"]}
+check("zero-key claim (no rotation) -> refused", "zeroclaim" in refused, refused)
+check("two names rotated to Z1: each reserved for its own key", reserved.get("rotzero") == K and reserved.get("rotzero2") == K2, reserved)
+check("forged backdated hop does not change reserved key", reserved.get("chain") == K and FORGER not in reserved.values(), reserved)
+check("chain K->Z1(zero)->Z2(mixed) -> reserved for K", reserved.get("chain") == K, reserved)
+lp = [r for r in snap["refused"] if r[0] == "loop"]
+check("loop chain -> refused + FLAG-VILLHAZE", lp and "loops" in lp[0][-1], lp)
+check("refused set exactly {zeroclaim, loop}", refused == {"zeroclaim", "loop"}, refused)
+check("zero-key rotation from real K -> reserved for K", reserved.get("rotzero") == K, reserved)
+check("mixed-order rotation from real K -> reserved for K", reserved.get("rotmixed") == K, reserved)
+check("no weak key held", not held & ({"zeroclaim", "rotzero", "rotmixed"}), held)
+check("snapshot: no SQL expires filter", "oldgood" in held, held)
 
-# ART-41 before open: no starts
-with core._db_lock, core._db() as conn:
-    ok, why = wo.check_start_cap(conn, "acct")
-check("no start before open_window recorded", not ok and "not open" in why, why)
+# ART-41: no public `now`
+check("open_window takes no caller now", "now" not in inspect.signature(wo.open_window).parameters)
+check("record_start takes no caller now", "now" not in inspect.signature(wo.record_start).parameters)
 
-OPEN = "2026-10-12T16:00:00+00:00"
-e = wo.open_window("villhaze", now=OPEN)
-check("open_window records anchor", e["opened_at"] == OPEN and not e["already_open"], e)
-check("open_window records 4 refused rows (2 bindings, 1 conflict, 1 agent)", e["refused_recorded"] == 4, e)
-e2 = wo.open_window("someone", now="2030-01-01T00:00:00+00:00")
-check("open_window idempotent (anchor unchanged)", e2["already_open"] and e2["opened_at"] == OPEN, e2)
+def rows_for(acct):
+    with core._db_lock, core._db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM legacy_migrations WHERE account=?", (acct,)).fetchone()[0]
+
+def start(acct, kind="rotation"):
+    try:
+        wo.record_start(acct, kind); return 200
+    except wo.StartRefused as e:
+        return e.status_code
+
+check("pre-open start refused 409", start("early") == 409)
+check("pre-open refusal wrote no row", rows_for("early") == 0, rows_for("early"))
+
+wo._now_hook = lambda: "2026-10-12T16:00:00+00:00"
+e = wo.open_window("villhaze")
+check("open_window records anchor", e["opened_at"] == "2026-10-12T16:00:00+00:00" and not e["already_open"], e)
+check("open_window records 8 refused rows (6 bindings, 1 conflict, 1 agent)", e["refused_recorded"] == 8, e)
+check("open_window idempotent", wo.open_window("someone")["already_open"])
 with core._db_lock, core._db() as conn:
-    srcs = sorted(r[0] for r in conn.execute("SELECT source FROM window_refused_bindings"))
-    check("refused entry covers all three columns", set(srcs) == {"name_bindings.node_pubkey", "name_conflicts.challenger_pubkey", "agents.agent_pubkey"}, srcs)
-    check("replay: pre-recorded row recognised", wo.is_prerecorded_refusal(conn, "name_bindings.node_pubkey", "zeroname", ZERO))
+    srcs = {r[0] for r in conn.execute("SELECT source FROM window_refused_bindings")}
+    check("refused entry covers all three columns", srcs == {"name_bindings.node_pubkey", "name_conflicts.challenger_pubkey", "agents.agent_pubkey"}, srcs)
+    check("replay: pre-recorded row recognised", wo.is_prerecorded_refusal(conn, "name_bindings.node_pubkey", "zeroclaim", ZERO))
     check("replay: new weak row not pre-recorded", not wo.is_prerecorded_refusal(conn, "name_bindings.node_pubkey", "later", ZERO))
-    # pre-window rows (e.g. TLS go-live era) do NOT count toward the cap
-    conn.executemany("INSERT INTO legacy_migrations (account,kind,started_at) VALUES (?,?,?)",
-                     [("acct", "rotation", "2026-10-01T00:00:00+00:00")] * 5)
 
-TLS_GOLIVE = "2026-10-01T00:00:00+00:00"
-res = [wo.record_start("acct", k, now=t) for k, t in
-       [("rotation", "2026-10-12T16:00:00+00:00"), ("recovery", "2026-10-12T17:00:00+00:00"),
-        ("rotation", "2026-10-13T00:00:00+00:00"), ("recovery", "2026-10-14T00:00:00+00:00")]]
-check("anchor is open_window, not TLS: 5 pre-window rows ignored, 3 starts allowed", [r[0] for r in res[:3]] == [True]*3, res)
-check("4th start since open_window refused (cap 3, all kinds counted)", res[3][0] is False and "cap reached" in res[3][1], res[3])
-check("other account unaffected", wo.record_start("other", "rotation", now="2026-10-13T00:00:00+00:00")[0])
+codes = [start("acct") for _ in range(3)]
+wo._now_hook = lambda: "2020-01-01T00:00:00+00:00"  # backdated
+codes.append(start("acct", "recovery"))
+check("3 starts ok, backdated 4th refused 409", codes == [200, 200, 200, 409], codes)
+check("refused 4th wrote no row", rows_for("acct") == 3, rows_for("acct"))
+with core._db_lock, core._db() as conn:
+    conn.executemany("INSERT INTO legacy_migrations (account,kind,started_at) VALUES (?,?,?)",
+                     [("zfmt", "rotation", "2026-10-12T17:00:00Z"), ("zfmt", "rotation", "2026-10-12T17:00:00+00:00"),
+                      ("zfmt", "rotation", "2000-01-01T00:00:00Z")])
+wo._now_hook = lambda: "2026-10-13T00:00:00+00:00"
+check("Z and +00:00 (and pre-window) rows all count: 4th refused 409", start("zfmt") == 409)
+check("other account unaffected", start("other") == 200)
+wo._now_hook = None
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

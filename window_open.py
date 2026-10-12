@@ -21,9 +21,9 @@ ART-41 (start cap anchored to open_window):
     refused-bindings entry in the same transaction. Idempotent: a second
     call returns the first entry and writes nothing.
   * check_start_cap(): the rotation/recovery start cap (3, ART-20 b539f2ad)
-    counts ALL legacy_migrations rows for the account since the recorded
-    open_window entry (Cipher's wording) - not TLS go-live, not wall-clock
-    since boot. Before open_window is recorded, no start is allowed.
+    is anchored to the recorded open_window entry: no start (no row) before
+    it, and after it EVERY legacy_migrations row for the account counts -
+    no timestamp filter, not TLS go-live. Refusal is StartRefused (409).
 """
 from __future__ import annotations
 
@@ -73,6 +73,10 @@ def weak_reason(pubkey_hex) -> str | None:
         return "non-canonical"
     if _ed._is_small_order(P):
         return "small-order"
+    # ART-40 (Lodestar/Cipher BLOCK on 86256ae): honest key + torsion
+    # component. L*A must be the identity for a prime-order-subgroup key.
+    if _ed._scalarmult(P, _ed._L) != _ed._IDENT:
+        return "mixed-order"
     return None
 
 
@@ -121,20 +125,73 @@ def is_prerecorded_refusal(conn, source, row_key, pubkey) -> bool:
         (source, str(row_key), pubkey)).fetchone() is not None
 
 
+def _reserve_anchor(conn, name, weak_key, max_hops=64):
+    """Loom (ART-40): walk name_rotations backward by new_pubkey until the
+    first old_pubkey that passes weak_reason. Returns (key, None), or
+    (None, flag) when there is no rotation, the chain never reaches a
+    non-weak key, or it loops; flagged rows are refused for Villhaze.
+    Examiner: every step keys on (name, new_pubkey), never new_pubkey alone,
+    and picks the latest by node-side accepted_at (rowid as tie-break),
+    never the signer-supplied issued_at."""
+    seen, cur = {weak_key}, weak_key
+    for _ in range(max_hops):
+        r = conn.execute(
+            "SELECT old_pubkey FROM name_rotations WHERE name=? AND new_pubkey=? "
+            "ORDER BY accepted_at DESC, rowid DESC LIMIT 1", (name, cur)).fetchone()
+        if r is None:
+            return None, (None if cur == weak_key else "FLAG-VILLHAZE: chain ends on weak key")
+        old = r[0]
+        if not is_weak_pubkey(old):
+            return old, None
+        if old in seen:
+            return None, "FLAG-VILLHAZE: rotation chain loops"
+        seen.add(old); cur = old
+    return None, "FLAG-VILLHAZE: rotation chain too long"
+
+
 def snapshot_bindings(conn):
-    """All name_bindings rows (no SQL expires filter); weak keys -> refused."""
-    held, refused = [], []
+    """All name_bindings rows (no SQL expires filter). Weak keys are never
+    held. A weak key that is a name_rotations.new_pubkey means a holder K
+    rotated the name onto a dead key: the name is RESERVED for that
+    first non-weak old_pubkey found walking the rotation chain back (K), not
+    freed. Otherwise the weak row is REFUSED (chain dead-ends/loops are
+    refused with a FLAG-VILLHAZE reason appended)."""
+    held, refused, reserved = [], [], []
+    has_rot = _has_table(conn, "name_rotations")
     for row in conn.execute(
             "SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings ORDER BY name"):
-        (refused if is_weak_pubkey(row[1]) else held).append(row)
-    return {"held": held, "refused": refused}
+        if not is_weak_pubkey(row[1]):
+            held.append(row)
+            continue
+        anchor, why = (_reserve_anchor(conn, row[0], row[1]) if has_rot else (None, None))
+        if anchor:
+            reserved.append({"name": row[0], "reserved_for": anchor, "weak_pubkey": row[1]})
+        else:
+            refused.append(tuple(row) + ((why,) if why else ()))
+    return {"held": held, "refused": refused, "reserved": reserved}
 
 
 def window_entry(conn):
     return conn.execute("SELECT id, opened_at, opened_by FROM window_open_log WHERE id=1").fetchone()
 
 
-def open_window(opened_by: str, now: str | None = None) -> dict:
+class StartRefused(Exception):
+    """Start refused (window not open, or cap reached). HTTP 409 shape."""
+    status_code = 409
+
+
+# Private clock hook: tests may set window_open._now_hook; no public
+# caller-supplied `now` exists on open_window/record_start (ART-41 BLOCK).
+_now_hook = None
+
+
+def _now() -> str:
+    if _now_hook is not None:
+        return _now_hook()
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def open_window(opened_by: str) -> dict:
     """Record the window-open anchor + refused-bindings entry, once."""
     with core._db_lock, core._db() as conn:
         init_schema(conn)
@@ -142,7 +199,7 @@ def open_window(opened_by: str, now: str | None = None) -> dict:
         if existing:
             return {"id": existing[0], "opened_at": existing[1], "opened_by": existing[2],
                     "already_open": True}
-        opened_at = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        opened_at = _now()
         conn.execute("INSERT INTO window_open_log (id, opened_at, opened_by) VALUES (1,?,?)",
                      (opened_at, opened_by))
         n = record_refused_bindings(conn, 1)
@@ -151,24 +208,27 @@ def open_window(opened_by: str, now: str | None = None) -> dict:
 
 
 def check_start_cap(conn, account: str) -> tuple[bool, str]:
-    """(allowed, reason). Counts ALL legacy_migrations rows for the account
-    started at/after the recorded open_window entry."""
+    """(allowed, reason). open_window is the gate: nothing starts before it
+    is recorded. The cap counts EVERY legacy_migrations row for the account
+    (Cipher/Lodestar): no timestamp filter, so a backdated or differently
+    formatted (Z vs +00:00) started_at cannot slip under it."""
     init_schema(conn)
     entry = window_entry(conn)
     if entry is None:
         return False, "window not open: no recorded open_window entry"
-    n = conn.execute(
-        "SELECT COUNT(*) FROM legacy_migrations WHERE account=? AND started_at>=?",
-        (account, entry[1])).fetchone()[0]
+    n = conn.execute("SELECT COUNT(*) FROM legacy_migrations WHERE account=?",
+                     (account,)).fetchone()[0]
     if n >= MAX_STARTS_PER_ACCOUNT:
-        return False, f"start cap reached ({n}/{MAX_STARTS_PER_ACCOUNT} since open_window {entry[1]})"
-    return True, f"{n}/{MAX_STARTS_PER_ACCOUNT} since open_window {entry[1]}"
+        return False, f"start cap reached ({n}/{MAX_STARTS_PER_ACCOUNT})"
+    return True, f"{n}/{MAX_STARTS_PER_ACCOUNT}"
 
 
-def record_start(account: str, kind: str, now: str | None = None) -> tuple[bool, str]:
+def record_start(account: str, kind: str) -> str:
+    """Write one start row or raise StartRefused (409); a refusal writes nothing."""
     with core._db_lock, core._db() as conn:
         ok, why = check_start_cap(conn, account)
-        if ok:
-            conn.execute("INSERT INTO legacy_migrations (account, kind, started_at) VALUES (?,?,?)",
-                         (account, kind, now or datetime.now(timezone.utc).isoformat(timespec="seconds")))
-    return ok, why
+        if not ok:
+            raise StartRefused(why)
+        conn.execute("INSERT INTO legacy_migrations (account, kind, started_at) VALUES (?,?,?)",
+                     (account, kind, _now()))
+    return why

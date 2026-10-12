@@ -25,7 +25,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="art38-rot-")
-os.environ["CYBERNET_NAME_ROTATE_RATE_LIMIT"] = "5"
+os.environ["CYBERNET_NAME_CLAIM_RATE_LIMIT"] = "5"  # shared names-write limit
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
@@ -96,7 +96,7 @@ def state(name):
     return b, n
 
 
-check("rotate limit configurable from env", rss.NAME_ROTATE_RATE_LIMIT == 5, rss.NAME_ROTATE_RATE_LIMIT)
+check("shared limit configurable from CLAIM env", rss.NAME_CLAIM_RATE_LIMIT == 5 and rss.NAME_ROTATE_RATE_LIMIT == 5, rss.NAME_ROTATE_RATE_LIMIT)
 check("rotate window default 60s", rss.NAME_ROTATE_RATE_WINDOW == 60.0, rss.NAME_ROTATE_RATE_WINDOW)
 
 # 1. positive control
@@ -166,9 +166,17 @@ for _ in range(LIMIT):
     client.post("/api/v1/names/rotate", data={})
 r = client.post("/api/v1/names/rotate", data={})
 check("rotate gate precedes parse (empty body -> 429)", r.status_code == 429, r.status_code)
-# separate bucket: rotate flood does not spend the claim budget
+# shared bucket: a rotate flood also spends the claim budget
 r = client.post("/api/v1/names/claim", data={})
-check("claim bucket independent of rotate bucket (400 not 429)", r.status_code == 400, r.status_code)
+check("claim shares rotate bucket (429)", r.status_code == 429, r.status_code)
+# Bulwark belt: alternate claim/rotate; request LIMIT+1 gets 429
+reset_rate()
+alt = []
+for i in range(LIMIT + 1):
+    path = "/api/v1/names/claim" if i % 2 == 0 else "/api/v1/names/rotate"
+    alt.append(client.post(path, data={}).status_code)
+check("alternating claim/rotate: 1..LIMIT -> 400", all(c == 400 for c in alt[:LIMIT]), alt)
+check("alternating claim/rotate: LIMIT+1 -> 429", alt[LIMIT] == 429, alt)
 
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
