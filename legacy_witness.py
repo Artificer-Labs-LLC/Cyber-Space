@@ -160,14 +160,14 @@ WITNESS_SET_FORMAT = "cyberspace-witness-set/v1"
 WITNESS_DOMAIN = "cyberspace-witness/v0"
 # Ruled in with the writer in window_open.open_window. hold-closure is the
 # admission-hold record Villhaze ART-40 49a4fdca authorized once the witness
-# port at 34a9a7d was accepted and the witness + weak_reason precondition
+# port at c259535 was accepted and the witness + weak_reason precondition
 # closed. A resolution record stays out.
 KINDS = ("window-open", "hold", "binding-hold", "migrate-pending", "late-migrate-pending",
          "withdraw", "contest", "window-close", "cutover", "expire", "activation-refused",
          "reserve-hold", "name-refused", "origin-pin", "origin-handoff", "hold-closure")
 WITNESS_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff", "hold-closure")
 # The basis the hold-closure writer may cite. Exact ASCII, no '|'.
-HOLD_CLOSURE_PORT = "34a9a7d"
+HOLD_CLOSURE_PORT = "c259535"
 HOLD_CLOSURE_RULING = "49a4fdca"
 HOLD_CLOSURE_PRECONDITION = "witness+weak_reason"
 if any((not isinstance(k, str)) or ("|" in k) or (k.encode("ascii") != k.encode()) for k in KINDS):

@@ -460,17 +460,17 @@ check("(h) one hold-closure, state closed, on the accepted port",
       and detail == {
           "precondition": "witness+weak_reason",
           "state": "closed",
-          "port": "34a9a7d",
+          "port": "c259535",
           "ruling": "49a4fdca",
       }
-      and one.get("state") == "closed" and one.get("port") == "34a9a7d"
+      and one.get("state") == "closed" and one.get("port") == "c259535"
       and one.get("ruling") == "49a4fdca"
       and one.get("precondition") == "witness+weak_reason"
       and signed_ok
       and not any(e.get("kind") == "resolution" for e in entries),
       (err, ok, why, closures, signed_ok))
 real_h = (err is None and ok and len(closures) == 1 and detail.get("state") == "closed"
-          and detail.get("port") == "34a9a7d" and signed_ok)
+          and detail.get("port") == "c259535" and signed_ok)
 
 real_close = wo._append_hold_closure
 
