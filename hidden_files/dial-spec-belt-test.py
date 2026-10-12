@@ -49,8 +49,9 @@ def _binding(label, priv, pub, issued_delta, expires_delta):
 
 
 def _live_binding(label, priv, pub):
+    # Lifetime under the 365-day cap: -1h + 364d is 364d1h (cf. _descriptor).
     return _binding(label, priv, pub,
-                    timedelta(hours=-1), timedelta(days=365))
+                    timedelta(hours=-1), timedelta(days=364))
 
 
 def _dead_binding(label, priv, pub):
