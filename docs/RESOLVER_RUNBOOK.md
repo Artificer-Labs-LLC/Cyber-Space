@@ -1,6 +1,8 @@
 # RESOLVER_RUNBOOK.md — the live end-to-end (resolver build item 3)
 
-Status: **RUN — 2026-10-12, on HQ (Villhaze).** The full chain is live:
+Status: **HQ self-resolution RUN — 2026-10-12, on HQ (Villhaze;
+Meridian's label, accepted — the Depth Test bar in the preamble still
+stands for "real").** The full chain is live:
 registry binding → cybernet-resolver (UDP+TCP, tailnet 100.86.209.63:5354)
 → HQ systemd-resolved split-horizon (`~cyberspace`) → `getent hosts
 genesis.cyberspace` = 185.143.228.228 → `curl http://genesis.cyberspace/`

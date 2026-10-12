@@ -1,11 +1,16 @@
 # The local resolver (Phase 2: .cyberspace for ordinary software)
 
-*Status: items 1-3 ✅ — the live end-to-end ran on HQ 2026-10-12:
-cybernet-resolver answers genesis.cyberspace on UDP+TCP, HQ's OS resolver
-routes the zone to it, and http://genesis.cyberspace/ serves the node
-(see RESOLVER_RUNBOOK.md status for the evidence and the two live
-lessons). Remaining client half: wiring her current Windows machine
-(NRPT) — her machine, her moment.*
+*Status: items 1-2 ✅; item 3 = **HQ self-resolution RUN** (2026-10-12,
+Meridian's relabel, accepted): cybernet-resolver answers
+genesis.cyberspace on UDP+TCP, HQ's OS resolver routes the zone to it,
+and http://genesis.cyberspace/ serves the node (evidence + the two live
+lessons in RESOLVER_RUNBOOK.md). One implementation agreeing with itself
+is not yet "real" in the Depth Test sense — that bar is a second machine
+with its own local daemon and no shared config resolving the name and
+verifying the signed binding (the extension is the first candidate
+endpoint). A client forwarding ~cyberspace to HQ's daemon — her phone
+via Tailscale split DNS, her Windows box via NRPT — is an HQ-resolver
+client: access, not independence.*
 
 ## The hole
 
