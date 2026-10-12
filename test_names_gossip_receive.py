@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="names-gossip-recv-")
@@ -98,14 +99,25 @@ def binding_row(name):
     return (None if row is None else tuple(row)), nconf
 
 
-def gossip_env(sender_priv, sender_pub, bindings, recipient=None, from_pub=None):
+# Each call mints a distinct ts. A same-second repeat would be one
+# signature, and the replay seen-set would refuse it before the kept
+# merge this belt is measuring.
+_next_env_ts = int(time.time()) - 120
+
+
+def gossip_env(sender_priv, sender_pub, bindings, recipient=None, from_pub=None,
+               ts=None):
+    global _next_env_ts
+    if ts is None:
+        _next_env_ts += 1
+        ts = _next_env_ts
     body = {
         "from_node_pub": sender_pub if from_pub is None else from_pub,
         "bindings": bindings,
     }
     return _fed_env.make_envelope(
         sender_priv, sender_pub,
-        core._NODE_PUB if recipient is None else recipient, body)
+        core._NODE_PUB if recipient is None else recipient, body, ts=ts)
 
 
 def post(env):

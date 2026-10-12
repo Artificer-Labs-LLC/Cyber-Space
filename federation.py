@@ -7,7 +7,9 @@ import os
 import re
 import hashlib
 import secrets
+import time
 import urllib.request
+from collections import OrderedDict
 from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, RATE_LIMIT,
                   RATE_WINDOW, _NODE_PRIV, _NODE_PUB, _NODE_URL_RE, _authed,
                   _broadcast, _check_rate, _db, _db_lock, _delta_payload,
@@ -294,6 +296,51 @@ def _charge_fed_source(request) -> None:
     _check_rate(f"src:fed:{source}", limit=FED_SOURCE_LIMIT, window=RATE_WINDOW)
 
 
+# Replay seen-set (ART-29 d9ff58e3). Keyed on (sender_pub, envelope sig),
+# not the sig alone: two senders never share a replay slot. An envelope
+# minted at the future edge of MAX_SKEW_SEC still verifies 2×MAX_SKEW_SEC
+# after first sight, so the pair is kept that long and then dropped.
+# The map is also capped, so a peer cannot grow it without bound.
+_GOSSIP_SEEN_HORIZON_SEC = 2 * _fed_env.MAX_SKEW_SEC
+_GOSSIP_SEEN_CAP = 4096
+_gossip_seen = OrderedDict()
+
+
+def _gossip_seen_key(sender_pub: str, sig: str):
+    return (str(sender_pub).lower(), str(sig).lower())
+
+
+def _prune_gossip_seen(now: float) -> None:
+    cutoff = now - _GOSSIP_SEEN_HORIZON_SEC
+    stale = [k for k, seen_at in _gossip_seen.items() if seen_at < cutoff]
+    for key in stale:
+        _gossip_seen.pop(key, None)
+    while len(_gossip_seen) > _GOSSIP_SEEN_CAP:
+        _gossip_seen.popitem(last=False)
+
+
+def _gossip_is_replay(sender_pub: str, sig: str, now: float | None = None) -> bool:
+    """True when this sender already presented this envelope sig inside the
+    horizon. Does not record. Prunes expired and over-cap entries first."""
+    now = time.time() if now is None else now
+    _prune_gossip_seen(now)
+    seen_at = _gossip_seen.get(_gossip_seen_key(sender_pub, sig))
+    if seen_at is None:
+        return False
+    return (now - seen_at) <= _GOSSIP_SEEN_HORIZON_SEC
+
+
+def _gossip_mark_seen(sender_pub: str, sig: str, now: float | None = None) -> None:
+    """Record a (sender_pub, sig) pair. Newest wins on a repeat mark."""
+    now = time.time() if now is None else now
+    _prune_gossip_seen(now)
+    key = _gossip_seen_key(sender_pub, sig)
+    _gossip_seen[key] = now
+    _gossip_seen.move_to_end(key)
+    while len(_gossip_seen) > _GOSSIP_SEEN_CAP:
+        _gossip_seen.popitem(last=False)
+
+
 @router.post("/fed/names/gossip")
 def fed_names_gossip(env: dict, request: Request = None):
     """Name-bindings gossip receive half (docs/FEDERATION.md).
@@ -315,14 +362,13 @@ def fed_names_gossip(env: dict, request: Request = None):
       8. Operator allowlist, if CYBERNET_PEER_ALLOWLIST is set:
          `_pal.require(sender_pub, "/fed/names/gossip")`.
       9. `body.bindings` is a list, else 400 "bindings must be a list".
-     10. Fold at most 128 bindings through `ingest_gossiped_binding`
+     10. Replay: `(sender_pub, sig)` already seen within 2×MAX_SKEW is
+         400 "replay" before any ingest, and no binding row is written.
+         The seen-set is pruned to that horizon and capped.
+     11. Fold at most 128 bindings through `ingest_gossiped_binding`
          only. The route does not pre-verify the claimant signature;
          ingest re-verifies it fail-closed. Bindings past the cap are
          not processed and not counted.
-
-    Replay dedupe (`_claim_seen_sig` / `fed_seen_sigs`) is not part of
-    the documented contract and is not implemented on today's other
-    receivers, so this route does not invent it.
 
     Returns inserted / replaced / kept / dropped / conflict plus the
     per-binding outcome list. `dropped` counts every ingest result that
@@ -351,6 +397,10 @@ def fed_names_gossip(env: dict, request: Request = None):
     bindings = body.get("bindings")
     if not isinstance(bindings, list):
         raise HTTPException(status_code=400, detail="bindings must be a list")
+    # Before any ingest. A replay writes nothing, including no second merge.
+    if _gossip_is_replay(sender_pub, env.get("sig", "")):
+        raise HTTPException(status_code=400, detail="replay")
+    _gossip_mark_seen(sender_pub, env.get("sig", ""))
     inserted = replaced = kept = conflict = dropped = 0
     outcomes = []
     for binding in bindings[:NAMES_GOSSIP_RECV_CAP]:
