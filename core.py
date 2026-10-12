@@ -531,7 +531,8 @@ def _fanout_channel_push(channel_id: int, channel_name: str,
         body = {"from_agent": from_agent, "from_node_pub": _NODE_PUB,
                 "from_node_name": NODE_NAME, "from_poster": agent_name,
                 "channel": channel_name, "body": text}
-        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body)
+        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, node_pub, body,
+                                     kind="channel-push")
         threading.Thread(target=_push_to_peer,
                          args=(channel_id, node_pub, from_agent, node_url, env),
                          daemon=True).start()
@@ -583,7 +584,8 @@ def _gossip_out() -> int:
                 "genesis": IS_GENESIS, "capabilities": [],
                 "node_url": self_url})
         body = {"from_node_pub": _NODE_PUB, "roster": entries}
-        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, recip["node_pub"], body)
+        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, recip["node_pub"], body,
+                                     kind="gossip")
         threading.Thread(
             target=_post_to_peer_path,
             args=(recip["node_url"], "/fed/gossip", env),
@@ -1448,6 +1450,22 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         if name != label or len(node_pubkey) != 64 or len(signature) != 128:
             return None
 
+        # V1: the pin is checked before any signature count. A contested
+        # name is refused here too — resolve does not serve a local winner.
+        # Where a second mirror is configured, first contact requires both
+        # mirrors to present the same key before that key is trusted.
+        import name_fork
+        second = os.environ.get("CYBERNET_SECOND_MIRROR", "").strip().rstrip("/")
+        if second:
+            other = _resolve_get_json(second + "/api/v1/names/" + label)
+            if not isinstance(other, dict):
+                return None
+            if str(other.get("node_pubkey", "")).lower() != node_pubkey:
+                return None
+        with _db_lock, _db() as conn:
+            if name_fork.pin_refuses_before_signature(conn, label, node_pubkey):
+                return None
+
         # Step 3: re-verify the signature fail-closed — the mirror's word
         # alone is never enough.
         if not _name_binding_verify(name, node_pubkey, issued_at,
@@ -1547,7 +1565,7 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             # the name is not the name's route.
             ping = _resolve_peer_get_json(node_url + "/fed/ping")
             if (not isinstance(ping, dict)
-                    or not _fed_env.verify_envelope(ping)):
+                    or not _fed_env.verify_envelope(ping, expect_kind="ping")):
                 return None
             if not _relay_open_session(node_url, label, node_pubkey,
                                        via_relay["token"],
@@ -1568,13 +1586,21 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             # home.
             ping = _resolve_peer_get_json(node_url + "/fed/ping")
             if (not isinstance(ping, dict)
-                    or not _fed_env.verify_envelope(ping)):
+                    or not _fed_env.verify_envelope(ping, expect_kind="ping")):
                 return None
             live = _resolve_peer_get_json(node_url + "/api/v1/names/" + label)
             if not isinstance(live, dict):
                 return None
-            if str(live.get("node_pubkey", "")).lower() != node_pubkey:
+            # V2: the binding the home node serves must match the pin.
+            live_pub = str(live.get("node_pubkey", "")).lower()
+            if live_pub != node_pubkey:
                 return None
+            with _db_lock, _db() as conn:
+                if name_fork.is_contested(conn, label):
+                    return None
+                live_pin = name_fork.current_pin(conn, label)
+                if live_pin is not None and live_pub != live_pin:
+                    return None
             if not _name_binding_verify(
                     str(live.get("name", "")).lower(), node_pubkey,
                     str(live.get("issued_at", "")),
@@ -1813,7 +1839,8 @@ def _gossip_checkvalid(name, node_pubkey, issued_at, expires_at,
 
 
 def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
-                            verify_box=None) -> str:
+                            verify_box=None,
+                            sender_pub: str | None = None) -> str:
     """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
     gossiped name binding into this mirror's registry. A registry is a
     signed log, not an authority: any mirror may repeat a binding, but
@@ -1903,6 +1930,21 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
                "issued_at": issued_at, "expires_at": expires_at,
                "signature": signature}
         with _db_lock, _db() as conn:
+            # V3(a): a pinned name refuses a key that is not the pin.
+            # An unpinned name arrives only from a node key pinned out of
+            # band (CYBERNET_OOB_NODE_PINS). Direct in-process callers that
+            # pass no sender keep the historical merge — they are not a
+            # gossip envelope. A contested name never gains a winner here.
+            import name_fork
+            name_fork.ensure_schema(conn)
+            if name_fork.is_contested(conn, name):
+                return "contested"
+            pin = name_fork.current_pin(conn, name)
+            if pin is not None and node_pubkey != pin:
+                return "dropped-pin"
+            if (pin is None and sender_pub is not None
+                    and not name_fork.sender_may_introduce(sender_pub)):
+                return "dropped-unpinned"
             row = conn.execute(
                 "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
@@ -1919,6 +1961,8 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
                     "INSERT INTO name_bindings (name, node_pubkey, issued_at,"
                     " expires_at, signature) VALUES (?,?,?,?,?)",
                     (name, node_pubkey, issued_at, expires_at, signature))
+                if sender_pub is not None and name_fork.sender_may_introduce(sender_pub):
+                    name_fork.pin_initial(conn, name, node_pubkey)
                 return "inserted"
             # Bulwark MEDIUM (ART-29): the old row loads WITH expires_at and
             # goes through _old_binding_beaten — the route's conflict rule —
@@ -1934,6 +1978,16 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True,
             # rejected claim is logged as a conflict. There is no
             # displaced-by-earlier-claim handover of a live foreign row.
             # Same-key updates (renewals) flow through _old_binding_beaten.
+            if (pin is not None and node_pubkey == pin
+                    and old["node_pubkey"].lower() != pin):
+                # A rotation certificate already moved the pin. The binding
+                # catches up to that one accepted hop. This is not a steal,
+                # and a longer chain is not applied here.
+                conn.execute(
+                    "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
+                    " expires_at=?, signature=? WHERE name=?",
+                    (node_pubkey, issued_at, expires_at, signature, name))
+                return "replaced"
             if (_incumbent_is_live(old, now_dt)
                     and old["node_pubkey"].lower() != node_pubkey.lower()):
                 _log_name_conflict(conn, name, old, new,
@@ -2276,7 +2330,8 @@ def _delta_out() -> int:
             continue
         body = {"from_node_pub": _NODE_PUB, "deltas": batch}
         env = _fed_env.make_envelope(
-            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body)
+            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body,
+            kind="directory-delta")
         threading.Thread(target=_post_to_peer_path,
                          args=(recip["node_url"], "/fed/directory/delta", env),
                          daemon=True).start()
@@ -2285,6 +2340,48 @@ def _delta_out() -> int:
 
 
 NAMES_GOSSIP_BATCH_CAP = 126
+
+
+def _names_gossip_rotations(names: list, include_unbound: bool = False) -> list:
+    """F1: certificates are gossiped as first-class objects, not only bindings."""
+    import name_fork
+    with _db_lock, _db() as conn:
+        name_fork.ensure_schema(conn)
+        wanted = list(names)
+        if include_unbound:
+            extra = [r[0] for r in conn.execute(
+                "SELECT name FROM name_fork_certs").fetchall()]
+            extra += [r[0] for r in conn.execute(
+                "SELECT name FROM name_contested").fetchall()]
+            wanted = list(dict.fromkeys(wanted + extra))
+        return name_fork.gossip_rotations(conn, wanted)[:NAMES_GOSSIP_BATCH_CAP]
+
+
+def ingest_names_gossip(body: dict, sender_pub: str) -> dict:
+    """Receive half of name gossip: rotation certificates first, then
+    bindings. One accepted rotation per name in this call (one round).
+    Chain depth is never a tiebreak. Overflow fork certs charge the
+    per-peer namefork bucket (F4) outside the database lock."""
+    import name_fork
+    if not isinstance(body, dict):
+        return {"ok": False}
+    rotations = body.get("rotations") or []
+    bindings = body.get("bindings") or []
+    if not isinstance(rotations, list) or not isinstance(bindings, list):
+        return {"ok": False}
+    with _db_lock, _db() as conn:
+        summary = name_fork.ingest_rotation_round(conn, rotations)
+        overflow_n = int(summary["overflow_n"])
+    for _ in range(overflow_n):
+        _check_rate(f"namefork:{str(sender_pub).lower()}", limit=32, window=60.0)
+    counts = {"ok": True, "inserted": 0, "kept": 0, "replaced": 0,
+              "conflict": 0, "contested": 0}
+    for binding in bindings:
+        outcome = ingest_gossiped_binding(binding, sender_pub=sender_pub)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    counts["accepted_rotations"] = len(summary["accepted"])
+    counts["contested_names"] = sorted(summary["contested"])
+    return counts
 
 
 def _names_gossip_out() -> int:
@@ -2322,9 +2419,14 @@ def _names_gossip_out() -> int:
             {"name": r["name"], "node_pubkey": r["node_pubkey"],
              "issued_at": r["issued_at"], "expires_at": r["expires_at"],
              "signature": r["signature"]})
-    if not payloads:
-        return 0
     payloads = payloads[:NAMES_GOSSIP_BATCH_CAP]
+    # F1: rotation certificates travel with the bindings. A contested name
+    # that never received a winning binding still repeats its fork certs,
+    # so a peer can see the split instead of a silent local winner.
+    rotation_names = [p["name"] for p in payloads]
+    extra_rotations = _names_gossip_rotations(rotation_names, include_unbound=True)
+    if not payloads and not extra_rotations:
+        return 0
     with _db_lock, _db() as conn:
         rows = conn.execute(
             "SELECT node_pub, node_url FROM peers "
@@ -2333,9 +2435,11 @@ def _names_gossip_out() -> int:
             (GOSSIP_FANOUT_SPAWN_CAP,)).fetchall()
     n = 0
     for recip in rows:
-        body = {"from_node_pub": _NODE_PUB, "bindings": payloads}
+        body = {"from_node_pub": _NODE_PUB, "bindings": payloads,
+                "rotations": extra_rotations}
         env = _fed_env.make_envelope(
-            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body)
+            _NODE_PRIV, _NODE_PUB, recip["node_pub"], body,
+            kind="names-gossip")
         threading.Thread(target=_post_to_peer_path,
                          args=(recip["node_url"], "/fed/names/gossip", env),
                          daemon=True).start()
@@ -2404,7 +2508,8 @@ def _announce_out() -> int:
         }
         if delta:
             body["delta"] = delta
-        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body)
+        env = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", body,
+                                     kind="announce")
         threading.Thread(target=_post_to_peer_path,
                          args=(node_url, "/fed/announce", env),
                          daemon=True).start()
@@ -2537,7 +2642,8 @@ def _reach_out() -> int:
         "node_pub": name_pub,
         "reach_descriptor": desc,
     }
-    env = _fed_env.make_envelope(name_priv, name_pub, "federation", body)
+    env = _fed_env.make_envelope(name_priv, name_pub, "federation", body,
+                                 kind="announce")
     with _db_lock, _db() as conn:
         rows = conn.execute(
             "SELECT node_pub, node_url FROM peers "
@@ -2593,7 +2699,8 @@ def _seed_bootstrap() -> int:
             node_url = _valid_node_url(seed)
             with _peer_urlopen(node_url + "/fed/ping", timeout=8) as resp:
                 env = _read_peer_json(resp)
-            if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+            if not isinstance(env, dict) or not _fed_env.verify_envelope(
+                    env, expect_kind="ping"):
                 continue
             body = env.get("body")
             if not isinstance(body, dict):
@@ -2635,7 +2742,8 @@ def _seed_bootstrap() -> int:
                 delta = _delta_self_attestation(self_url)
                 if delta:
                     announce["delta"] = delta
-                aenv = _fed_env.make_envelope(_NODE_PRIV, _NODE_PUB, "federation", announce)
+                aenv = _fed_env.make_envelope(
+                    _NODE_PRIV, _NODE_PUB, "federation", announce, kind="announce")
                 threading.Thread(target=_post_to_peer_path,
                                  args=(node_url, "/fed/announce", aenv),
                                  daemon=True).start()

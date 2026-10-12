@@ -170,3 +170,19 @@ fail-closed by construction. The design note permits this.)
   never a writer. Name claims still happen on the nodes.
 - `.cyberspace` stays sacred in prose until the daemon runs somewhere
   real — the v0 note is a plan, not a place.
+
+## Fork rule
+
+The fork rule buys per-node consistency. It does not buy mirror agreement after a fork. It does not recover a stolen key.
+
+A second valid rotation certificate for the same (name, prior key) is
+stored as fork evidence and the name is marked CONTESTED. Resolve refuses
+a contested name and does not serve the local winner. Winner determination
+is by witness receipts only. Chain depth is never a tiebreak. Cross-node
+first-seen is never a tiebreak.
+
+Bootstrap does not pick a first-seen winner when more than one certificate
+for the same prior key arrives with the name. At most one rotation is
+accepted per name per gossip round. Anyone holding the pinned key can
+freeze the name by signing two certificates for that prior key until a
+witness-receipt rule exists.

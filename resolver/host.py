@@ -188,7 +188,7 @@ def announce_once(mirror_url: str, name: str, name_priv_hex: str) -> bool:
             "reach_descriptor": desc,
         }
         env = core._fed_env.make_envelope(name_priv_hex, name_pub,
-                                          "federation", body)
+                                          "federation", body, kind="announce")
         return _mirror_post(mirror_url, "/fed/announce", env)
     except Exception:
         return False

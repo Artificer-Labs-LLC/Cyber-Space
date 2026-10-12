@@ -10,38 +10,59 @@ channel links all ride on it.
 
 import hashlib
 import json
+import re
 import time
 
 from . import ed25519
 
 VERSION = "fed/0"
 MAX_SKEW_SEC = 300
+# Wire v0 kind: bound into the signature so one route's envelope cannot
+# verify on another route inside the skew window (Villhaze 5a602248).
+_KIND_RE = re.compile(r"[a-z0-9-]{1,32}")
 
 
-def _canonical(ts: int, recipient: str, body_hash: bytes) -> bytes:
-    """Build the exact bytes that get signed: length-prefixed, unambiguous."""
+def _canonical(ts: int, recipient: str, body_hash: bytes,
+               kind: str | None = None) -> bytes:
+    """Build the exact bytes that get signed: length-prefixed, unambiguous.
+
+    `kind` is part of the signed bytes when the envelope carries one.
+    An envelope with no kind keeps the historical canonical form so a
+    reader can still verify an old ping; every production route sets a
+    kind and refuses a mismatch.
+    """
     r = recipient.encode()
-    return b"".join(
-        [
-            VERSION.encode(),
-            ts.to_bytes(8, "big"),
-            len(r).to_bytes(2, "big"),
-            r,
-            body_hash,
-        ]
-    )
+    parts = [
+        VERSION.encode(),
+        ts.to_bytes(8, "big"),
+        len(r).to_bytes(2, "big"),
+        r,
+    ]
+    if kind is not None:
+        k = kind.encode()
+        parts.append(len(k).to_bytes(2, "big"))
+        parts.append(k)
+    parts.append(body_hash)
+    return b"".join(parts)
 
 
 def make_envelope(privkey_hex: str, sender_pub_hex: str, recipient: str,
-                  body, ts: int = None) -> dict:
-    """Create a signed envelope for `body` (JSON-serializable)."""
+                  body, ts: int = None, kind: str | None = None) -> dict:
+    """Create a signed envelope for `body` (JSON-serializable).
+
+    Pass `kind` on every production route. The kind is covered by the
+    signature. Omitting it is only for verifying a historical envelope
+    that never carried one.
+    """
+    if kind is not None and not _KIND_RE.fullmatch(kind):
+        raise ValueError("envelope kind must be 1-32 chars of [a-z0-9-]")
     ts = int(ts if ts is not None else time.time())
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     body_hash = hashlib.sha256(payload).digest()
-    msg = _canonical(ts, recipient, body_hash)
+    msg = _canonical(ts, recipient, body_hash, kind)
     sig = ed25519.sign(msg, bytes.fromhex(privkey_hex),
                        bytes.fromhex(sender_pub_hex))
-    return {
+    env = {
         "v": VERSION,
         "sender_pub": sender_pub_hex,
         "ts": ts,
@@ -50,10 +71,19 @@ def make_envelope(privkey_hex: str, sender_pub_hex: str, recipient: str,
         "body": body,
         "sig": sig.hex(),
     }
+    if kind is not None:
+        env["kind"] = kind
+    return env
 
 
-def verify_envelope(env: dict, now: float = None) -> bool:
-    """Verify a received envelope. Fail-closed: anything off -> False."""
+def verify_envelope(env: dict, now: float = None,
+                    expect_kind: str | None = None) -> bool:
+    """Verify a received envelope. Fail-closed: anything off -> False.
+
+    `expect_kind` is the route's message type. A missing kind, or a kind
+    that belongs to another route, is a refusal — the signature is over
+    the kind, so a borrowed envelope cannot be replayed across routes.
+    """
     try:
         if not isinstance(env, dict):
             return False
@@ -64,11 +94,18 @@ def verify_envelope(env: dict, now: float = None) -> bool:
             return False
         if abs((now if now is not None else time.time()) - env["ts"]) > MAX_SKEW_SEC:
             return False
+        kind = env.get("kind") if "kind" in env else None
+        if expect_kind is not None:
+            if kind != expect_kind:
+                return False
+        if kind is not None and (not isinstance(kind, str)
+                                 or not _KIND_RE.fullmatch(kind)):
+            return False
         payload = json.dumps(env["body"], sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() != env["body_hash"]:
             return False
         msg = _canonical(env["ts"], env["recipient"],
-                         bytes.fromhex(env["body_hash"]))
+                         bytes.fromhex(env["body_hash"]), kind)
         return ed25519.checkvalid(bytes.fromhex(env["sig"]), msg,
                                   bytes.fromhex(env["sender_pub"]))
     except Exception:
@@ -113,5 +150,15 @@ if __name__ == "__main__":
     bad = make_envelope(seed, pub, "peer-node", env["body"], ts=env["ts"] - 3600)
     assert not verify_envelope(bad), "re-signed stale envelope accepted"
     print("replay rejection: OK")
+
+    # Kind is bound. An announce envelope must not verify as gossip.
+    kinded = make_envelope(seed, pub, "peer-node", {"ping": 1}, kind="announce")
+    assert verify_envelope(kinded, expect_kind="announce"), "kinded envelope rejected"
+    assert not verify_envelope(kinded, expect_kind="gossip"), "cross-route kind accepted"
+    assert not verify_envelope(kinded, expect_kind="ping"), "missing-kind route accepted a foreign kind"
+    swapped = dict(kinded)
+    swapped["kind"] = "gossip"
+    assert not verify_envelope(swapped, expect_kind="gossip"), "re-labeled kind accepted"
+    print("kind binding: OK")
 
     print("ALL ENVELOPE TESTS PASS")

@@ -82,7 +82,7 @@ def _fake_get_json_factory(mode):
         binding = _binding(issued, live_exp)
 
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester",
-                              {"pong": True})
+                              {"pong": True}, kind="ping")
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + LABEL:
