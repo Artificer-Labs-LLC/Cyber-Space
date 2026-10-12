@@ -89,11 +89,30 @@ class ResolveError(OSError):
 
 
 def _build_query(txid: int, qname: str, qtype: int) -> bytes:
-    """One-question standard query, the smallest the daemon will parse."""
+    """One-question standard query, the smallest the daemon will parse.
+
+    Labels are validated before encoding: a label over 63 bytes would
+    write a length byte whose top bits the daemon's parser reads as a
+    compression pointer, so the query came back as a confusing
+    mistransaction instead of a clear local error; a non-ASCII label
+    died as codec gibberish. Both now raise ValueError here, at the
+    source (main() already maps ValueError to exit 2).
+    """
     qname = qname.rstrip(".").lower()
-    labels = b"".join(
-        bytes([len(p)]) + p.encode("ascii") for p in qname.split(".") if p
-    ) + b"\x00"
+    encoded: list[bytes] = []
+    for part in qname.split("."):
+        if not part:
+            continue
+        try:
+            raw = part.encode("ascii")
+        except UnicodeEncodeError:
+            raise ValueError(f"name label is not ASCII: {part!r}") from None
+        if len(raw) > 63:
+            raise ValueError("name label exceeds the 63-byte DNS limit")
+        encoded.append(raw)
+    labels = b"".join(bytes([len(r)]) + r for r in encoded) + b"\x00"
+    if len(labels) > 255:
+        raise ValueError("name exceeds the 255-byte DNS wire limit")
     header = struct.pack(">HHHHHH", txid & 0xFFFF, 0x0100, 1, 0, 0, 0)  # RD
     return header + labels + struct.pack(">HH", qtype, 1)
 

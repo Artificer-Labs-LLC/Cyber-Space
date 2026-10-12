@@ -198,6 +198,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(parsed["qtype"], 1)
         self.assertTrue(parsed["rd"])
 
+    def test_query_label_over_63_bytes_raises(self):
+        with self.assertRaises(ValueError):
+            client._build_query(0x1, "a" * 64 + ".cyberspace", 1)
+
+    def test_query_label_exactly_63_bytes_ok(self):
+        pkt = client._build_query(0x1, "a" * 63 + ".cyberspace", 1)
+        self.assertEqual(dns.parse_query(pkt)["qname"],
+                         "a" * 63 + ".cyberspace")
+
+    def test_query_non_ascii_label_raises(self):
+        with self.assertRaises(ValueError):
+            client._build_query(0x1, "nødé.cyberspace", 1)
+
+    def test_query_wire_name_over_255_raises(self):
+        name = ".".join(["a" * 63] * 5) + ".cyberspace"
+        with self.assertRaises(ValueError):
+            client._build_query(0x1, name, 1)
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
