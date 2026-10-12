@@ -230,6 +230,20 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client._build_query(0x1, "nødé.cyberspace", 1)
 
+    def test_query_empty_label_raises_not_canonicalized(self):
+        """An empty label must never silently query a different name:
+        'alice..cyberspace' is not 'alice.cyberspace'."""
+        for bad in ("alice..cyberspace", ".cyberspace", "alice.cyberspace.."):
+            with self.assertRaises(ValueError, msg=bad):
+                client._build_query(0x1, bad, 1)
+
+    def test_query_empty_name_raises_not_root_query(self):
+        """'' / '.' built a root query the daemon forwards upstream —
+        a .cyberspace client must refuse it at the source."""
+        for bad in ("", "."):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._build_query(0x1, bad, 1)
+
     def test_query_wire_name_over_255_raises(self):
         name = ".".join(["a" * 63] * 5) + ".cyberspace"
         with self.assertRaises(ValueError):

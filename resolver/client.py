@@ -97,12 +97,22 @@ def _build_query(txid: int, qname: str, qtype: int) -> bytes:
     mistransaction instead of a clear local error; a non-ASCII label
     died as codec gibberish. Both now raise ValueError here, at the
     source (main() already maps ValueError to exit 2).
+
+    Empty labels raise too: the old skip-empty loop silently queried a
+    DIFFERENT name than the caller wrote — "alice..cyberspace" went on
+    the wire as "alice.cyberspace", ".cyberspace" as bare "cyberspace",
+    and "" / "." as a root query the daemon does not treat as its zone
+    and forwards upstream. One trailing dot (the FQDN root marker) is
+    still accepted; any other empty label is a malformed name, refused
+    here rather than canonicalized into a neighbour's name.
     """
-    qname = qname.rstrip(".").lower()
+    if qname.endswith("."):
+        qname = qname[:-1]  # a single FQDN root dot; a second leaves an empty label
+    qname = qname.lower()
     encoded: list[bytes] = []
     for part in qname.split("."):
         if not part:
-            continue
+            raise ValueError(f"name has an empty label: {qname!r}")
         try:
             raw = part.encode("ascii")
         except UnicodeEncodeError:
