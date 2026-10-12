@@ -59,7 +59,8 @@ def _dead_binding(label, priv, pub):
 
 
 def _descriptor(label, priv, pub, strategies):
-    issued, expires = _times(timedelta(hours=-1), timedelta(days=365))
+    # Descriptor lifetime under the 365-day cap: -1h + 365d is 365d1h.
+    issued, expires = _times(timedelta(hours=-1), timedelta(days=364))
     return core._reach_mint(priv, pub, label, strategies, issued, expires)
 
 

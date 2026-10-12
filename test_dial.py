@@ -56,7 +56,9 @@ class FakeMirror:
 
 def _live_times():
     now = datetime.now(timezone.utc)
-    return _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=365))
+    # Lifetime must stay under the 365-day cap (NAME_EXPIRY_DAYS):
+    # issued 1h ago + expires 365d from now would be 365d1h — over.
+    return _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=364))
 
 
 def _fixture(binding=None, desc=None, directory=None, alive=True):

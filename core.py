@@ -785,6 +785,16 @@ def _reach_descriptor_verify(desc) -> bool:
         expires_dt = _parse_claim_time(expires_at)
         if issued_dt > now_utc or not issued_dt < expires_dt:
             return False
+        # Lifetime cap, twin of the binding admission cap
+        # (_name_binding_admission_ok, NAME_EXPIRY_DAYS): a descriptor
+        # signed for longer than 365 days would keep an address live
+        # long after the re-announce cadence should have healed it —
+        # and could outlive the binding cap itself. No 24h freshness
+        # twin: the descriptor merge is later-issued-wins, so a
+        # backdated descriptor displaces nothing (unlike bindings,
+        # whose earlier-wins rule made freshness load-bearing).
+        if (expires_dt - issued_dt) > timedelta(days=NAME_EXPIRY_DAYS):
+            return False
         if expires_dt <= now_utc:
             return False
         return _fed_ed25519.checkvalid(

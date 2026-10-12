@@ -159,10 +159,11 @@ def _rbinding(corrupt=False):
             "expires_at": LIVE, "signature": sig}
 
 
-def _rdesc(tamper=False, issued=None):
+def _rdesc(tamper=False, issued=None, expires=None):
     d = core._reach_mint(_name_seed.hex(), _name_pub, RLABEL,
                          [{"kind": "direct", "url": DESC_URL}],
-                         issued if issued is not None else ISSUED, LIVE)
+                         issued if issued is not None else ISSUED,
+                         expires if expires is not None else LIVE)
     if tamper:
         d = dict(d)
         d["signature"] = ("0" if d["signature"][0] != "0" else "1") + d["signature"][1:]
@@ -211,7 +212,8 @@ def _fake_factory(mode):
             "future-issued-live": _rdesc(),
             "future-issued-mirror": _rdesc(),
             "garbage-issued-desc": _rdesc(issued="not-a-time"),
-            "future-issued-desc": _rdesc(issued=FUTURE_ISSUED)}[mode]
+            "future-issued-desc": _rdesc(issued=FUTURE_ISSUED),
+            "overlong-desc": _rdesc(expires=_iso(now + timedelta(days=400)))}[mode]
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
@@ -252,7 +254,11 @@ def part_b():
                 # _reach_descriptor_verify and fall to the directory
                 # scan, like a bad signature.
                 ("garbage-issued-desc", NODE, 1),
-                ("future-issued-desc", NODE, 1)):
+                ("future-issued-desc", NODE, 1),
+                # Lifetime cap: a descriptor signed for 401 days
+                # (valid signature, live expiry) exceeds the 365-day
+                # NAME_EXPIRY_DAYS twin cap — refused, directory scan.
+                ("overlong-desc", NODE, 1)):
             fake, hits = _fake_factory(mode)
             core._resolve_get_json = fake
             core._resolve_peer_get_json = fake

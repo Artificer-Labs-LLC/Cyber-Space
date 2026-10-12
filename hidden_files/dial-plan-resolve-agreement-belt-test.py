@@ -53,7 +53,8 @@ def _name_key():
 
 def _live_times():
     now = datetime.now(timezone.utc)
-    return _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=365))
+    # Lifetime under the 365-day cap: 1h ago + 365d would be 365d1h.
+    return _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=364))
 
 
 def _binding(label, priv, pub):
