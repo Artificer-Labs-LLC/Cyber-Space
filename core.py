@@ -823,8 +823,11 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
         return (old is None
                 or _parse_claim_time(old["expires_at"]) <= now_dt
                 or _name_claim_beats(binding, old))
-    except ValueError:
+    except (ValueError, OverflowError):
         # Examiner's block: unparseable stored row — same key only.
+        # OverflowError joins ValueError (Bulwark low, ART-29): year-9999
+        # stamps parse but overflow on arithmetic — still unparseable for
+        # conflict purposes, never silently beaten by a foreign key.
         return old is not None and old["node_pubkey"].lower() == node_pubkey.lower()
 
 
@@ -1471,6 +1474,42 @@ def _name_registry_has_room(conn) -> bool:
 NAME_REGISTRY_CAP = 1024
 
 
+# Claim freshness (2026-10-11, Lodestar BLOCK): the conflict rule's
+# "earlier issued_at wins" lets a backdated issued_at displace any live
+# incumbent — self-reported timestamps prove nothing about actual signing
+# time. Claims must be signed fresh (mint_name.py always signs now).
+# Shared by the claim route and the gossip ingest half (Bulwark HIGH,
+# ART-29): the gossip path must enforce the same gates, or a fresh key
+# signing issued_at=2001 replaces any live incumbent via gossip while the
+# route refuses it.
+NAME_CLAIM_FRESHNESS = timedelta(hours=24)
+
+
+def _name_binding_admission_ok(issued_dt, expires_dt, now_dt):
+    """Shared admission check for name bindings (route + gossip ingest).
+
+    The route (names/claim) and the gossip merge half
+    (ingest_gossiped_binding) must enforce identical gates — otherwise a
+    binding the route refuses (stale, over-cap) can enter via gossip and
+    displace a live incumbent (Bulwark HIGH, ART-29).
+
+    Returns None if the binding is admissible, or a short reason string
+    if it must be refused. Callers map the reason to their own refusal
+    shape (HTTP 400 on the route, dropped-* on the gossip path).
+    """
+    if issued_dt > now_dt:
+        return "issued_at is in the future; the claim must be signed now"
+    if issued_dt < now_dt - NAME_CLAIM_FRESHNESS:
+        return ("issued_at is stale (older than 24h); claims must be "
+                "signed fresh")
+    # B3 (Q1 fix, ART-29): the 365-day cap, as (expires - issued). The
+    # subtraction form (never issued + 365 days) cannot OverflowError on
+    # year-9999 stamps — a subtraction of two valid datetimes is safe.
+    if (expires_dt - issued_dt) > timedelta(days=NAME_EXPIRY_DAYS):
+        return "binding lifetime exceeds 365 days"
+    return None
+
+
 def ingest_gossiped_binding(binding: dict) -> str:
     """.cyberspace Phase 1 build item 4: the mirror's merge half — fold a
     gossiped name binding into this mirror's registry. A registry is a
@@ -1513,16 +1552,26 @@ def ingest_gossiped_binding(binding: dict) -> str:
         # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
         # row reads as absent, never wins, never goes live.
         try:
-            if _parse_claim_time(expires_at) <= datetime.now(timezone.utc):
-                return "dropped-expired"
-            _parse_claim_time(issued_at)
-        except ValueError:
+            expires_dt = _parse_claim_time(expires_at)
+            issued_dt = _parse_claim_time(issued_at)
+        except (ValueError, OverflowError):
             return "dropped-malformed"
+        now_dt = datetime.now(timezone.utc)
+        if expires_dt <= now_dt:
+            return "dropped-expired"
+        # Bulwark HIGH (ART-29): the gossip path must enforce the route's
+        # admission gates — freshness and the 365-day cap. Without them, a
+        # fresh key signing issued_at=2001 displaces any live incumbent via
+        # gossip while the route refuses it (Lodestar's backdating hole).
+        admission_reason = _name_binding_admission_ok(
+            issued_dt, expires_dt, now_dt)
+        if admission_reason is not None:
+            return "dropped-stale" if "stale" in admission_reason or "future" in admission_reason else "dropped-over-cap"
         new = {"name": name, "node_pubkey": node_pubkey,
                "issued_at": issued_at, "expires_at": expires_at}
         with _db_lock, _db() as conn:
             row = conn.execute(
-                "SELECT node_pubkey, issued_at FROM name_bindings WHERE name=?",
+                "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
             if row is None:
                 if not _name_registry_has_room(conn):
@@ -1532,9 +1581,14 @@ def ingest_gossiped_binding(binding: dict) -> str:
                     " expires_at, signature) VALUES (?,?,?,?,?)",
                     (name, node_pubkey, issued_at, expires_at, signature))
                 return "inserted"
+            # Bulwark MEDIUM (ART-29): the old row loads WITH expires_at and
+            # goes through _old_binding_beaten — the route's conflict rule —
+            # so expired rows are freed and unparseable rows get Examiner's
+            # block, identically on both paths. Loading without expires_at
+            # let mirrors keep expired foreign rows HQ had replaced.
             old = {"name": name, "node_pubkey": row[0],
-                   "issued_at": row[1]}
-            if _name_claim_beats(new, old):
+                   "issued_at": row[1], "expires_at": row[2]}
+            if _old_binding_beaten(old, new, node_pubkey, now_dt):
                 conn.execute(
                     "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
                     " expires_at=?, signature=? WHERE name=?",
