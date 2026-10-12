@@ -1,1 +1,192 @@
-IiIiVW5pdCB0ZXN0cyBmb3IgdGhlIHJlc29sdmVyJ3MgVENQIGNvbm5lY3Rpb24gcGF0aCAoUkZDIDc3NjYpLgoKRHJpdmVzIHRoZSBSRUFMIF9zZXJ2ZV90Y3BfY29ubigpIG92ZXIgcmVhbCBzb2NrZXRwYWlyKCkgc29ja2V0cyDigJQgYWN0dWFsCmxlbmd0aC1wcmVmaXhlZCBmcmFtZXMgb24gYSByZWFsIChsb29wYmFjay1sb2NhbCkgdHJhbnNwb3J0LCBhIG1vbmtleXBhdGNoZWQKaGFuZGxlX3F1ZXJ5IGZvciB0aGUgdHJhbnNwb3J0IGxheWVyJ3Mgb3duIGNvbnRyYWN0LiBzYW5kYm94IGJsb2NrcyBVRFAsCm5vdCBUQ1AsIHNvIHRoaXMgaXMgdGhlIHdpcmUgdGhlIGRhZW1vbiBjYW4gcHJvdmUgaW4tc2FuZGJveDsgdGhlIGZ1bGwKZW5kLXRvLWVuZCAocmVhbCBoYW5kbGVyLCByZWFsIGNsYWltKSBsaXZlcyBpbgpoaWRkZW5fZmlsZXMvcmVzb2x2ZXItdGNwLXdpcmUtbG9vcGJhY2stdGVzdC5weS4KCkNvdmVyYWdlOgogIDEuIHR3byBzZXF1ZW50aWFsIHF1ZXJpZXMgb24gb25lIGNvbm5lY3Rpb24gLT4gYm90aCBhbnN3ZXJlZCwgdHhpZHMgZWNob2VkCiAgMi4gaGFuZGxlX3F1ZXJ5IHJhaXNpbmcgLT4gU0VSVkZBSUwgb24gdGhhdCBmcmFtZSwgY29ubmVjdGlvbiBzdGF5cyBvcGVuCiAgMy4gZ2FyYmFnZSBieXRlcyAtPiBTRVJWRkFJTCB3aXRoIHRoZSB0eGlkIGVjaG9lZCwgbmV2ZXIgc2lsZW5jZQogIDQuIHplcm8tbGVuZ3RoIGZyYW1lIHNraXBwZWQsIG5leHQgcXVlcnkgc3RpbGwgYW5zd2VyZWQKICA1LiBjbGllbnQgZGllcyBtaWQtcGFja2V0IC0+IGNvbm5lY3Rpb24gZW5kcywgZnVuY3Rpb24gcmV0dXJucywgbmV2ZXIgcmFpc2VzCiAgNi4gY2xlYW4gRU9GIHdpdGggbm8gcXVlcmllcyAtPiByZXR1cm5zIDAsIG5ldmVyIHJhaXNlcwoKUnVuOiBjZCB+L3dvcmtzcGFjZS9jeWJlcm5ldCAmJiAuL3ZlbnYvYmluL3B5dGhvbiByZXNvbHZlci90ZXN0X2RhZW1vbl90Y3AucHkKIiIiCgppbXBvcnQgb3MKaW1wb3J0IHNvY2tldAppbXBvcnQgc3RydWN0CmltcG9ydCBzeXMKCnN5cy5wYXRoLmluc2VydCgwLCBvcy5wYXRoLmRpcm5hbWUob3MucGF0aC5kaXJuYW1lKG9zLnBhdGguYWJzcGF0aChfX2ZpbGVfXykpKSkKCmZyb20gcmVzb2x2ZXIgaW1wb3J0IGRhZW1vbiAgIyBub3FhOiBFNDAyCgpDQVNFUyA9IHsicGFzc2VkIjogMCwgImZhaWxlZCI6IDB9CgoKZGVmIGNoZWNrKG5hbWUsIGNvbmQsIGV4dHJhPSIiKToKICAgIGlmIGNvbmQ6CiAgICAgICAgQ0FTRVNbInBhc3NlZCJdICs9IDEKICAgICAgICBwcmludChmIiAgb2sgIHtuYW1lfSIpCiAgICBlbHNlOgogICAgICAgIENBU0VTWyJmYWlsZWQiXSArPSAxCiAgICAgICAgcHJpbnQoZiIgIEZBSUwge25hbWV9IHtleHRyYX0iKQoKCmRlZiBfcXVlcnlfcGFja2V0KHFpZD0weDYwMDEpOgogICAgaGRyID0gc3RydWN0LnBhY2soIj5ISEhISEgiLCBxaWQsIDB4MDEwMCwgMSwgMCwgMCwgMCkKICAgIHFuYW1lID0gYiJceDA0dGVzdFx4MDljeWJlcnNwYWNlXHgwMCIKICAgIHJldHVybiBoZHIgKyBxbmFtZSArIHN0cnVjdC5wYWNrKCI+SEgiLCAxLCAxKQoKCmRlZiBfZnJhbWUocGF5bG9hZCk6CiAgICByZXR1cm4gc3RydWN0LnBhY2soIj5IIiwgbGVuKHBheWxvYWQpKSArIHBheWxvYWQKCgpkZWYgX3JlYWRfcmVwbHkoY2xpZW50KToKICAgIGhlYWQgPSBiIiIKICAgIHdoaWxlIGxlbihoZWFkKSA8IDI6CiAgICAgICAgY2h1bmsgPSBjbGllbnQucmVjdigyIC0gbGVuKGhlYWQpKQogICAgICAgIGlmIG5vdCBjaHVuazoKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoIkVPRiB3YWl0aW5nIGZvciByZXBseSBsZW5ndGgiKQogICAgICAgIGhlYWQgKz0gY2h1bmsKICAgIChuLCkgPSBzdHJ1Y3QudW5wYWNrKCI+SCIsIGhlYWQpCiAgICBib2R5ID0gYiIiCiAgICB3aGlsZSBsZW4oYm9keSkgPCBuOgogICAgICAgIGNodW5rID0gY2xpZW50LnJlY3YobiAtIGxlbihib2R5KSkKICAgICAgICBpZiBub3QgY2h1bms6CiAgICAgICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKCJFT0Ygd2FpdGluZyBmb3IgcmVwbHkgYm9keSIpCiAgICAgICAgYm9keSArPSBjaHVuawogICAgcmV0dXJuIGJvZHkKCgpkZWYgX3Jjb2RlX3FpZChyZXBseSk6CiAgICBxaWQgPSBzdHJ1Y3QudW5wYWNrKCI+SCIsIHJlcGx5WzoyXSlbMF0KICAgIGZsYWdzID0gc3RydWN0LnVucGFjaygiPkgiLCByZXBseVsyOjRdKVswXQogICAgcmV0dXJuIHFpZCwgKGZsYWdzID4+IDE1KSAmIDEsIGZsYWdzICYgMHhGCgoKZGVmIF9lY2hvX2hhbmRsZXIocmF3LCAqKmt3KToKICAgICMgdHJhbnNwb3J0LWxheWVyIHN0YW5kLWluOiBhIHJlYWwgcXVlcnkgc2hhcGUgZWNob2VzIGFzIE5PRVJST1IsCiAgICAjIGFueXRoaW5nIGVsc2UgU0VSVkZBSUxzIOKAlCB0aGUgcmVhbCBzaXgtc3RlcCBydW5zIGluIHRoZSB3aXJlIGhhcm5lc3MuCiAgICBpZiBsZW4ocmF3KSA+PSAxMiBhbmQgc3RydWN0LnVucGFjaygiPkgiLCByYXdbNDo2XSlbMF0gPT0gMToKICAgICAgICByZXR1cm4gcmF3WzoyXSArIGIiXHg4MVx4ODAiICsgcmF3WzQ6XQogICAgcmV0dXJuIGRhZW1vbi5lcnJvcl9yZXNwb25zZShyYXcsIDIpCgoKZGVmIF9yYWlzaW5nX2hhbmRsZXIocmF3LCAqKmt3KToKICAgIHJhaXNlIFJ1bnRpbWVFcnJvcigiaGFuZGxlciBleHBsb2RlZCIpCgoKZGVmIF9wYWlyKCk6CiAgICBhLCBiID0gc29ja2V0LnNvY2tldHBhaXIoKQogICAgcmV0dXJuIGEsIGIKCgpkZWYgbWFpbigpOgogICAgcmVhbF9oYW5kbGUgPSBkYWVtb24uaGFuZGxlX3F1ZXJ5CgogICAgIyBQaGFzZSAxOiBzZXF1ZW50aWFsIHF1ZXJpZXMgb24gb25lIGNvbm5lY3Rpb24uCiAgICBkYWVtb24uaGFuZGxlX3F1ZXJ5ID0gX2VjaG9faGFuZGxlcgogICAgY2xpZW50LCBzZXJ2ZXIgPSBfcGFpcigpCiAgICB0cnk6CiAgICAgICAgc2VudCA9IFtdCiAgICAgICAgZm9yIHFpZCBpbiAoMHg2MDAxLCAweDYwMDIpOgogICAgICAgICAgICBwa3QgPSBfcXVlcnlfcGFja2V0KHFpZCkKICAgICAgICAgICAgY2xpZW50LnNlbmRhbGwoX2ZyYW1lKHBrdCkpCiAgICAgICAgY2xpZW50LnNodXRkb3duKHNvY2tldC5TSFVUX1dSKSAgIyBFT0YgYWZ0ZXIgdGhlIGZyYW1lcwogICAgICAgIHNlcnZlZCA9IGRhZW1vbi5fc2VydmVfdGNwX2Nvbm4oc2VydmVyLCAibSIsICgiMS4xLjEuMSIsIDUzKSwgMzAwKQogICAgICAgIHIxID0gX3JlYWRfcmVwbHkoY2xpZW50KQogICAgICAgIHIyID0gX3JlYWRfcmVwbHkoY2xpZW50KQogICAgZmluYWxseToKICAgICAgICBjbGllbnQuY2xvc2UoKQogICAgICAgIHNlcnZlci5jbG9zZSgpCiAgICBxaWQxLCBxcjEsIHJjMSA9IF9yY29kZV9xaWQocjEpCiAgICBxaWQyLCBxcjIsIHJjMiA9IF9yY29kZV9xaWQocjIpCiAgICBjaGVjaygidHdvIGZyYW1lcyBvbiBvbmUgY29ubmVjdGlvbiAtPiBzZXJ2ZWQgPT0gMiIsIHNlcnZlZCA9PSAyLAogICAgICAgICAgZiJzZXJ2ZWQ9e3NlcnZlZH0iKQogICAgY2hlY2soImZpcnN0IHJlcGx5IE5PRVJST1Igd2l0aCB0eGlkIGVjaG9lZCIsCiAgICAgICAgICBxaWQxID09IDB4NjAwMSBhbmQgcXIxID09IDEgYW5kIHJjMSA9PSAwLCBmInFpZD17cWlkMTojeH0gcmM9e3JjMX0iKQogICAgY2hlY2soInNlY29uZCByZXBseSBOT0VSUk9SIHdpdGggdHhpZCBlY2hvZWQiLAogICAgICAgICAgcWlkMiA9PSAweDYwMDIgYW5kIHFyMiA9PSAxIGFuZCByYzIgPT0gMCwgZiJxaWQ9e3FpZDI6I3h9IHJjPXtyYzJ9IikKCiAgICAjIFBoYXNlIDI6IGhhbmRsZXIgcmFpc2luZyBtaWQtY29ubmVjdGlvbiAtPiBTRVJWRkFJTCwgY29ubmVjdGlvbiBzdXJ2aXZlcy4KICAgIGRhZW1vbi5oYW5kbGVfcXVlcnkgPSBfcmFpc2luZ19oYW5kbGVyCiAgICBjbGllbnQsIHNlcnZlciA9IF9wYWlyKCkKICAgIHRyeToKICAgICAgICBjbGllbnQuc2VuZGFsbChfZnJhbWUoX3F1ZXJ5X3BhY2tldCgweDYwMDMpKSkKICAgICAgICBjbGllbnQuc2h1dGRvd24oc29ja2V0LlNIVVRfV1IpCiAgICAgICAgc2VydmVkID0gZGFlbW9uLl9zZXJ2ZV90Y3BfY29ubihzZXJ2ZXIsICJtIiwgKCIxLjEuMS4xIiwgNTMpLCAzMDApCiAgICAgICAgciA9IF9yZWFkX3JlcGx5KGNsaWVudCkKICAgIGZpbmFsbHk6CiAgICAgICAgY2xpZW50LmNsb3NlKCkKICAgICAgICBzZXJ2ZXIuY2xvc2UoKQogICAgcWlkLCBxciwgcmMgPSBfcmNvZGVfcWlkKHIpCiAgICBjaGVjaygicmFpc2luZyBoYW5kbGVyIC0+IFNFUlZGQUlMLCBuZXZlciBzaWxlbmNlIiwKICAgICAgICAgIHFpZCA9PSAweDYwMDMgYW5kIHFyID09IDEgYW5kIHJjID09IDIsIGYicWlkPXtxaWQ6I3h9IHJjPXtyY30iKQogICAgY2hlY2soIlNFUlZGQUlMIHN0aWxsIGNvdW50cyBhcyBzZXJ2ZWQiLCBzZXJ2ZWQgPT0gMSwgZiJzZXJ2ZWQ9e3NlcnZlZH0iKQoKICAgICMgUGhhc2UgMzogZ2FyYmFnZSBieXRlcyAtPiBTRVJWRkFJTCB3aXRoIHR4aWQgZWNoby4KICAgIGRhZW1vbi5oYW5kbGVfcXVlcnkgPSBfZWNob19oYW5kbGVyCiAgICBjbGllbnQsIHNlcnZlciA9IF9wYWlyKCkKICAgIHRyeToKICAgICAgICBjbGllbnQuc2VuZGFsbChfZnJhbWUoYiJceDEyXHgzNGp1bmstYnl0ZXMtbm90LWRucyIpKQogICAgICAgIGNsaWVudC5zaHV0ZG93bihzb2NrZXQuU0hVVF9XUikKICAgICAgICBzZXJ2ZWQgPSBkYWVtb24uX3NlcnZlX3RjcF9jb25uKHNlcnZlciwgIm0iLCAoIjEuMS4xLjEiLCA1MyksIDMwMCkKICAgICAgICByID0gX3JlYWRfcmVwbHkoY2xpZW50KQogICAgZmluYWxseToKICAgICAgICBjbGllbnQuY2xvc2UoKQogICAgICAgIHNlcnZlci5jbG9zZSgpCiAgICBxaWQsIHFyLCByYyA9IF9yY29kZV9xaWQocikKICAgIGNoZWNrKCJnYXJiYWdlIGZyYW1lIC0+IFNFUlZGQUlMIHdpdGggdHhpZCBlY2hvIiwKICAgICAgICAgIHFpZCA9PSAweDEyMzQgYW5kIHFyID09IDEgYW5kIHJjID09IDIsIGYicWlkPXtxaWQ6I3h9IHJjPXtyY30iKQoKICAgICMgUGhhc2UgNDogemVyby1sZW5ndGggZnJhbWUgc2tpcHBlZCwgbmV4dCBxdWVyeSBhbnN3ZXJlZC4KICAgIGNsaWVudCwgc2VydmVyID0gX3BhaXIoKQogICAgdHJ5OgogICAgICAgIGNsaWVudC5zZW5kYWxsKHN0cnVjdC5wYWNrKCI+SCIsIDApICsgX2ZyYW1lKF9xdWVyeV9wYWNrZXQoMHg2MDA0KSkpCiAgICAgICAgY2xpZW50LnNodXRkb3duKHNvY2tldC5TSFVUX1dSKQogICAgICAgIHNlcnZlZCA9IGRhZW1vbi5fc2VydmVfdGNwX2Nvbm4oc2VydmVyLCAibSIsICgiMS4xLjEuMSIsIDUzKSwgMzAwKQogICAgICAgIHIgPSBfcmVhZF9yZXBseShjbGllbnQpCiAgICBmaW5hbGx5OgogICAgICAgIGNsaWVudC5jbG9zZSgpCiAgICAgICAgc2VydmVyLmNsb3NlKCkKICAgIHFpZCwgcXIsIHJjID0gX3Jjb2RlX3FpZChyKQogICAgY2hlY2soInplcm8tbGVuZ3RoIGZyYW1lIHNraXBwZWQsIHF1ZXJ5IGFuc3dlcmVkIiwKICAgICAgICAgIHNlcnZlZCA9PSAxIGFuZCBxaWQgPT0gMHg2MDA0IGFuZCByYyA9PSAwLAogICAgICAgICAgZiJzZXJ2ZWQ9e3NlcnZlZH0gcWlkPXtxaWQ6I3h9IHJjPXtyY30iKQoKICAgICMgUGhhc2UgNTogY2xpZW50IGRpZXMgbWlkLXBhY2tldCAtPiBlbmRzIGNsZWFubHksIG5ldmVyIHJhaXNlcy4KICAgIGNsaWVudCwgc2VydmVyID0gX3BhaXIoKQogICAgdHJ5OgogICAgICAgIGNsaWVudC5zZW5kYWxsKHN0cnVjdC5wYWNrKCI+SCIsIDEwMCkgKyBiInNob3J0IikKICAgICAgICBjbGllbnQuY2xvc2UoKSAgIyBFT0YgbWlkLWZyYW1lCiAgICAgICAgc2VydmVkID0gZGFlbW9uLl9zZXJ2ZV90Y3BfY29ubihzZXJ2ZXIsICJtIiwgKCIxLjEuMS4xIiwgNTMpLCAzMDApCiAgICBmaW5hbGx5OgogICAgICAgIHNlcnZlci5jbG9zZSgpCiAgICBjaGVjaygibWlkLXBhY2tldCBFT0YgLT4gcmV0dXJucywgbmV2ZXIgcmFpc2VzIiwgc2VydmVkID09IDAsCiAgICAgICAgICBmInNlcnZlZD17c2VydmVkfSIpCgogICAgIyBQaGFzZSA2OiBjbGVhbiBFT0YsIG5vIHF1ZXJpZXMgLT4gcmV0dXJucyAwLgogICAgY2xpZW50LCBzZXJ2ZXIgPSBfcGFpcigpCiAgICB0cnk6CiAgICAgICAgY2xpZW50LmNsb3NlKCkKICAgICAgICBzZXJ2ZWQgPSBkYWVtb24uX3NlcnZlX3RjcF9jb25uKHNlcnZlciwgIm0iLCAoIjEuMS4xLjEiLCA1MyksIDMwMCkKICAgIGZpbmFsbHk6CiAgICAgICAgc2VydmVyLmNsb3NlKCkKICAgIGNoZWNrKCJjbGVhbiBFT0Ygd2l0aCBubyBmcmFtZXMgLT4gMCBzZXJ2ZWQiLCBzZXJ2ZWQgPT0gMCwKICAgICAgICAgIGYic2VydmVkPXtzZXJ2ZWR9IikKCiAgICBkYWVtb24uaGFuZGxlX3F1ZXJ5ID0gcmVhbF9oYW5kbGUKICAgIHByaW50KGYiXG57Q0FTRVNbJ3Bhc3NlZCddfSBwYXNzZWQsIHtDQVNFU1snZmFpbGVkJ119IGZhaWxlZCIpCiAgICByZXR1cm4gMSBpZiBDQVNFU1siZmFpbGVkIl0gZWxzZSAwCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHN5cy5leGl0KG1haW4oKSkK
+"""Unit tests for the resolver's TCP connection path (RFC 7766).
+
+Drives the REAL _serve_tcp_conn() over real socketpair() sockets — actual
+length-prefixed frames on a real (loopback-local) transport, a monkeypatched
+handle_query for the transport layer's own contract. sandbox blocks UDP,
+not TCP, so this is the wire the daemon can prove in-sandbox; the full
+end-to-end (real handler, real claim) lives in
+hidden_files/resolver-tcp-wire-loopback-test.py.
+
+Coverage:
+  1. two sequential queries on one connection -> both answered, txids echoed
+  2. handle_query raising -> SERVFAIL on that frame, connection stays open
+  3. garbage bytes -> SERVFAIL with the txid echoed, never silence
+  4. zero-length frame skipped, next query still answered
+  5. client dies mid-packet -> connection ends, function returns, never raises
+  6. clean EOF with no queries -> returns 0, never raises
+
+Run: cd ~/workspace/cybernet && ./venv/bin/python resolver/test_daemon_tcp.py
+"""
+
+import os
+import socket
+import struct
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from resolver import daemon  # noqa: E402
+
+CASES = {"passed": 0, "failed": 0}
+
+
+def check(name, cond, extra=""):
+    if cond:
+        CASES["passed"] += 1
+        print(f"  ok  {name}")
+    else:
+        CASES["failed"] += 1
+        print(f"  FAIL {name} {extra}")
+
+
+def _query_packet(qid=0x6001):
+    hdr = struct.pack(">HHHHHH", qid, 0x0100, 1, 0, 0, 0)
+    qname = b"\x04test\x09cyberspace\x00"
+    return hdr + qname + struct.pack(">HH", 1, 1)
+
+
+def _frame(payload):
+    return struct.pack(">H", len(payload)) + payload
+
+
+def _read_reply(client):
+    head = b""
+    while len(head) < 2:
+        chunk = client.recv(2 - len(head))
+        if not chunk:
+            raise AssertionError("EOF waiting for reply length")
+        head += chunk
+    (n,) = struct.unpack(">H", head)
+    body = b""
+    while len(body) < n:
+        chunk = client.recv(n - len(body))
+        if not chunk:
+            raise AssertionError("EOF waiting for reply body")
+        body += chunk
+    return body
+
+
+def _rcode_qid(reply):
+    qid = struct.unpack(">H", reply[:2])[0]
+    flags = struct.unpack(">H", reply[2:4])[0]
+    return qid, (flags >> 15) & 1, flags & 0xF
+
+
+def _echo_handler(raw, **kw):
+    # transport-layer stand-in: a real query shape echoes as NOERROR,
+    # anything else SERVFAILs — the real six-step runs in the wire harness.
+    if len(raw) >= 12 and struct.unpack(">H", raw[4:6])[0] == 1:
+        return raw[:2] + b"\x81\x80" + raw[4:]
+    return daemon.error_response(raw, 2)
+
+
+def _raising_handler(raw, **kw):
+    raise RuntimeError("handler exploded")
+
+
+def _pair():
+    a, b = socket.socketpair()
+    return a, b
+
+
+def main():
+    real_handle = daemon.handle_query
+
+    # Phase 1: sequential queries on one connection.
+    daemon.handle_query = _echo_handler
+    client, server = _pair()
+    try:
+        sent = []
+        for qid in (0x6001, 0x6002):
+            pkt = _query_packet(qid)
+            client.sendall(_frame(pkt))
+        client.shutdown(socket.SHUT_WR)  # EOF after the frames
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+        r1 = _read_reply(client)
+        r2 = _read_reply(client)
+    finally:
+        client.close()
+        server.close()
+    qid1, qr1, rc1 = _rcode_qid(r1)
+    qid2, qr2, rc2 = _rcode_qid(r2)
+    check("two frames on one connection -> served == 2", served == 2,
+          f"served={served}")
+    check("first reply NOERROR with txid echoed",
+          qid1 == 0x6001 and qr1 == 1 and rc1 == 0, f"qid={qid1:#x} rc={rc1}")
+    check("second reply NOERROR with txid echoed",
+          qid2 == 0x6002 and qr2 == 1 and rc2 == 0, f"qid={qid2:#x} rc={rc2}")
+
+    # Phase 2: handler raising mid-connection -> SERVFAIL, connection survives.
+    daemon.handle_query = _raising_handler
+    client, server = _pair()
+    try:
+        client.sendall(_frame(_query_packet(0x6003)))
+        client.shutdown(socket.SHUT_WR)
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+        r = _read_reply(client)
+    finally:
+        client.close()
+        server.close()
+    qid, qr, rc = _rcode_qid(r)
+    check("raising handler -> SERVFAIL, never silence",
+          qid == 0x6003 and qr == 1 and rc == 2, f"qid={qid:#x} rc={rc}")
+    check("SERVFAIL still counts as served", served == 1, f"served={served}")
+
+    # Phase 3: garbage bytes -> SERVFAIL with txid echo.
+    daemon.handle_query = _echo_handler
+    client, server = _pair()
+    try:
+        client.sendall(_frame(b"\x12\x34junk-bytes-not-dns"))
+        client.shutdown(socket.SHUT_WR)
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+        r = _read_reply(client)
+    finally:
+        client.close()
+        server.close()
+    qid, qr, rc = _rcode_qid(r)
+    check("garbage frame -> SERVFAIL with txid echo",
+          qid == 0x1234 and qr == 1 and rc == 2, f"qid={qid:#x} rc={rc}")
+
+    # Phase 4: zero-length frame skipped, next query answered.
+    client, server = _pair()
+    try:
+        client.sendall(struct.pack(">H", 0) + _frame(_query_packet(0x6004)))
+        client.shutdown(socket.SHUT_WR)
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+        r = _read_reply(client)
+    finally:
+        client.close()
+        server.close()
+    qid, qr, rc = _rcode_qid(r)
+    check("zero-length frame skipped, query answered",
+          served == 1 and qid == 0x6004 and rc == 0,
+          f"served={served} qid={qid:#x} rc={rc}")
+
+    # Phase 5: client dies mid-packet -> ends cleanly, never raises.
+    client, server = _pair()
+    try:
+        client.sendall(struct.pack(">H", 100) + b"short")
+        client.close()  # EOF mid-frame
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+    finally:
+        server.close()
+    check("mid-packet EOF -> returns, never raises", served == 0,
+          f"served={served}")
+
+    # Phase 6: clean EOF, no queries -> returns 0.
+    client, server = _pair()
+    try:
+        client.close()
+        served = daemon._serve_tcp_conn(server, "m", ("1.1.1.1", 53), 300)
+    finally:
+        server.close()
+    check("clean EOF with no frames -> 0 served", served == 0,
+          f"served={served}")
+
+    daemon.handle_query = real_handle
+    print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
+    return 1 if CASES["failed"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

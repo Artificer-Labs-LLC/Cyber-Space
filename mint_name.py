@@ -111,6 +111,9 @@ def _get_json(url: str, timeout: float = 30.0) -> dict | None:
 
 
 def main(argv: list[str]) -> int:
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        return 0
     args = [a for a in argv if not a.startswith("--")]
     opts = {a.split("=", 1)[0]: (a.split("=", 1)[1] if "=" in a else "")
             for a in argv if a.startswith("--")}

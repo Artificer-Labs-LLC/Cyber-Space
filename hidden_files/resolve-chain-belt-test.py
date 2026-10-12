@@ -88,7 +88,8 @@ def _keypair():
 
 
 def _fresh_iso():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # canonical wire form (M-2, v0.6.3 red-team): seconds precision, +00:00
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 def _mint_binding(label, priv, pub, issued_s, expires_s):
@@ -131,7 +132,7 @@ SK_C, PK_C = _keypair()
 SK_Z, PK_Z = _keypair()  # stranger key, for the lineage-gap case
 LABEL = "chainwalk"
 LATER = _fresh_iso() and (datetime.datetime.now(datetime.timezone.utc)
-                          + datetime.timedelta(days=30)).isoformat()
+                          + datetime.timedelta(days=30)).isoformat(timespec="seconds")
 
 st, _ = _post("/api/v1/names/claim",
               {"name": LABEL, **_mint_binding(LABEL, SK_A, PK_A, _fresh_iso(), LATER)})

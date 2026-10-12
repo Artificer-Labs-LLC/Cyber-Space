@@ -1,1 +1,193 @@
-IiIiZGlhbC5wbGFuIC8gcmVzb2x2ZV9jeWJlcnNwYWNlIGFncmVlbWVudCBiZWx0IChwcmltaXRpdmUgMi8zIHByZXZpZXcgY29udHJhY3QpLgoKZGlhbC5weSBpcyB0aGUgYWdlbnQncyBzZWF0IGZvciAiaG93IHdvdWxkIHRoaXMgbmFtZSBiZSBkaWFsZWQiIOKAlCBpdHMgZG9jc3RyaW5nCnByb21pc2VzIHRoZSBkYWVtb24gZGlhbHMgb25seSB3aGF0IHRoZSBwbGFuIGRlc2NyaWJlcy4gVGhhdCBwcm9taXNlIGlzIG9ubHkKdHJ1ZSBpZiB0aGUgcGxhbm5lcidzIHN0ZXAtNSBmYWxsYmFjayBzZW1hbnRpY3MgbWF0Y2ggdGhlIHJlc29sdmVyJ3Mgc3RlcCA1LgpUaGlzIGJlbHQgZHJpdmVzIEJPVEggdGhlIFJFQUwgZGlhbC5wbGFuKCkgYW5kIHRoZSBSRUFMCmNvcmUucmVzb2x2ZV9jeWJlcnNwYWNlKCkgYWdhaW5zdCB0aGUgc2FtZSBzY3JpcHRlZCBtaXJyb3IgKGZha2UgdHJhbnNwb3J0Cm9ubHk7IGFsbCBzaWduYXR1cmVzIHJlYWwgRWQyNTUxOSkgYW5kIGRlbWFuZHMgYWdyZWVtZW50LgoKVGhlIHR3byBkaXZlcmdlbmNlcyB0aGlzIGJlbHQgbG9ja3M6CiAgMS4gbWlzbWF0Y2hlZC1rZXkgZGVzY3JpcHRvcjogdGhlIGRhZW1vbiAocmVzb2x2ZV9jeWJlcnNwYWNlIHN0ZXAgNSkgU0tJUFMKICAgICBhIGRlc2NyaXB0b3Igd2hvc2Ugbm9kZV9wdWJrZXkgIT0gdGhlIGJpbmRpbmcncyBrZXkgYW5kIGZhbGxzIHRvIHRoZQogICAgIGRpcmVjdG9yeSBzY2FuLiBUaGUgcGxhbm5lciBtdXN0IHByZXZpZXcgdGhhdCwgbm90IHZldG8gaXQgd2l0aCBhCiAgICAgaGFyZCBleGl0IDEuCiAgMi4gZGlyZWN0b3J5IHNoYXBlOiB0aGUgcmVhbCBtaXJyb3Igc2VydmVzIHsiZW50cmllcyI6IFsuLi5dfTsgdGhlIHBsYW5uZXIKICAgICBtdXN0IHJlYWQgImVudHJpZXMiIGxpa2UgdGhlIHJlc29sdmVyIGRvZXMsIG5vdCBkZWFkICJub2RlcyIvImFnZW50cyIKICAgICBrZXlzIHRoYXQgbmV2ZXIgZmlyZSBhZ2FpbnN0IGEgcmVhbCBtaXJyb3IuCgpTdGVwIDYgKGxpdmUgdmVyaWZpY2F0aW9uKSBpcyBtb25rZXlwYXRjaGVkIGF0IHRoZSB0cmFuc3BvcnQgZWRnZSBvbmx5CihfcmVzb2x2ZV9wZWVyX2dldF9qc29uICsgX2ZlZF9lbnYudmVyaWZ5X2VudmVsb3BlKSDigJQgdGhlIGJlbHQncyBzdWJqZWN0IGlzCnN0ZXAtNSBzdHJhdGVneS9mYWxsYmFjayBhZ3JlZW1lbnQsIGFuZCB0aGUgcmVhY2gtc2VydmUtZGlhbCBiZWx0IGFscmVhZHkKcHJvdmVzIHJlc29sdmVfY3liZXJzcGFjZSdzIG93biBzdGVwLTUgZmFsbGJhY2tzIGFnYWluc3QgcmVhbCBzaWduYXR1cmVzLgoKUnVuOiBjZCB+L3dvcmtzcGFjZS9jeWJlcm5ldCAmJiAuL3ZlbnYvYmluL3B5dGhvbiBoaWRkZW5fZmlsZXMvZGlhbC1wbGFuLXJlc29sdmUtYWdyZWVtZW50LWJlbHQtdGVzdC5weQoiIiIKaW1wb3J0IG9zCmltcG9ydCBzZWNyZXRzCmltcG9ydCBzeXMKaW1wb3J0IHVuaXR0ZXN0CmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1lLCB0aW1lZGVsdGEsIHRpbWV6b25lCgpzeXMucGF0aC5pbnNlcnQoMCwgb3MucGF0aC5leHBhbmR1c2VyKCJ+L3dvcmtzcGFjZS9jeWJlcm5ldCIpKQoKaW1wb3J0IGNvcmUgICMgbm9xYTogRTQwMgppbXBvcnQgZGlhbCAgIyBub3FhOiBFNDAyCgpNSVJST1IgPSAiaHR0cDovLzEyNy4wLjAuMTo4NDcxIgoKCmRlZiBfaXNvKGR0KToKICAgIHJldHVybiBkdC5zdHJmdGltZSgiJVktJW0tJWRUJUg6JU06JVMrMDA6MDAiKQoKCmRlZiBfbmFtZV9rZXkoKToKICAgIHByaXYgPSBzZWNyZXRzLnRva2VuX2hleCgzMikKICAgIHB1YiA9IGNvcmUuX2ZlZF9lZDI1NTE5LnB1YmxpY2tleShieXRlcy5mcm9taGV4KHByaXYpKS5oZXgoKQogICAgcmV0dXJuIHByaXYsIHB1YgoKCmRlZiBfbGl2ZV90aW1lcygpOgogICAgbm93ID0gZGF0ZXRpbWUubm93KHRpbWV6b25lLnV0YykKICAgIHJldHVybiBfaXNvKG5vdyAtIHRpbWVkZWx0YShob3Vycz0xKSksIF9pc28obm93ICsgdGltZWRlbHRhKGRheXM9MzY1KSkKCgpkZWYgX2JpbmRpbmcobGFiZWwsIHByaXYsIHB1Yik6CiAgICBpc3N1ZWQsIGV4cGlyZXMgPSBfbGl2ZV90aW1lcygpCiAgICBzaWcgPSBjb3JlLl9mZWRfZWQyNTUxOS5zaWduKAogICAgICAgIGNvcmUuX25hbWVfY2xhaW1fcGF5bG9hZChsYWJlbCwgcHViLCBpc3N1ZWQsIGV4cGlyZXMpLAogICAgICAgIGJ5dGVzLmZyb21oZXgocHJpdiksIGJ5dGVzLmZyb21oZXgocHViKSkuaGV4KCkKICAgIHJldHVybiB7Im5hbWUiOiBsYWJlbCwgIm5vZGVfcHVia2V5IjogcHViLCAiaXNzdWVkX2F0IjogaXNzdWVkLAogICAgICAgICAgICAiZXhwaXJlc19hdCI6IGV4cGlyZXMsICJzaWduYXR1cmUiOiBzaWd9CgoKZGVmIF9kZXNjcmlwdG9yKGxhYmVsLCBwcml2LCBwdWIsIHN0cmF0ZWdpZXMpOgogICAgaXNzdWVkLCBleHBpcmVzID0gX2xpdmVfdGltZXMoKQogICAgcmV0dXJuIGNvcmUuX3JlYWNoX21pbnQocHJpdiwgcHViLCBsYWJlbCwgc3RyYXRlZ2llcywgaXNzdWVkLCBleHBpcmVzKQoKCmNsYXNzIFNjcmlwdGVkTmV0OgogICAgIiIiRmFrZSB0cmFuc3BvcnQgZm9yIG1pcnJvciArIHBlZXIgVVJMcy4gUmVhbCBzaWduYXR1cmVzLCBubyBuZXR3b3JrLiIiIgoKICAgIGRlZiBfX2luaXRfXyhzZWxmLCBtaXJyb3Jfcm91dGVzLCBwZWVyX3JvdXRlcyk6CiAgICAgICAgc2VsZi5taXJyb3Jfcm91dGVzID0gbWlycm9yX3JvdXRlcwogICAgICAgIHNlbGYucGVlcl9yb3V0ZXMgPSBwZWVyX3JvdXRlcwogICAgICAgIHNlbGYuc2F2ZWRfZ2V0ID0gY29yZS5fcmVzb2x2ZV9nZXRfanNvbgogICAgICAgIHNlbGYuc2F2ZWRfcGVlciA9IGNvcmUuX3Jlc29sdmVfcGVlcl9nZXRfanNvbgogICAgICAgIHNlbGYuc2F2ZWRfZW52ID0gY29yZS5fZmVkX2Vudi52ZXJpZnlfZW52ZWxvcGUKCiAgICBkZWYgX19lbnRlcl9fKHNlbGYpOgogICAgICAgIGNvcmUuX3Jlc29sdmVfZ2V0X2pzb24gPSBsYW1iZGEgdXJsOiBzZWxmLm1pcnJvcl9yb3V0ZXMuZ2V0KHVybCkKICAgICAgICBjb3JlLl9yZXNvbHZlX3BlZXJfZ2V0X2pzb24gPSBsYW1iZGEgdXJsOiBzZWxmLnBlZXJfcm91dGVzLmdldCh1cmwpCiAgICAgICAgY29yZS5fZmVkX2Vudi52ZXJpZnlfZW52ZWxvcGUgPSBsYW1iZGEgZW52OiBUcnVlCiAgICAgICAgcmV0dXJuIHNlbGYKCiAgICBkZWYgX19leGl0X18oc2VsZiwgKmV4Yyk6CiAgICAgICAgY29yZS5fcmVzb2x2ZV9nZXRfanNvbiA9IHNlbGYuc2F2ZWRfZ2V0CiAgICAgICAgY29yZS5fcmVzb2x2ZV9wZWVyX2dldF9qc29uID0gc2VsZi5zYXZlZF9wZWVyCiAgICAgICAgY29yZS5fZmVkX2Vudi52ZXJpZnlfZW52ZWxvcGUgPSBzZWxmLnNhdmVkX2VudgoKCmRlZiBfcm91dGVzKGxhYmVsLCBiaW5kaW5nPU5vbmUsIGRlc2M9Tm9uZSwgZW50cmllcz0oKSk6CiAgICBtID0ge01JUlJPUiArICIvYXBpL3YxL25vZGUiOiB7Im9rIjogVHJ1ZX19CiAgICBpZiBiaW5kaW5nIGlzIG5vdCBOb25lOgogICAgICAgIG1bTUlSUk9SICsgIi9hcGkvdjEvbmFtZXMvIiArIGxhYmVsXSA9IGJpbmRpbmcKICAgIGlmIGRlc2MgaXMgbm90IE5vbmU6CiAgICAgICAgbVtNSVJST1IgKyAiL2FwaS92MS9uYW1lcy8iICsgbGFiZWwgKyAiL3JlYWNoIl0gPSBkZXNjCiAgICBtW01JUlJPUiArICIvYXBpL3YxL2RpcmVjdG9yeSJdID0geyJlbnRyaWVzIjogbGlzdChlbnRyaWVzKSwgImNvdW50IjogbGVuKGVudHJpZXMpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAibGltaXQiOiAyMDAsICJjYXAiOiBOb25lfQogICAgbVtNSVJST1IgKyAiL2FwaS92MS9kaXJlY3Rvcnk/bGltaXQ9MjAwIl0gPSBtW01JUlJPUiArICIvYXBpL3YxL2RpcmVjdG9yeSJdCiAgICByZXR1cm4gbQoKCmRlZiBfcGVlcl9yb3V0ZXMoYmluZGluZyk6CiAgICAjIFN0ZXAtNiBsaXZlIHZlcmlmaWNhdGlvbiBhbnN3ZXJzIGZvciB0aGUgc2NyaXB0ZWQgbm9kZSBVUkxzLgogICAgcCA9IHt9CiAgICBmb3IgaG9zdCBpbiAoIjguOC40LjQiLCAiOC44LjguOCIsICIxLjEuMS4xIiwgIjkuOS45LjkiKToKICAgICAgICBiYXNlID0gZiJodHRwOi8ve2hvc3R9Ojg0NzEiCiAgICAgICAgcFtiYXNlICsgIi9mZWQvcGluZyJdID0geyJvayI6IFRydWV9CiAgICAgICAgcFtiYXNlICsgIi9hcGkvdjEvbmFtZXMvIiArIGJpbmRpbmdbIm5hbWUiXV0gPSBiaW5kaW5nCiAgICByZXR1cm4gcAoKCmRlZiBfZGlyX2VudHJ5KHB1YiwgdXJsKToKICAgIHJldHVybiB7Im5vZGVfcHViIjogcHViLCAibm9kZV91cmwiOiB1cmwsICJkaXJlY3QiOiBUcnVlfQoKCmNsYXNzIEFncmVlbWVudEJlbHQodW5pdHRlc3QuVGVzdENhc2UpOgogICAgZGVmIHNldFVwKHNlbGYpOgogICAgICAgIGNvcmUuX3Jlc29sdmVfbWVtby5jbGVhcigpCgogICAgZGVmIHRlYXJEb3duKHNlbGYpOgogICAgICAgIGNvcmUuX3Jlc29sdmVfbWVtby5jbGVhcigpCgogICAgZGVmIF9ib3RoKHNlbGYsIGxhYmVsLCBtaXJyb3Jfcm91dGVzLCBwZWVyX3JvdXRlcyk6CiAgICAgICAgd2l0aCBTY3JpcHRlZE5ldChtaXJyb3Jfcm91dGVzLCBwZWVyX3JvdXRlcyk6CiAgICAgICAgICAgIGNvZGUsIGxpbmVzID0gZGlhbC5wbGFuKGxhYmVsICsgIi5jeWJlcnNwYWNlIiwgTUlSUk9SKQogICAgICAgICAgICByZXN1bHQgPSBjb3JlLnJlc29sdmVfY3liZXJzcGFjZShsYWJlbCArICIuY3liZXJzcGFjZSIsIE1JUlJPUikKICAgICAgICByZXR1cm4gY29kZSwgbGluZXMsIHJlc3VsdAoKICAgIGRlZiB0ZXN0X2Rlc2NyaXB0b3JfZGlyZWN0X2FncmVlcyhzZWxmKToKICAgICAgICBsYWJlbCA9ICJhZ3JlZWEiCiAgICAgICAgcHJpdiwgcHViID0gX25hbWVfa2V5KCkKICAgICAgICBiID0gX2JpbmRpbmcobGFiZWwsIHByaXYsIHB1YikKICAgICAgICBkID0gX2Rlc2NyaXB0b3IobGFiZWwsIHByaXYsIHB1YiwKICAgICAgICAgICAgICAgICAgICAgICAgW3sia2luZCI6ICJkaXJlY3QiLCAidXJsIjogImh0dHA6Ly84LjguNC40Ojg0NzEifV0pCiAgICAgICAgY29kZSwgbGluZXMsIHJlc3VsdCA9IHNlbGYuX2JvdGgobGFiZWwsIF9yb3V0ZXMobGFiZWwsIGIsIGQpLCBfcGVlcl9yb3V0ZXMoYikpCiAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChjb2RlLCAwKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbnkobC5zdGFydHN3aXRoKCJwbGFuOiBkaXJlY3QgaHR0cDovLzguOC40LjQ6ODQ3MSIpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmb3IgbCBpbiBsaW5lcyksIGxpbmVzKQogICAgICAgIHNlbGYuYXNzZXJ0SXNOb3ROb25lKHJlc3VsdCkKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKHJlc3VsdFsibm9kZV91cmwiXSwgImh0dHA6Ly84LjguNC40Ojg0NzEiKQogICAgICAgIHNlbGYuYXNzZXJ0Tm90SW4oInZpYV9yZWxheSIsIHJlc3VsdCkKCiAgICBkZWYgdGVzdF9taXNtYXRjaGVkX2Rlc2NyaXB0b3JfZmFsbHNfdG9fZGlyZWN0b3J5KHNlbGYpOgogICAgICAgICMgRGVzY3JpcHRvciBzaWduZWQgYnkgYSBTVFJBTkdFUiBrZXkgKHZhbGlkIHNpZ25hdHVyZSwgbGl2ZSk6IHRoZQogICAgICAgICMgZGFlbW9uIHNraXBzIGl0IGFuZCBzY2FucyB0aGUgZGlyZWN0b3J5OyB0aGUgcGxhbiBtdXN0IHNheSB0aGUKICAgICAgICAjIHNhbWUgaW5zdGVhZCBvZiB2ZXRvaW5nIHdpdGggZXhpdCAxLgogICAgICAgIGxhYmVsID0gImFncmVlYiIKICAgICAgICBrMXAsIGsxID0gX25hbWVfa2V5KCkKICAgICAgICBrMnAsIGsyID0gX25hbWVfa2V5KCkKICAgICAgICBiID0gX2JpbmRpbmcobGFiZWwsIGsxcCwgazEpCiAgICAgICAgZCA9IF9kZXNjcmlwdG9yKGxhYmVsLCBrMnAsIGsyLAogICAgICAgICAgICAgICAgICAgICAgICBbeyJraW5kIjogImRpcmVjdCIsICJ1cmwiOiAiaHR0cDovLzguOC44Ljg6ODQ3MSJ9XSkKICAgICAgICBlbnRyaWVzID0gW19kaXJfZW50cnkoazEsICJodHRwOi8vMS4xLjEuMTo4NDcxIildCiAgICAgICAgY29kZSwgbGluZXMsIHJlc3VsdCA9IHNlbGYuX2JvdGgobGFiZWwsIF9yb3V0ZXMobGFiZWwsIGIsIGQsIGVudHJpZXMpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF9wZWVyX3JvdXRlcyhiKSkKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKGNvZGUsIDAsIGxpbmVzKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbnkoInBsYW46IGRpcmVjdCBodHRwOi8vMS4xLjEuMTo4NDcxIiBpbiBsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmb3IgbCBpbiBsaW5lcyksIGxpbmVzKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbnkoImRpZmZlcmVudCBrZXkiIGluIGwgZm9yIGwgaW4gbGluZXMpLCBsaW5lcykKICAgICAgICBzZWxmLmFzc2VydElzTm90Tm9uZShyZXN1bHQpCiAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChyZXN1bHRbIm5vZGVfdXJsIl0sICJodHRwOi8vMS4xLjEuMTo4NDcxIikKCiAgICBkZWYgdGVzdF9taXNtYXRjaGVkX2Rlc2NyaXB0b3Jfbm9fZGlyZWN0b3J5X2lzX3NpbGVuY2Uoc2VsZik6CiAgICAgICAgbGFiZWwgPSAiYWdyZWVjIgogICAgICAgIGsxcCwgazEgPSBfbmFtZV9rZXkoKQogICAgICAgIGsycCwgazIgPSBfbmFtZV9rZXkoKQogICAgICAgIGIgPSBfYmluZGluZyhsYWJlbCwgazFwLCBrMSkKICAgICAgICBkID0gX2Rlc2NyaXB0b3IobGFiZWwsIGsycCwgazIsCiAgICAgICAgICAgICAgICAgICAgICAgIFt7ImtpbmQiOiAiZGlyZWN0IiwgInVybCI6ICJodHRwOi8vOC44LjguODo4NDcxIn1dKQogICAgICAgIGNvZGUsIGxpbmVzLCByZXN1bHQgPSBzZWxmLl9ib3RoKGxhYmVsLCBfcm91dGVzKGxhYmVsLCBiLCBkKSwgX3BlZXJfcm91dGVzKGIpKQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoY29kZSwgMywgbGluZXMpICAjIHNpbGVudCBob3N0LCBuZXZlciBhIGd1ZXNzCiAgICAgICAgc2VsZi5hc3NlcnRJc05vbmUocmVzdWx0KQoKICAgIGRlZiB0ZXN0X2RpcmVjdG9yeV9lbnRyaWVzX3NoYXBlX3Jlc29sdmVzKHNlbGYpOgogICAgICAgICMgTm8gZGVzY3JpcHRvciBhdCBhbGw7IHRoZSBkaXJlY3RvcnkgY2FycmllcyB0aGUgbmFtZS1rZXkgZW50cnkgaW4KICAgICAgICAjIHRoZSBSRUFMICJlbnRyaWVzIiBzaGFwZS4gVGhlIHBsYW5uZXIgbXVzdCByZWFkIGl0LgogICAgICAgIGxhYmVsID0gImFncmVlZCIKICAgICAgICBwcml2LCBwdWIgPSBfbmFtZV9rZXkoKQogICAgICAgIGIgPSBfYmluZGluZyhsYWJlbCwgcHJpdiwgcHViKQogICAgICAgIGVudHJpZXMgPSBbX2Rpcl9lbnRyeShwdWIsICJodHRwOi8vOS45LjkuOTo4NDcxIildCiAgICAgICAgY29kZSwgbGluZXMsIHJlc3VsdCA9IHNlbGYuX2JvdGgobGFiZWwsIF9yb3V0ZXMobGFiZWwsIGIsIE5vbmUsIGVudHJpZXMpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF9wZWVyX3JvdXRlcyhiKSkKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKGNvZGUsIDAsIGxpbmVzKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbnkoInBsYW46IGRpcmVjdCBodHRwOi8vOS45LjkuOTo4NDcxIiBpbiBsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmb3IgbCBpbiBsaW5lcyksIGxpbmVzKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbnkoImxlZ2FjeSBkaXJlY3RvcnkgZW50cnkiIGluIGwgZm9yIGwgaW4gbGluZXMpLCBsaW5lcykKICAgICAgICBzZWxmLmFzc2VydElzTm90Tm9uZShyZXN1bHQpCiAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChyZXN1bHRbIm5vZGVfdXJsIl0sICJodHRwOi8vOS45LjkuOTo4NDcxIikKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgdW5pdHRlc3QubWFpbih2ZXJib3NpdHk9MikK
+"""dial.plan / resolve_cyberspace agreement belt (primitive 2/3 preview contract).
+
+dial.py is the agent's seat for "how would this name be dialed" — its docstring
+promises the daemon dials only what the plan describes. That promise is only
+true if the planner's step-5 fallback semantics match the resolver's step 5.
+This belt drives BOTH the REAL dial.plan() and the REAL
+core.resolve_cyberspace() against the same scripted mirror (fake transport
+only; all signatures real Ed25519) and demands agreement.
+
+The two divergences this belt locks:
+  1. mismatched-key descriptor: the daemon (resolve_cyberspace step 5) SKIPS
+     a descriptor whose node_pubkey != the binding's key and falls to the
+     directory scan. The planner must preview that, not veto it with a
+     hard exit 1.
+  2. directory shape: the real mirror serves {"entries": [...]}; the planner
+     must read "entries" like the resolver does, not dead "nodes"/"agents"
+     keys that never fire against a real mirror.
+
+Step 6 (live verification) is monkeypatched at the transport edge only
+(_resolve_peer_get_json + _fed_env.verify_envelope) — the belt's subject is
+step-5 strategy/fallback agreement, and the reach-serve-dial belt already
+proves resolve_cyberspace's own step-5 fallbacks against real signatures.
+
+Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/dial-plan-resolve-agreement-belt-test.py
+"""
+import os
+import secrets
+import sys
+import unittest
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.expanduser("~/workspace/cybernet"))
+
+import core  # noqa: E402
+import dial  # noqa: E402
+
+MIRROR = "http://127.0.0.1:8471"
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _name_key():
+    priv = secrets.token_hex(32)
+    pub = core._fed_ed25519.publickey(bytes.fromhex(priv)).hex()
+    return priv, pub
+
+
+def _live_times():
+    now = datetime.now(timezone.utc)
+    return _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=365))
+
+
+def _binding(label, priv, pub):
+    issued, expires = _live_times()
+    sig = core._fed_ed25519.sign(
+        core._name_claim_payload(label, pub, issued, expires),
+        bytes.fromhex(priv), bytes.fromhex(pub)).hex()
+    return {"name": label, "node_pubkey": pub, "issued_at": issued,
+            "expires_at": expires, "signature": sig}
+
+
+def _descriptor(label, priv, pub, strategies):
+    issued, expires = _live_times()
+    return core._reach_mint(priv, pub, label, strategies, issued, expires)
+
+
+class ScriptedNet:
+    """Fake transport for mirror + peer URLs. Real signatures, no network."""
+
+    def __init__(self, mirror_routes, peer_routes):
+        self.mirror_routes = mirror_routes
+        self.peer_routes = peer_routes
+        self.saved_get = core._resolve_get_json
+        self.saved_peer = core._resolve_peer_get_json
+        self.saved_env = core._fed_env.verify_envelope
+
+    def __enter__(self):
+        core._resolve_get_json = lambda url: self.mirror_routes.get(url)
+        core._resolve_peer_get_json = lambda url: self.peer_routes.get(url)
+        core._fed_env.verify_envelope = lambda env: True
+        return self
+
+    def __exit__(self, *exc):
+        core._resolve_get_json = self.saved_get
+        core._resolve_peer_get_json = self.saved_peer
+        core._fed_env.verify_envelope = self.saved_env
+
+
+def _routes(label, binding=None, desc=None, entries=()):
+    m = {MIRROR + "/api/v1/node": {"ok": True}}
+    if binding is not None:
+        m[MIRROR + "/api/v1/names/" + label] = binding
+    if desc is not None:
+        m[MIRROR + "/api/v1/names/" + label + "/reach"] = desc
+    m[MIRROR + "/api/v1/directory"] = {"entries": list(entries), "count": len(entries),
+                                       "limit": 200, "cap": None}
+    m[MIRROR + "/api/v1/directory?limit=200"] = m[MIRROR + "/api/v1/directory"]
+    return m
+
+
+def _peer_routes(binding):
+    # Step-6 live verification answers for the scripted node URLs.
+    p = {}
+    for host in ("8.8.4.4", "8.8.8.8", "1.1.1.1", "9.9.9.9"):
+        base = f"http://{host}:8471"
+        p[base + "/fed/ping"] = {"ok": True}
+        p[base + "/api/v1/names/" + binding["name"]] = binding
+    return p
+
+
+def _dir_entry(pub, url):
+    return {"node_pub": pub, "node_url": url, "direct": True}
+
+
+class AgreementBelt(unittest.TestCase):
+    def setUp(self):
+        core._resolve_memo.clear()
+
+    def tearDown(self):
+        core._resolve_memo.clear()
+
+    def _both(self, label, mirror_routes, peer_routes):
+        with ScriptedNet(mirror_routes, peer_routes):
+            code, lines = dial.plan(label + ".cyberspace", MIRROR)
+            result = core.resolve_cyberspace(label + ".cyberspace", MIRROR)
+        return code, lines, result
+
+    def test_descriptor_direct_agrees(self):
+        label = "agreea"
+        priv, pub = _name_key()
+        b = _binding(label, priv, pub)
+        d = _descriptor(label, priv, pub,
+                        [{"kind": "direct", "url": "http://8.8.4.4:8471"}])
+        code, lines, result = self._both(label, _routes(label, b, d), _peer_routes(b))
+        self.assertEqual(code, 0)
+        self.assertTrue(any(l.startswith("plan: direct http://8.8.4.4:8471")
+                            for l in lines), lines)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["node_url"], "http://8.8.4.4:8471")
+        self.assertNotIn("via_relay", result)
+
+    def test_mismatched_descriptor_falls_to_directory(self):
+        # Descriptor signed by a STRANGER key (valid signature, live): the
+        # daemon skips it and scans the directory; the plan must say the
+        # same instead of vetoing with exit 1.
+        label = "agreeb"
+        k1p, k1 = _name_key()
+        k2p, k2 = _name_key()
+        b = _binding(label, k1p, k1)
+        d = _descriptor(label, k2p, k2,
+                        [{"kind": "direct", "url": "http://8.8.8.8:8471"}])
+        entries = [_dir_entry(k1, "http://1.1.1.1:8471")]
+        code, lines, result = self._both(label, _routes(label, b, d, entries),
+                                         _peer_routes(b))
+        self.assertEqual(code, 0, lines)
+        self.assertTrue(any("plan: direct http://1.1.1.1:8471" in l
+                            for l in lines), lines)
+        self.assertTrue(any("different key" in l for l in lines), lines)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["node_url"], "http://1.1.1.1:8471")
+
+    def test_mismatched_descriptor_no_directory_is_silence(self):
+        label = "agreec"
+        k1p, k1 = _name_key()
+        k2p, k2 = _name_key()
+        b = _binding(label, k1p, k1)
+        d = _descriptor(label, k2p, k2,
+                        [{"kind": "direct", "url": "http://8.8.8.8:8471"}])
+        code, lines, result = self._both(label, _routes(label, b, d), _peer_routes(b))
+        self.assertEqual(code, 3, lines)  # silent host, never a guess
+        self.assertIsNone(result)
+
+    def test_directory_entries_shape_resolves(self):
+        # No descriptor at all; the directory carries the name-key entry in
+        # the REAL "entries" shape. The planner must read it.
+        label = "agreed"
+        priv, pub = _name_key()
+        b = _binding(label, priv, pub)
+        entries = [_dir_entry(pub, "http://9.9.9.9:8471")]
+        code, lines, result = self._both(label, _routes(label, b, None, entries),
+                                         _peer_routes(b))
+        self.assertEqual(code, 0, lines)
+        self.assertTrue(any("plan: direct http://9.9.9.9:8471" in l
+                            for l in lines), lines)
+        self.assertTrue(any("legacy directory entry" in l for l in lines), lines)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["node_url"], "http://9.9.9.9:8471")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

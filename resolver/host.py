@@ -242,4 +242,7 @@ def run() -> int:
 
 
 if __name__ == "__main__":
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(__doc__.strip())
+        raise SystemExit(0)
     raise SystemExit(run())
