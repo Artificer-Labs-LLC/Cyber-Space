@@ -935,8 +935,34 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
         return old is not None and old["node_pubkey"].lower() == node_pubkey.lower()
 
 
+def _record_gossiped_rotation(conn, rec) -> None:
+    """Villhaze 5b1c941d (ART-40): a rotation accepted through the gossip
+    merge is recorded in name_rotations exactly like the local rotate route
+    (routes_social_serve.py names_rotate): INSERT OR IGNORE on the
+    (name, old, new) key, accepted_at = this mirror's LOCAL _now() at
+    acceptance, never a peer-supplied time. snapshot_bindings then sees the
+    history and applies the same weak-key reserve rule (reserve for K)."""
+    if conn is None:
+        return
+    conn.execute(
+        "INSERT OR IGNORE INTO name_rotations "
+        "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (rec["name"].strip().lower(), rec["old_pubkey"].strip().lower(),
+         rec["new_pubkey"].strip().lower(), rec["issued_at"],
+         rec["signature"].strip().lower(), _now()))
+
+
+def _gossip_new_key_weak(pub) -> bool:
+    """Bulwark H3 (ART-40 44b3923c) / Villhaze e99a2805 item 1: weak_reason
+    on every gossiped new_pubkey. A weak (small-order, mixed-order,
+    non-canonical) successor is never bound by the merge."""
+    import window_open  # lazy: window_open imports core
+    return window_open.weak_reason(pub.strip().lower()) is not None
+
+
 def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
-                                  binding_issued_at) -> bool:
+                                  binding_issued_at, conn=None) -> bool:
     """Primitive 4 (identity) — the gossip-merge twin of the rotate-accept
     route's authority rule (rule 4): the stored key's own signature IS the
     authority — a designated successor overrides the M-1 earlier-wins
@@ -972,12 +998,15 @@ def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
             return False
     except ValueError:
         return False
+    _record_gossiped_rotation(conn, record)  # 5b1c941d: local accepted_at
+    if _gossip_new_key_weak(record["new_pubkey"]):
+        return False  # Bulwark H3: recorded (snapshot reserves), never bound
     return True
 
 
 def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
                                         new_pubkey,
-                                        binding_issued_at) -> bool:
+                                        binding_issued_at, conn=None) -> bool:
     """Primitive 4 (identity) — the multi-hop twin of
     _gossiped_rotation_designates: a chain of rotation records
     [a->b, b->c, ...] vouches the gossiped binding's key as the
@@ -1025,6 +1054,10 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
         prev_new = new
     if prev_new != new_pubkey.lower():
         return False
+    for rec in chain:  # 5b1c941d: every accepted hop, local accepted_at
+        _record_gossiped_rotation(conn, rec)
+    if any(_gossip_new_key_weak(rec["new_pubkey"]) for rec in chain):
+        return False  # Bulwark H3: recorded (snapshot reserves), never bound
     return True
 
 

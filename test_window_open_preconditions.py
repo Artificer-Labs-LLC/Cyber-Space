@@ -232,5 +232,66 @@ check("orphan: K->Z1, Z1 reaped -> reserved for K", ores.get("orphk") == OK_, or
 check("orphan: Z1 claimed directly, reaped, no history -> in no list", "orphz" not in ores and "orphz" not in oref and "orphz" not in ohel)
 check("orphan: Z1->X, X reaped -> refused, FLAG starts on weak key", "starts on weak key" in str(oref.get("orphzx")), oref)
 check("orphan: K->Z1, Z1 reaped, X' claims fresh -> reserved for K", ores.get("orphre") == OK_ and "orphre" not in ohel, (ores, ohel))
+# Villhaze 5b1c941d (ART-40): a weak-key rotation from K merged in through
+# GOSSIP is recorded with the mirror's local accepted_at and reserved for K.
+from rotate_name import mint_rotation  # noqa: E402
+GSEED = bytes.fromhex("ee" * 32)
+GK = _ed.publickey(GSEED).hex()
+grec = mint_rotation("gossipz", GSEED, ZERO, issued_at=PAST)
+CSEED = bytes.fromhex("ab" * 32)
+CK = _ed.publickey(CSEED).hex()
+CMID = _ed.publickey(bytes.fromhex("ac" * 32)).hex()
+gchain = [mint_rotation("gossipc", CSEED, CMID, issued_at=PAST)]
+with core._db_lock, core._db() as conn:
+    conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     [("gossipz", GK, PAST, FUT, "00" * 64), ("gossipc", CK, PAST, FUT, "00" * 64)])
+    ok1 = core._gossiped_rotation_designates(grec, "gossipz", GK, ZERO, FUT, conn=conn)
+    ok1b = core._gossiped_rotation_designates(grec, "gossipz", GK, ZERO, FUT, conn=conn)  # replayed gossip
+    ok_no = core._gossiped_rotation_designates(grec, "gossipz", CK, ZERO, FUT, conn=conn)  # wrong holder
+    # chain twin: CK -> CMID (honest) -> ZERO; hop 2 is signed by CMID's seed
+    gchain.append(mint_rotation("gossipc", bytes.fromhex("ac" * 32), ZERO, issued_at=PAST))
+    ok2 = core._gossiped_rotation_chain_designates(gchain, "gossipc", CK, ZERO, FUT, conn=conn)
+    grows = conn.execute("SELECT old_pubkey,new_pubkey,issued_at,accepted_at FROM name_rotations WHERE name='gossipz'").fetchall()
+    crows = conn.execute("SELECT COUNT(*) FROM name_rotations WHERE name='gossipc'").fetchone()[0]
+    gsnap = wo.snapshot_bindings(conn)
+gres = {r["name"]: r["reserved_for"] for r in gsnap["reserved"]}
+gheld = {r[0] for r in gsnap["held"]}
+check("gossip H3: weak new_pubkey K->Z1 refused by the merge (never bound)", not ok1 and not ok1b, (ok1, ok1b))
+check("gossip: record from a non-holder designates nothing and writes nothing", not ok_no and len(grows) == 1)
+check("gossip: one name_rotations row (INSERT OR IGNORE on replay)", len(grows) == 1 and grows[0][:2] == (GK, ZERO), grows)
+check("gossip: accepted_at is LOCAL now, not the peer's issued_at", grows and grows[0][3] != PAST and grows[0][3][:4] >= "2026", grows)
+check("gossip: weak-key rotation from K merged via gossip -> reserved for K", gres.get("gossipz") == GK, gres)
+check("gossip chain H3: K->M->Z1 refused (weak tail), both hops recorded", not ok2 and crows == 2, (ok2, crows))
+check("gossip chain: K->M->Z1 merged via gossip -> reserved for M (last non-weak)", gres.get("gossipc") == CMID, gres)
+check("gossip: names with a recorded weak hop not held", not gheld & {"gossipz", "gossipc"}, gheld)
+
+# Bulwark hostile rows (ART-40 44b3923c) on the gossip-merge INSERT.
+HSEED = bytes.fromhex("e1" * 32); HK_ = _ed.publickey(HSEED).hex()
+h1 = dict(mint_rotation("hostile1", HSEED, ZERO, issued_at=PAST), accepted_at="2001-01-01T00:00:00+00:00")
+H2SEED = bytes.fromhex("e2" * 32); H2K = _ed.publickey(H2SEED).hex()
+h2 = mint_rotation("hostile2", H2SEED, ZERO, issued_at=PAST)
+H3SEED = bytes.fromhex("e3" * 32); H3K = _ed.publickey(H3SEED).hex()
+h3 = mint_rotation("hostile3", H3SEED, MIXED[8], issued_at=PAST)
+with core._db_lock, core._db() as conn:
+    conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     [("hostile1", HK_, PAST, FUT, "00" * 64), ("hostile2", H2K, PAST, FUT, "00" * 64),
+                      ("hostile3", H3K, PAST, FUT, "00" * 64)])
+    core._gossiped_rotation_designates(h1, "hostile1", HK_, ZERO, FUT, conn=conn)
+    h1row = conn.execute("SELECT accepted_at FROM name_rotations WHERE name='hostile1'").fetchall()
+    # H2: peer's K->Z1 lands first; our route-style INSERT OR IGNORE is then ignored
+    core._gossiped_rotation_designates(h2, "hostile2", H2K, ZERO, FUT, conn=conn)
+    conn.execute("INSERT OR IGNORE INTO name_rotations (name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
+                 ("hostile2", H2K, ZERO, h2["issued_at"], h2["signature"], core._now()))
+    h2rows = conn.execute("SELECT accepted_at FROM name_rotations WHERE name='hostile2'").fetchall()
+    h3ok = core._gossiped_rotation_designates(h3, "hostile3", H3K, MIXED[8], FUT, conn=conn)
+    h3bound = conn.execute("SELECT node_pubkey FROM name_bindings WHERE name='hostile3'").fetchone()[0]
+    hsnap = wo.snapshot_bindings(conn)
+hres = {r["name"]: r["reserved_for"] for r in hsnap["reserved"]}
+check("H1: peer accepted_at=2001 ignored, stored row has local _now()", len(h1row) == 1 and not h1row[0][0].startswith("2001") and h1row[0][0][:4] >= "2026", h1row)
+check("H1: name stays reserved for K", hres.get("hostile1") == HK_, hres)
+check("H2: one surviving row, local accepted_at", len(h2rows) == 1 and h2rows[0][0][:4] >= "2026", h2rows)
+check("H2: anchor still K", hres.get("hostile2") == H2K, hres)
+check("H3: mixed-order new_pubkey via gossip refused, binding unchanged", not h3ok and h3bound == H3K, (h3ok, h3bound))
+check("H3: name flagged (reserved for K), not held", hres.get("hostile3") == H3K and "hostile3" not in {r[0] for r in hsnap["held"]}, hres)
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
