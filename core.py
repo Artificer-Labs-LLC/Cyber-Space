@@ -1551,28 +1551,20 @@ NAME_REGISTRY_CAP = 1024
 # incumbent — self-reported timestamps prove nothing about actual signing
 # time. Claims must be signed fresh (mint_name.py always signs now).
 # Shared by the claim route and the gossip ingest half (Bulwark HIGH,
-# ART-29): the gossip path must enforce the same gates, or a fresh key
-# signing issued_at=2001 replaces any live incumbent via gossip while the
-# route refuses it.
+# ART-29). ART-29 ruling (a) withdraws the r3 gossip exemption: ingest
+# enforces the same 24h window. Stale gossip is dropped; the originator
+# re-signs a fresh claim.
 NAME_CLAIM_FRESHNESS = timedelta(hours=24)
 
 
-def _name_binding_admission_ok(issued_dt, expires_dt, now_dt,
-                               enforce_freshness=True):
+def _name_binding_admission_ok(issued_dt, expires_dt, now_dt):
     """Shared admission check for name bindings (route + gossip ingest).
 
     The route (names/claim) and the gossip merge half
-    (ingest_gossiped_binding) must enforce identical gates — otherwise a
-    binding the route refuses (stale, over-cap) can enter via gossip and
-    displace a live incumbent (Bulwark HIGH, ART-29).
-
-    r3 (ART-29): enforce_freshness=False on the ingest path. Gossip is
-    propagation, not origination — a binding the route accepted (fresh
-    at signing) must not be dropped as "stale" just because it arrived
-    late, or mirrors split. The 365-day cap still applies on both paths.
-    The future-dated check STAYS on ingest (a claim from the future is
-    never valid, even in gossip). The live-incumbent protection (not
-    this function) stops backdated steals on ingest.
+    (ingest_gossiped_binding) enforce the same gates — freshness (24h)
+    and the 365-day cap (ART-29 ruling a). A binding the route refuses
+    (stale, future-dated, over-cap) is refused on ingest as well. Stale
+    gossip is dropped; the originator re-signs a fresh claim.
 
     Returns None if the binding is admissible, or a short reason string
     if it must be refused. Callers map the reason to their own refusal
@@ -1580,15 +1572,16 @@ def _name_binding_admission_ok(issued_dt, expires_dt, now_dt,
     """
     if issued_dt > now_dt:
         return "issued_at is in the future; the claim must be signed now"
-    if enforce_freshness:
-        if issued_dt < now_dt - NAME_CLAIM_FRESHNESS:
-            return ("issued_at is stale (older than 24h); claims must be "
-                    "signed fresh")
     # B3 (Q1 fix, ART-29): the 365-day cap, as (expires - issued). The
     # subtraction form (never issued + 365 days) cannot OverflowError on
     # year-9999 stamps — a subtraction of two valid datetimes is safe.
+    # Checked before freshness so a 2001-style backdate with a still-live
+    # expiry is refused as over-cap (lifetime), not only as stale.
     if (expires_dt - issued_dt) > timedelta(days=NAME_EXPIRY_DAYS):
         return "binding lifetime exceeds 365 days"
+    if issued_dt < now_dt - NAME_CLAIM_FRESHNESS:
+        return ("issued_at is stale (older than 24h); claims must be "
+                "signed fresh")
     return None
 
 
@@ -1599,20 +1592,23 @@ def ingest_gossiped_binding(binding: dict) -> str:
     every mirror re-verifies it itself. The signature is fail-closed —
     a mirror's word is never enough, not even another mirror's.
 
-    Deterministic merge (same answer on every mirror from the same
-    inputs): malformed/unsigned/expired bindings are dropped; an
-    uncontested name is inserted; a contested name goes to
-    _name_claim_beats (earlier issued_at wins, ties by lower pubkey,
-    same key later re-sign renews). An expired incumbent yields to any
-    valid challenger. Expiry is CHRONOLOGICAL (_parse_claim_time), never
-    lexicographic: a "+05:00"-stamped hours-dead binding sorts AFTER a
-    "+00:00" now as a string and would read as live — the claim route
-    already gates this way; the merge half matches it. Nothing is ever
-    deleted here — expiry is the only garbage collection, and the gossip
-    layer never synthesizes revocations.
+    Malformed, unsigned, or expired bindings are dropped. A binding
+    older than NAME_CLAIM_FRESHNESS (24h) or dated in the future is
+    dropped — the originator re-signs fresh (ART-29 ruling a). An
+    uncontested admissible name is inserted. A live foreign incumbent
+    is always kept: a different key never displaces it, the challenger
+    is logged, and the call returns "conflict". Same-key renewals and
+    expired incumbents go through _old_binding_beaten. Expiry is
+    CHRONOLOGICAL (_parse_claim_time), never lexicographic: a
+    "+05:00"-stamped hours-dead binding sorts AFTER a "+00:00" now as
+    a string and would read as live — the claim route already gates
+    this way; the merge half matches it. Nothing is ever deleted here
+    — expiry is the only garbage collection, and the gossip layer
+    never synthesizes revocations.
 
-    Returns one of "inserted", "replaced", "kept", "dropped-malformed",
-    "dropped-unverifiable", "dropped-expired". Never raises."""
+    Returns one of "inserted", "replaced", "kept", "conflict",
+    "dropped-malformed", "dropped-unverifiable", "dropped-expired",
+    "dropped-stale", "dropped-over-cap", "dropped-full". Never raises."""
     try:
         if not isinstance(binding, dict):
             return "dropped-malformed"
@@ -1641,20 +1637,16 @@ def ingest_gossiped_binding(binding: dict) -> str:
         now_dt = datetime.now(timezone.utc)
         if expires_dt <= now_dt:
             return "dropped-expired"
-        # Bulwark HIGH (ART-29): the gossip path must enforce the route's
-        # admission gates — the 365-day cap. Freshness is NOT checked on
-        # ingest (r3): gossip is propagation, not origination — a binding
-        # the route accepted must not be dropped as "stale" for arriving
-        # late, or mirrors split. Backdated steals are stopped by the
-        # live-incumbent rule below, not by freshness here.
+        # Bulwark HIGH (ART-29) / ruling (a): gossip enforces the route's
+        # admission gates — 24h freshness and the 365-day cap. Stale
+        # gossip is dropped; the originator re-signs fresh. A future
+        # issued_at is never valid.
         admission_reason = _name_binding_admission_ok(
-            issued_dt, expires_dt, now_dt, enforce_freshness=False)
+            issued_dt, expires_dt, now_dt)
         if admission_reason is not None:
-            # r3: only "future" and "over-cap" can occur on ingest now —
-            # the 24h staleness check is skipped (late arrivals must merge).
-            return ("dropped-stale"
-                    if "future" in admission_reason
-                    else "dropped-over-cap")
+            if "exceeds 365" in admission_reason:
+                return "dropped-over-cap"
+            return "dropped-stale"
         new = {"name": name, "node_pubkey": node_pubkey,
                "issued_at": issued_at, "expires_at": expires_at}
         with _db_lock, _db() as conn:
@@ -1676,32 +1668,19 @@ def ingest_gossiped_binding(binding: dict) -> str:
             # let mirrors keep expired foreign rows HQ had replaced.
             old = {"name": name, "node_pubkey": row[0],
                    "issued_at": row[1], "expires_at": row[2]}
-            # r3 (Bulwark High, ART-29): mirror convergence requires the
-            # deterministic rule (_name_claim_beats) on the ingest path.
-            # A live foreign incumbent does NOT block a challenger that
-            # beats it by earlier issued_at (or tie-break); otherwise
-            # mirrors receiving claims in different orders would diverge
-            # permanently. The 365-day cap (above) already blocks 2001-style
-            # backdates; the route's 24h freshness + live-incumbent 409
-            # remain the origination-time defenses. When a live incumbent
-            # IS displaced by an earlier foreign claim, the event is logged
-            # as a conflict for audit — convergence with a trail, not a
-            # silent steal.
+            # ART-29 ruling (a) (security outranks convergence): a live
+            # foreign incumbent is ALWAYS kept. A different key never
+            # displaces it — not by an earlier issued_at, not by a T-1s
+            # backdate that still passes the 24h freshness gate. The
+            # rejected claim is logged as a conflict. There is no
+            # displaced-by-earlier-claim handover of a live foreign row.
             # Same-key updates (renewals) flow through _old_binding_beaten.
-            beaten = _old_binding_beaten(old, new, node_pubkey, now_dt)
-            if (not beaten and _incumbent_is_live(old, now_dt)
+            if (_incumbent_is_live(old, now_dt)
                     and old["node_pubkey"].lower() != node_pubkey.lower()):
                 _log_name_conflict(conn, name, old, new,
                                    "live-foreign-incumbent")
                 return "conflict"
-            if beaten:
-                # Audit: a live foreign incumbent displaced by the
-                # deterministic rule (earlier issued_at) is logged — the
-                # mirrors converge, but the handover leaves a trail.
-                if (_incumbent_is_live(old, now_dt)
-                        and old["node_pubkey"].lower() != node_pubkey.lower()):
-                    _log_name_conflict(conn, name, old, new,
-                                       "displaced-by-earlier-claim")
+            if _old_binding_beaten(old, new, node_pubkey, now_dt):
                 conn.execute(
                     "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
                     " expires_at=?, signature=? WHERE name=?",
