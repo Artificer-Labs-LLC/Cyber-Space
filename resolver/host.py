@@ -194,6 +194,35 @@ def announce_once(mirror_url: str, name: str, name_priv_hex: str) -> bool:
         return False
 
 
+def _announce_note(was_ok: bool | None, is_ok: bool, name: str) -> str | None:
+    """Operator note for an announce-state TRANSITION, or None.
+
+    announce_once reports only a bool and run() used to discard it: a
+    hostd whose key does not control the hosted name (wrong-name env,
+    stale pre-rotation installed env) announced into the void forever —
+    systemd 'active', name dark, not one line of output. Silence on a
+    steady state is right; silence on a transition is a lie of omission.
+    First result and every change are spoken; steady states stay quiet.
+    Never names a single cause: a refused announce can be no honest
+    reach, an unreachable mirror, or a key/name mismatch."""
+    if was_ok is None and is_ok:
+        return (f"hostd: reach announce for {name}.cyberspace accepted "
+                f"by the mirror — the name is reachable")
+    if was_ok is None and not is_ok:
+        return (f"hostd: WARNING reach announce for {name}.cyberspace NOT "
+                f"accepted — the name is NOT reachable (no honest reach, "
+                f"mirror unreachable, or CYBERNET_NAME_PRIVKEY does not "
+                f"control this name); will keep retrying")
+    if was_ok and not is_ok:
+        return (f"hostd: WARNING reach announce for {name}.cyberspace "
+                f"stopped being accepted — the name is going dark; "
+                f"will keep retrying")
+    if not was_ok and is_ok:
+        return (f"hostd: reach announce for {name}.cyberspace accepted "
+                f"again — the name is reachable")
+    return None
+
+
 def run() -> int:
     """Run the hosting daemon until SIGINT/SIGTERM. Returns 0 on clean
     shutdown, 2 when misconfigured (a hosting daemon without a name or
@@ -232,11 +261,16 @@ def run() -> int:
             args=(relay_url, relay_token, name_priv, stop),
             daemon=True).start()
 
+    last_ok: bool | None = None
     while not stop.is_set():
         try:
-            announce_once(mirror_url, name, name_priv)
+            ok_now = announce_once(mirror_url, name, name_priv)
         except Exception:
-            pass  # the loop degrades, never guesses
+            ok_now = False  # the loop degrades, never guesses
+        note = _announce_note(last_ok, ok_now, name)
+        if note is not None:
+            print(note, file=sys.stderr, flush=True)
+        last_ok = ok_now
         stop.wait(refresh * random.uniform(0.8, 1.2))
     return 0
 
