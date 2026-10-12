@@ -147,7 +147,12 @@ def _parse_response(
     (the daemon only ever answers opcode 0, and both its response
     builders emit opcode 0), a packet with the RD bit clear is not
     the daemon's reply to THIS query (the client always sends RD,
-    and build_response echoes RD on every zone reply it builds), and an echoed
+    and build_response echoes RD on every zone reply it builds), a packet
+    with the TC bit set claims its own answer was truncated (neither
+    daemon response builder ever sets TC — its replies are whole on
+    both wires, so a TC-set packet over TCP was contradicting itself
+    yet still trusted until now; over UDP the TC refusal was already
+    the retry-on-TCP signal), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -175,6 +180,8 @@ def _parse_response(
         raise ResolveError("not a standard-query response (opcode set)")
     if not flags & 0x0100:
         raise ResolveError("response does not echo RD")
+    if flags & 0x0200:
+        raise ResolveError("response claims truncation (TC set)")
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
@@ -265,10 +272,9 @@ def _query_udp(
     finally:
         if sock is None and s is not None:
             s.close()
-    flags, answers = _parse_response(data, txid, qname, qtype)
-    if flags & 0x0200:  # TC — answer was truncated; retry on the TCP wire
-        raise ResolveError("udp response truncated (TC)")
-    return flags, answers
+    # TC is refused inside _parse_response (both wires) — resolve()
+    # turns that ResolveError into the retry on the TCP wire.
+    return _parse_response(data, txid, qname, qtype)
 
 
 def _query_tcp(
