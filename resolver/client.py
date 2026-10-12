@@ -167,7 +167,12 @@ def _parse_response(
     section records (neither daemon response builder ever emits
     any — build_response sends header counts 0/0 for those sections
     and error_response sends 0/0/0/0; records the parser would only
-    skip, never read, can carry nothing the daemon meant), and an echoed
+    skip, never read, can carry nothing the daemon meant), a packet
+    with bytes left over after its counted sections are consumed
+    (neither daemon response builder ever emits any — build_response
+    ends exactly at its last answer's rdata and error_response is a
+    bare 12-byte header; trailing bytes the parser would only ignore
+    can carry nothing the daemon meant), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -248,6 +253,8 @@ def _parse_response(
                         "response answer owned by a different name"
                     )
                 answers.append((rtype, rdata))
+        if off != len(data):
+            raise ResolveError("response carries trailing bytes")
     except (ValueError, struct.error) as exc:
         raise ResolveError(f"malformed response: {exc}") from exc
     return flags, answers
