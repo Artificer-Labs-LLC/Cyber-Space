@@ -80,7 +80,11 @@ def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
     required config resolver.host._config reads (name, name key, mirror);
     relay/public-URL lines stay commented — they are optional, unknown
     at mint time, and a half-filled relay triple is read as direct-dial
-    only. Agreement with hostd is pinned by
+    only. The remaining hostd knobs (rendezvous, reach TTL, refresh
+    cadence) stay commented too, with their defaults named: hostd warns
+    loudly on set-but-ineffective values for all of them, but an
+    operator who never sees the names cannot set them at all.
+    Agreement with hostd is pinned by
     hidden_files/mint-env-hostd-agreement-belt-test.py."""
     return (
         f"# hostd env for {label}.cyberspace — install as /etc/cybernet-hostd/hostd.env (0600)\n"
@@ -93,7 +97,14 @@ def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
         f"# CYBERNET_RELAY_URL=\n"
         f"# CYBERNET_RELAY_PUBKEY=\n"
         f"# CYBERNET_RELAY_TOKEN=\n"
-        f"# CYBERNET_PUBLIC_URL=\n")
+        f"# CYBERNET_PUBLIC_URL=\n"
+        f"# Rendezvous (derived-point dial, rides on the relay strategy):\n"
+        f"# only exactly 1 enables it; epoch defaults to 3600.\n"
+        f"# CYBERNET_RENDEZVOUS=\n"
+        f"# CYBERNET_RENDEZVOUS_EPOCH_LEN=\n"
+        f"# Reach descriptor lifetime / re-announce cadence (seconds):\n"
+        f"# CYBERNET_REACH_TTL=86400\n"
+        f"# CYBERNET_HOSTD_REFRESH=600\n")
 
 
 def _valid_label(label: str) -> bool:

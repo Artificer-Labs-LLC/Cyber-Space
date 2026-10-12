@@ -90,7 +90,9 @@ class TestMintEnvHostdAgreement(unittest.TestCase):
         text = mint_name._hostd_env_text(LABEL, PRIV, PUBLIC_MIRROR)
         env = _parse_active_env(text)
         for opt in ("CYBERNET_RELAY_URL", "CYBERNET_RELAY_PUBKEY",
-                    "CYBERNET_RELAY_TOKEN", "CYBERNET_PUBLIC_URL"):
+                    "CYBERNET_RELAY_TOKEN", "CYBERNET_PUBLIC_URL",
+                    "CYBERNET_RENDEZVOUS", "CYBERNET_RENDEZVOUS_EPOCH_LEN",
+                    "CYBERNET_REACH_TTL", "CYBERNET_HOSTD_REFRESH"):
             self.assertNotIn(opt, env)
             self.assertIn(f"# {opt}=", text)
 
