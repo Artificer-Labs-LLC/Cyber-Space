@@ -16,13 +16,18 @@ four days and had no TCP face). (2) **Caddy site addresses need explicit
 running config; a restart silently upgraded the IP face to an HTTPS
 redirect. Also: `systemctl reload caddy` cannot reach this instance's
 admin socket — restart the unit instead. Remaining client half: her machines wire one by one, each on her word.
-**Phone door (2026-10-12, later):** Tailscale split DNS speaks only to
-port 53, so HQ now also runs `cybernet-resolver-dns53.service` — the same
-daemon on 100.86.209.63:**53** (UDP+TCP smoke PASS; firewall opened for
-100.64.0.0/10 and saved). Her remaining step: Tailscale admin console →
-DNS → Add nameserver → Custom `100.86.209.63`, restrict to domain
-`cyberspace`. Windows machine: NRPT rule for the suffix → the same
-address; her machine is hers to open.
+**Phone door (2026-10-12, later — REJECTED by Her Grace and rolled
+back):** a port-53 instance (`cybernet-resolver-dns53.service`) was
+briefly stood up for a Tailscale split-DNS wiring. She ruled it a false
+success — a client forwarding the zone to HQ's own daemon is the house
+grading its own homework — and the verdict stands as FAIL. The unit was
+disabled and removed and its firewall rules deleted the same day. The
+name passes on a device only when that device's own implementation
+verifies the signed binding (extension or local daemon). Depth Test,
+first half, ran 2026-10-12 from outside HQ: the extension code resolved
+genesis.cyberspace live and refused a one-character-tampered binding.
+Windows machine: the extension in her browser is the path (NRPT to HQ's
+daemon is the same false success — not offered).
 
 When both gates open, run these steps in order. Every step fails closed —
 stop at the first red line and fix it before moving on.
