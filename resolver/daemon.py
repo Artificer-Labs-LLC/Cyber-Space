@@ -31,10 +31,12 @@ Config (environment, bad values fall back to defaults):
                          (see _daemon_config_warnings)
   CYBERNET_UPSTREAM_DNS  "host:port" (or "[ipv6]:port") upstream for
                          everything outside .cyberspace (default 1.1.1.1:53)
-  CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1)
-                         — set but not a bindable IPv4 address or
+  CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1; an IPv6
+                         literal, bare or bracketed, binds an AF_INET6
+                         socket — see _bind_family)
+                         — set but not a bindable address or
                          hostname -> _env_str passes it through
-                         verbatim and the AF_INET bind in run()
+                         verbatim and the bind in run()
                          raises, killing the daemon before it serves
                          anything; run() warns loudly on stderr at
                          startup (see _daemon_config_warnings)
@@ -114,6 +116,25 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
     return (host, port_n)
 
 
+def _bind_family(bind_host: str) -> tuple[int, str]:
+    """(socket family, host to bind) for a CYBERNET_RESOLVER_BIND value.
+
+    An IPv6 literal — bare ("::1") or bracketed ("[::1]", the form an
+    operator copies out of a URL) — binds AF_INET6 with the brackets
+    stripped; anything else (IPv4 literal, hostname) keeps AF_INET,
+    exactly as before. Shape only: a malformed value still falls
+    through to AF_INET and the bind raises, as it always did."""
+    host = bind_host.strip()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1].strip()
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            return (socket.AF_INET6, host)
+    except ValueError:
+        pass
+    return (socket.AF_INET, host)
+
+
 def _daemon_config_warnings() -> list[str]:
     """Loud config mistakes, or []. Unset/empty means the documented
     default (silent, a choice). Five set-but-ineffective cases the
@@ -131,10 +152,10 @@ def _daemon_config_warnings() -> list[str]:
     here, so unlike a node_url this gate is shape only, no
     public-address check); and CYBERNET_RESOLVER_BIND set but not a
     bindable address (_env_str passes it through verbatim and the
-    AF_INET bind raises, so the daemon dies before serving anything
+    bind raises, so the daemon dies before serving anything
     despite run()'s never-raises contract — shape only, offline:
-    an IPv4 literal or a syntactically valid hostname passes, an
-    IPv6 literal cannot bind an AF_INET socket, a dotted all-numeric
+    an IPv4 or IPv6 literal (bare, or bracketed for v6) or a
+    syntactically valid hostname passes, a dotted all-numeric
     value that is not a valid IPv4 literal can never resolve as
     written, and a syntactically valid but unresolvable hostname is
     beyond what an offline check can prove). Mirrors
@@ -195,11 +216,14 @@ def _daemon_config_warnings() -> list[str]:
     raw = os.environ.get("CYBERNET_RESOLVER_BIND", "").strip()
     if raw:
         bind_ok = True
+        bracketed = raw.startswith("[") and raw.endswith("]")
+        inner = raw[1:-1].strip() if bracketed else raw
         try:
-            addr = ipaddress.ip_address(raw)
-            bind_ok = addr.version == 4
+            ipaddress.ip_address(inner)  # v4 or v6 literal: bindable
         except ValueError:
-            if all(c.isdigit() or c == "." for c in raw):
+            if bracketed:
+                bind_ok = False  # brackets promise a literal; none there
+            elif all(c.isdigit() or c == "." for c in raw):
                 bind_ok = False  # dotted-numeric, but not a valid IPv4
             else:
                 labels = raw.rstrip(".").split(".")
@@ -212,9 +236,9 @@ def _daemon_config_warnings() -> list[str]:
                     for label in labels)
         if not bind_ok:
             problems.append(
-                "CYBERNET_RESOLVER_BIND is not a bindable IPv4 address "
-                "or hostname — the bind will fail and the daemon will "
-                "not start")
+                "CYBERNET_RESOLVER_BIND is not a bindable IPv4 or IPv6 "
+                "address or hostname — the bind will fail and the "
+                "daemon will not start")
     return problems
 
 
@@ -234,9 +258,10 @@ def run() -> None:
     bind_host, port, mirror_url, upstream, ttl_cap = _config()
     for warn in _daemon_config_warnings():
         print(f"resolverd: config: {warn}", file=sys.stderr)
-    usock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    family, bind_host = _bind_family(bind_host)
+    usock = socket.socket(family, socket.SOCK_DGRAM)
     usock.bind((bind_host, port))
-    tsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tsock = socket.socket(family, socket.SOCK_STREAM)
     tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     tsock.bind((bind_host, port))
     tsock.listen(_TCP_BACKLOG)

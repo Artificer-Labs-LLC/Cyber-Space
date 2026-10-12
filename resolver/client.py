@@ -26,6 +26,7 @@ Env (mirrors daemon defaults):
                          _client_port_warnings)
 """
 
+import ipaddress
 import os
 import random
 import socket
@@ -326,11 +327,23 @@ def _query_udp(
     s = sock
     try:
         if s is None:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # A v6-literal server (a daemon bound to ::1, say) needs an
+            # AF_INET6 socket; gethostbyname below is v4-only, so the
+            # expected source for a literal is the literal itself.
+            try:
+                is_v6 = ipaddress.ip_address(server).version == 6
+            except ValueError:
+                is_v6 = False
+            family = socket.AF_INET6 if is_v6 else socket.AF_INET
+            s = socket.socket(family, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         s.sendto(packet, (server, port))
         data, source = s.recvfrom(4096)
-        if (source[0], source[1]) != (socket.gethostbyname(server), port):
+        try:
+            expected = str(ipaddress.ip_address(server))
+        except ValueError:
+            expected = socket.gethostbyname(server)
+        if (source[0], source[1]) != (expected, port):
             raise ResolveError("udp response from an unexpected source")
     except ResolveError:
         raise

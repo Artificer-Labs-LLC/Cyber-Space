@@ -168,8 +168,15 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
         self.assertNotIn("999.999.1.1", warns[0])
 
-    def test_bind_ipv6_warns_af_inet_cannot_bind_it(self):
-        warns = self._warns(CYBERNET_RESOLVER_BIND="::1")
+    def test_bind_ipv6_is_silent(self):
+        # daemon._bind_family binds AF_INET6 for a v6 literal (bare or
+        # bracketed), so a v6 bind is a working configuration now, not
+        # the old AF_INET death this belt used to demand a warning for.
+        self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="::1"), [])
+        self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="[::1]"), [])
+
+    def test_bind_bracketed_garbage_warns(self):
+        warns = self._warns(CYBERNET_RESOLVER_BIND="[not-an-ip]")
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_RESOLVER_BIND", warns[0])
 

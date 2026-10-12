@@ -116,6 +116,21 @@ check("config: malformed all -> defaults",
       daemon._config() == ("127.0.0.1", 5353, "http://127.0.0.1:8471", ("1.1.1.1", 53), 0))
 scrub()
 
+# --- _bind_family: v4/hostname -> AF_INET unchanged, v6 -> AF_INET6 ---
+
+import socket as _socket  # noqa: E402
+
+check("bind_family: ipv4 -> AF_INET",
+      daemon._bind_family("127.0.0.1") == (_socket.AF_INET, "127.0.0.1"))
+check("bind_family: hostname -> AF_INET",
+      daemon._bind_family("localhost") == (_socket.AF_INET, "localhost"))
+check("bind_family: bare v6 -> AF_INET6",
+      daemon._bind_family("::1") == (_socket.AF_INET6, "::1"))
+check("bind_family: bracketed v6 -> AF_INET6 unbracketed",
+      daemon._bind_family("[::1]") == (_socket.AF_INET6, "::1"))
+check("bind_family: malformed -> AF_INET passthrough",
+      daemon._bind_family("bad host!") == (_socket.AF_INET, "bad host!"))
+
 # --- restore caller's env ---
 
 for k, v in SAVED.items():
