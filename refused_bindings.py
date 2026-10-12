@@ -21,7 +21,7 @@ Reason codes, fixed set, never free text: ``grammar``, ``length``,
 ``expiry-cap``, ``not-in-manifest``.
 
 Classification priority (each binding gets exactly one leaf):
-    length -> grammar -> expiry-cap -> not-in-manifest
+    grammar -> length -> expiry-cap -> not-in-manifest
 A binding passing all four is hold-eligible.
 
 Note: the window-open snapshot itself (``_snapshot`` in the migration
@@ -126,10 +126,11 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
     row is hold-eligible. ``row`` needs name/node_pubkey/expires_at;
     ``manifest_labels`` is a set of labels present in the manifest."""
     label = str(row.get("name", ""))
-    if _length_refused(label):
-        return "length"
+    # B1 (Q1 fix, ART-29): grammar before length, per spec §7.3.9.
     if not _grammar_ok(label):
         return "grammar"
+    if _length_refused(label):
+        return "length"
     if not _canonical_time_ok(row.get("expires_at")):
         return "expiry-cap"
     if label not in manifest_labels:
