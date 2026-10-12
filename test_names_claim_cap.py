@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# PROVENANCE (Examiner item 5): ported onto origin/villhaze/q1-name-fixes-r3
+# @ 3cadf03 by cherry-pick, branch oracle/window-open-preconditions-r2.
+# Source commits on oracle/window-open-preconditions (off 8e9291a):
+#   0bdb386 (names/claim gate + belt) -> r2 b858a98
+#   7cc71a8 (shared names-write bucket) -> r2 cf285cf
 """ART-38 (window-open precondition 1): names/claim caps, local belt.
 
 1. Per-IP rate gate runs FIRST: probes 1..LIMIT with an all-zero signature

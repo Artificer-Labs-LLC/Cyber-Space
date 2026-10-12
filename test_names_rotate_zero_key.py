@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# PROVENANCE (Examiner item 5): ported onto origin/villhaze/q1-name-fixes-r3
+# @ 3cadf03 by cherry-pick, branch oracle/window-open-preconditions-r2.
+# Source commits on oracle/window-open-preconditions (off 8e9291a):
+#   0bdb386 (names/claim gate) -> r2 b858a98
+#   357b71d (names/rotate gate + zero-key vectors) -> r2 c44ac8d
+#   7cc71a8 (shared names-write bucket) -> r2 cf285cf
 """ART-38 / ART-29: names/rotate (routes_social_serve.names_rotate) vectors.
 
 Cipher 2026-10-12: the rotation path verifies the NEW binding with

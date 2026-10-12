@@ -1,3 +1,9 @@
+# PROVENANCE (Examiner item 5): ported onto origin/villhaze/q1-name-fixes-r3
+# @ 3cadf03 by cherry-pick, branch oracle/window-open-preconditions-r2.
+# Source commits on oracle/window-open-preconditions (off 8e9291a):
+#   86256ae (ART-40/41 minimal window_open) -> r2 3351f0f
+#   7cc71a8 (board BLOCK fixes: mixed-order, chain-walk reserve, cap) -> r2 cf285cf
+#   r2 follow-up: window close + naive/date-only e2e (Examiner items 6,7)
 """Window-open preconditions 3 and 4 (ART-40, ART-41) on the 8e9291a line.
 
 PLAIN NOTE: this tree has no legacy_migration.py, _snapshot, open_window,
@@ -46,6 +52,10 @@ _SCHEMA = (
         pubkey TEXT NOT NULL,
         reason TEXT NOT NULL,
         PRIMARY KEY (source, row_key, pubkey))""",
+    """CREATE TABLE IF NOT EXISTS window_close_log (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        closed_at TEXT NOT NULL,
+        closed_by TEXT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS legacy_migrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         account TEXT NOT NULL,
@@ -175,6 +185,21 @@ def window_entry(conn):
     return conn.execute("SELECT id, opened_at, opened_by FROM window_open_log WHERE id=1").fetchone()
 
 
+def close_window(closed_by: str) -> dict:
+    """Examiner item 7: record the window close once. After it, every start
+    is refused (409, no row), regardless of the account's count."""
+    with core._db_lock, core._db() as conn:
+        init_schema(conn)
+        if window_entry(conn) is None:
+            raise StartRefused("cannot close: window was never opened")
+        row = conn.execute("SELECT closed_at, closed_by FROM window_close_log WHERE id=1").fetchone()
+        if row:
+            return {"closed_at": row[0], "closed_by": row[1], "already_closed": True}
+        at = _now()
+        conn.execute("INSERT INTO window_close_log (id, closed_at, closed_by) VALUES (1,?,?)", (at, closed_by))
+    return {"closed_at": at, "closed_by": closed_by, "already_closed": False}
+
+
 class StartRefused(Exception):
     """Start refused (window not open, or cap reached). HTTP 409 shape."""
     status_code = 409
@@ -216,6 +241,9 @@ def check_start_cap(conn, account: str) -> tuple[bool, str]:
     entry = window_entry(conn)
     if entry is None:
         return False, "window not open: no recorded open_window entry"
+    closed = conn.execute("SELECT closed_at FROM window_close_log WHERE id=1").fetchone()
+    if closed is not None:
+        return False, f"window closed at {closed[0]}: no new starts"
     n = conn.execute("SELECT COUNT(*) FROM legacy_migrations WHERE account=?",
                      (account,)).fetchone()[0]
     if n >= MAX_STARTS_PER_ACCOUNT:

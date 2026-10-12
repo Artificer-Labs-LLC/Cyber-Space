@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# PROVENANCE (Examiner item 5): e8fb1fc (strict checkvalid) on
+# oracle/window-open-preconditions -> r2 388afa2 on 3cadf03.
 """Strict Ed25519 checkvalid (window-open precondition, ART-29/ART-38).
 
 fed/ed25519.checkvalid must, in order, fail closed on:

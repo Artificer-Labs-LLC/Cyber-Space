@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# PROVENANCE (Examiner item 5): ported onto origin/villhaze/q1-name-fixes-r3
+# @ 3cadf03 by cherry-pick, branch oracle/window-open-preconditions-r2.
+# Source commits on oracle/window-open-preconditions (off 8e9291a):
+#   86256ae (ART-40/41 minimal window_open) -> r2 3351f0f
+#   7cc71a8 (board BLOCK fixes: mixed-order, chain-walk reserve, cap) -> r2 cf285cf
+#   r2 follow-up: window close + naive/date-only e2e (Examiner items 6,7)
 """ART-40 / ART-41 belt for window_open.py (post-BLOCK). Scratch DB only."""
 import os, sys, tempfile
 os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="wop-")
@@ -129,6 +135,33 @@ with core._db_lock, core._db() as conn:
 wo._now_hook = lambda: "2026-10-13T00:00:00+00:00"
 check("Z and +00:00 (and pre-window) rows all count: 4th refused 409", start("zfmt") == 409)
 check("other account unaffected", start("other") == 200)
+
+# Examiner item 6: naive and date-only timestamps, end to end
+with core._db_lock, core._db() as conn:
+    conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                     [("naive", GOOD, "2026-10-12 10:00:00", "2099-01-01 00:00:00", "00" * 64),
+                      ("dateonly", GOOD, "2026-10-12", "2099-01-01", "00" * 64),
+                      ("naivezero", ZERO, "2026-10-12 10:00:00", "2099-01-01", "00" * 64),
+                      ("naiveold", GOOD, "2000-01-01", "2000-01-02", "00" * 64)])
+    conn.executemany("INSERT INTO legacy_migrations (account,kind,started_at) VALUES (?,?,?)",
+                     [("fmt2", "rotation", "2026-10-12 17:00:00"), ("fmt2", "recovery", "2026-10-12"),
+                      ("fmt2", "rotation", "2026-10-12T17:00:00")])
+    snap2 = wo.snapshot_bindings(conn)
+h2 = {r[0] for r in snap2["held"]}; f2 = {r[0] for r in snap2["refused"]}
+check("e2e: naive/date-only honest bindings held (no expires parse/filter)", {"naive", "dateonly", "naiveold"} <= h2, h2)
+check("e2e: naive-timestamp zero-key binding refused", "naivezero" in f2, f2)
+check("e2e: naive + date-only + T-naive start rows all count (4th -> 409)", start("fmt2") == 409)
+check("e2e: refused start wrote no row", rows_for("fmt2") == 3, rows_for("fmt2"))
+
+# Examiner item 7: window close; late 4th start after close refused
+check("late account has 2 starts before close", [start("late"), start("late")] == [200, 200])
+wo._now_hook = lambda: "2026-10-20T00:00:00+00:00"
+c = wo.close_window("villhaze")
+check("close_window recorded", c["closed_at"] == "2026-10-20T00:00:00+00:00" and not c["already_closed"], c)
+check("close_window idempotent", wo.close_window("x")["already_closed"])
+check("start after close refused 409 (account under cap)", start("late") == 409)
+check("late 4th start after close refused 409", start("acct") == 409)
+check("post-close refusals wrote no rows", rows_for("late") == 2 and rows_for("acct") == 3, (rows_for("late"), rows_for("acct")))
 wo._now_hook = None
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
