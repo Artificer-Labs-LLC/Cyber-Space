@@ -6,7 +6,9 @@ Assumes the daemon is already running (resolver/daemon.py, default
 Uses only the stdlib: builds one DNS query by hand, reads the rcode.
 
 Checks:
-  1. genesis.cyberspace (or --name) resolves -> NOERROR with >=1 A/AAAA
+  1. genesis.cyberspace (or --name) resolves -> NOERROR with >=1 A
+     answer, or (A is NODATA) >=1 AAAA answer — a v6-only node answers
+     A with NOERROR/0, so the A leg alone would fail a healthy name
   2. a random never-registered label -> NXDOMAIN (fail-closed check)
   3. (with --tcp) the same two checks over DNS-over-TCP (RFC 7766), the
      daemon's second wire path — same port, same fail-closed zone
@@ -147,8 +149,20 @@ def main() -> int:
     except Exception as exc:  # transport down — say so, fail closed
         print(f"FAIL[{wire}]: {args.server}:{args.port} unreachable ({exc})")
         return 1
-    print(f"[{wire}] {args.name}: rcode={rcode} answers={an}")
-    if rcode == 0 and an >= 1:
+    print(f"[{wire}] {args.name} A: rcode={rcode} answers={an}")
+    resolved = rcode == 0 and an >= 1
+    if rcode == 0 and an == 0:
+        # NODATA on A: the name may live on a v6-only node — ask AAAA
+        # before calling it unresolved (answer.py's family split).
+        try:
+            rcode6, an6, _ = query_fn(args.name, _QTYPE_AAAA,
+                                      args.server, args.port)
+        except Exception as exc:
+            print(f"FAIL[{wire}]: AAAA query raised ({exc})")
+            return 1
+        print(f"[{wire}] {args.name} AAAA: rcode={rcode6} answers={an6}")
+        resolved = rcode6 == 0 and an6 >= 1
+    if resolved:
         print(f"PASS[{wire}]: registered name resolves")
     else:
         print(f"FAIL[{wire}]: registered name did not resolve")

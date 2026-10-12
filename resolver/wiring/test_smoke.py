@@ -11,6 +11,8 @@ Checks:
   good NOERROR+A then junk NXDOMAIN -> main() exits 0 (PASS path)
   junk not NXDOMAIN -> main() exits 1 (fail-closed answer refuses)
   --tcp routes both checks through _query_tcp (UDP never touched)
+  A NODATA on the registered name -> AAAA leg asked (v6-only node passes);
+  NODATA on both families -> main() exits 1
   packet shape: _build_query header parses, qname encodes
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python resolver/wiring/test_smoke.py
@@ -175,6 +177,27 @@ def _test_ipv6_server_forms():
         check("bracketed [::1] TCP wire answers NXDOMAIN", False, repr(exc))
 
 
+# 5d. AAAA fallback: a v6-only name answers A with NODATA (NOERROR, 0)
+#     and AAAA with answers — smoke must pass it, not fail a healthy
+#     name; a name NODATA on BOTH families still fails
+def _test_aaaa_fallback():
+    def _v6_only(name, qtype, server, port, timeout=3.0):
+        if name.startswith("zz-"):
+            return (3, 0, 0)
+        return (0, 0, 0) if qtype == 1 else (0, 1, 0)
+
+    rc, out = _run_main_with_fake(_v6_only)
+    check("v6-only name (A NODATA, AAAA answers) -> exit 0", rc == 0,
+          f"got {rc}")
+    check("AAAA leg printed", "AAAA:" in out, repr(out[:160]))
+
+    def _nodata(name, qtype, server, port, timeout=3.0):
+        return (3, 0, 0) if name.startswith("zz-") else (0, 0, 0)
+
+    rc, out = _run_main_with_fake(_nodata)
+    check("NODATA on both families -> exit 1", rc == 1, f"got {rc}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -197,6 +220,7 @@ if __name__ == "__main__":
     _test_junk_not_nxdomain()
     _test_tcp_flag_routes()
     _test_ipv6_server_forms()
+    _test_aaaa_fallback()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
