@@ -158,12 +158,18 @@ WITNESS_SET_FORMAT = "cyberspace-witness-set/v1"
 # with no '|', so it cannot smuggle another field into the tag. Callers
 # check the kind BEFORE any signature verification over this tag.
 WITNESS_DOMAIN = "cyberspace-witness/v0"
-# Ruled in with the writer in window_open.open_window. Hold-closure and
-# resolution stay out: that record is pending a ruling.
+# Ruled in with the writer in window_open.open_window. hold-closure is the
+# admission-hold record Villhaze ART-40 49a4fdca authorized once the witness
+# port at 34a9a7d was accepted and the witness + weak_reason precondition
+# closed. A resolution record stays out.
 KINDS = ("window-open", "hold", "binding-hold", "migrate-pending", "late-migrate-pending",
          "withdraw", "contest", "window-close", "cutover", "expire", "activation-refused",
-         "reserve-hold", "name-refused", "origin-pin", "origin-handoff")
-WITNESS_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
+         "reserve-hold", "name-refused", "origin-pin", "origin-handoff", "hold-closure")
+WITNESS_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff", "hold-closure")
+# The basis the hold-closure writer may cite. Exact ASCII, no '|'.
+HOLD_CLOSURE_PORT = "34a9a7d"
+HOLD_CLOSURE_RULING = "49a4fdca"
+HOLD_CLOSURE_PRECONDITION = "witness+weak_reason"
 if any((not isinstance(k, str)) or ("|" in k) or (k.encode("ascii") != k.encode()) for k in KINDS):
     raise RuntimeError("KINDS must be exact ASCII byte strings with no '|'")
 LATE_CANCEL_SEC = 86400
@@ -190,7 +196,9 @@ ENTRIES_PER_BINDING = 2
 # A name carries at most these four; it does not carry all four at once,
 # and the ceiling counts the worst case. Orphans are not in `bindings`
 # (the binding row was reaped), so the operator pins that count separately.
+# hold-closure is one window-level record, not a fifth per-name slot.
 ENTRIES_PER_NAME = 4
+HOLD_CLOSURE_ENTRIES = 1
 WINDOW_EDGES = 2
 MAX_NAME_LEN = 32          # core NAME_RE: 3-32 chars of [a-z0-9_-]
 MAX_DETAIL_BYTES = 512     # compact JSON; lm.log refuses anything larger
@@ -208,7 +216,8 @@ def max_log_entries(accounts: int, bindings: int, orphans: int = 0) -> int:
     return (ENTRIES_PER_ACCOUNT * int(accounts)
             + ENTRIES_PER_BINDING * int(bindings)
             + ENTRIES_PER_NAME * names
-            + WINDOW_EDGES)
+            + WINDOW_EDGES
+            + HOLD_CLOSURE_ENTRIES)
 
 
 def _worst_entry(full_body: bool) -> dict:
@@ -243,7 +252,7 @@ def proof_max_bytes(accounts: int, bindings: int, orphans: int = 0) -> int:
     rotation chain and key state (item 7, KEY_STATE_BUDGET: up to
     MAX_ROTATIONS steps)."""
     names = int(bindings) + int(orphans)
-    full_slots = FULL_ENTRIES_PER_PROOF + ENTRIES_PER_NAME * names
+    full_slots = FULL_ENTRIES_PER_PROOF + ENTRIES_PER_NAME * names + HOLD_CLOSURE_ENTRIES
     return (HEAD_BUDGET + max_log_entries(accounts, bindings, orphans) * MAX_SKELETON_BYTES
             + full_slots * (MAX_FULL_BYTES - MAX_SKELETON_BYTES) + 64
             + KEY_STATE_BUDGET)
@@ -569,7 +578,9 @@ def rebuild_window_kinds(entries: list) -> dict:
     """Node B's view of the window kinds from the log span alone.
 
     No database. reserve-hold carries reserved_for and orphan; name-refused,
-    origin-pin, and origin-handoff are returned the same way.
+    origin-pin, and origin-handoff are returned the same way. hold-closure
+    is the one admission-hold record, with its precondition, state, port,
+    and ruling.
     """
     out = {k: [] for k in WITNESS_KINDS}
     if not isinstance(entries, list):
@@ -592,6 +603,10 @@ def rebuild_window_kinds(entries: list) -> dict:
             "reason": detail.get("reason"),
             "origin": detail.get("origin"),
             "successor": detail.get("successor"),
+            "precondition": detail.get("precondition"),
+            "state": detail.get("state"),
+            "port": detail.get("port"),
+            "ruling": detail.get("ruling"),
         })
     return out
 
