@@ -142,7 +142,10 @@ def _parse_response(
     clear is a query, not an answer, a packet with the AA bit clear
     is not the daemon's authoritative answer for this zone (every
     reply the daemon builds — answers, NXDOMAIN, SERVFAIL — sets AA;
-    an AA-clear packet is some other responder's word), and an echoed
+    an AA-clear packet is some other responder's word), a packet
+    with a nonzero opcode is not a reply to a standard query at all
+    (the daemon only ever answers opcode 0, and both its response
+    builders emit opcode 0), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -166,6 +169,8 @@ def _parse_response(
         raise ResolveError("not a response (QR bit clear)")
     if not flags & 0x0400:
         raise ResolveError("not authoritative (AA bit clear)")
+    if flags & 0x7800:
+        raise ResolveError("not a standard-query response (opcode set)")
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
