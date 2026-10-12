@@ -88,14 +88,19 @@ def _keypair():
 
 
 def _iso(dt):
-    return dt.isoformat()
+    """Canonical UTC, seconds precision — the only spelling the strict
+    claim-time parser accepts. A raw .isoformat() carries microseconds,
+    which every seat reads as malformed (this belt ran 11/22 on that
+    fixture bug alone until the stamps were canonicalized)."""
+    return dt.astimezone(datetime.timezone.utc).replace(
+        microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _fresh_iso():
     """A fresh timestamp taken at call time — never a stale fixture. New
     bindings must be minted AFTER the rotation they follow, or the mirror's
     chain-order gate (correctly) refuses them as pre-dated."""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return _iso(datetime.datetime.now(datetime.timezone.utc))
 
 
 def _mint_binding(label, priv, pub, issued_s, expires_s):
