@@ -293,5 +293,60 @@ check("H2: one surviving row, local accepted_at", len(h2rows) == 1 and h2rows[0]
 check("H2: anchor still K", hres.get("hostile2") == H2K, hres)
 check("H3: mixed-order new_pubkey via gossip refused, binding unchanged", not h3ok and h3bound == H3K, (h3ok, h3bound))
 check("H3: name flagged (reserved for K), not held", hres.get("hostile3") == H3K and "hostile3" not in {r[0] for r in hsnap["held"]}, hres)
+
+# Examiner BLOCK on 26cea33: a MIXED-ORDER holder (A = a*B + T2 passes strict
+# checkvalid when h is even) must not hand off to a fresh clean X via gossip.
+from rotate_name import _rotate_payload  # noqa: E402
+import hashlib  # noqa: E402
+_MA = 0x7654321
+MXP = _ed._edwards(_ed._scalarmult(_ed._BPOINT, _MA), T2)
+MXK = _ed._encodepoint(MXP).hex()
+MXX = _ed.publickey(bytes.fromhex("f1" * 32)).hex()
+MXX2 = _ed.publickey(bytes.fromhex("f2" * 32)).hex()
+
+def forge_mixed(label, new_pub):
+    m = _rotate_payload(label, MXK, new_pub, PAST)
+    for r in range(1, 10000):
+        R = _ed._encodepoint(_ed._scalarmult(_ed._BPOINT, r))
+        h = int.from_bytes(_ed._H(R + bytes.fromhex(MXK) + m), "little")
+        if h % 2 == 0:
+            S = (r + h * _MA) % _ed._L
+            return {"name": label, "old_pubkey": MXK, "new_pubkey": new_pub,
+                    "issued_at": PAST, "signature": (R + _ed._encodeint(S)).hex()}
+    raise RuntimeError("no even h")
+
+def mixed_handoff(sfx):
+    single, chainn = "mixz1x" + sfx, "mixcz1x" + sfx
+    rec, crec = forge_mixed(single, MXX), forge_mixed(chainn, MXX2)
+    with core._db_lock, core._db() as conn:
+        conn.executemany("INSERT INTO name_bindings (name,node_pubkey,issued_at,expires_at,signature) VALUES (?,?,?,?,?)",
+                         [(single, MXK, PAST, FUT, "00" * 64), (chainn, MXK, PAST, FUT, "00" * 64)])
+        before = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+        ok = core._gossiped_rotation_designates(rec, single, MXK, MXX, FUT, conn=conn)
+        cok = core._gossiped_rotation_chain_designates([crec], chainn, MXK, MXX2, FUT, conn=conn)
+        hops = conn.execute("SELECT name FROM name_rotations WHERE name IN (?,?)", (single, chainn)).fetchall()
+        bound = [conn.execute("SELECT node_pubkey FROM name_bindings WHERE name=?", (n,)).fetchone()[0] for n in (single, chainn)]
+        after = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+        snap = wo.snapshot_bindings(conn)
+    ref = {r[0]: r[-1] for r in snap["refused"]}
+    return ok, cok, len(hops), bound, before == after, ref.get(single), ref.get(chainn)
+
+check("mixed-order forged record verifies under strict checkvalid (premise)",
+      core._verify_rotation_record(forge_mixed("mixprem", MXX)) is None and wo.weak_reason(MXK) == "mixed-order")
+ok, cok, nh, bound, noreap, f1, f2 = mixed_handoff("")
+check("Z1->X (Z1 mixed-order, X clean) via gossip single-hop -> False", ok is False, ok)
+check("Z1->X via gossip chain -> False", cok is False, cok)
+check("Z1->X: both hops recorded in name_rotations", nh == 2, nh)
+check("Z1->X: name_bindings untouched (no write, no reap)", bound == [MXK, MXK] and noreap, (bound, noreap))
+check("Z1->X: snapshot FLAGs 'chain starts on weak key' (single + chain)",
+      "chain starts on weak key" in str(f1) and "chain starts on weak key" in str(f2), (f1, f2))
+_real_old = core._gossip_old_key_weak
+core._gossip_old_key_weak = lambda p: False  # MUTANT: old-key check removed
+try:
+    mok, mcok, *_ = mixed_handoff("m")
+finally:
+    core._gossip_old_key_weak = _real_old
+check("MUTANT (old-key check removed) fails the Z1->X row: both helpers return True",
+      mok is True and mcok is True, (mok, mcok))
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

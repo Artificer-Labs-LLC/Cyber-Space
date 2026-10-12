@@ -961,6 +961,16 @@ def _gossip_new_key_weak(pub) -> bool:
     return window_open.weak_reason(pub.strip().lower()) is not None
 
 
+def _gossip_old_key_weak(pub) -> bool:
+    """Examiner BLOCK on 26cea33 (ART-40): strict checkvalid accepts a
+    mixed-order holder key, so weak_reason must also run on the OLD
+    (stored) key. A weak holder never designates a successor through the
+    merge: the hop is recorded (snapshot FLAGs "chain starts on weak
+    key"), never bound, no reap."""
+    import window_open  # lazy: window_open imports core
+    return window_open.weak_reason((pub or "").strip().lower()) is not None
+
+
 def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
                                   binding_issued_at, conn=None) -> bool:
     """Primitive 4 (identity) — the gossip-merge twin of the rotate-accept
@@ -999,6 +1009,8 @@ def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
     except ValueError:
         return False
     _record_gossiped_rotation(conn, record)  # 5b1c941d: local accepted_at
+    if _gossip_old_key_weak(record["old_pubkey"]):
+        return False  # Examiner 26cea33: weak holder, recorded (FLAG), never bound
     if _gossip_new_key_weak(record["new_pubkey"]):
         return False  # Bulwark H3: recorded (snapshot reserves), never bound
     return True
@@ -1056,6 +1068,8 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
         return False
     for rec in chain:  # 5b1c941d: every accepted hop, local accepted_at
         _record_gossiped_rotation(conn, rec)
+    if any(_gossip_old_key_weak(rec["old_pubkey"]) for rec in chain):
+        return False  # Examiner 26cea33: weak holder, recorded (FLAG), never bound
     if any(_gossip_new_key_weak(rec["new_pubkey"]) for rec in chain):
         return False  # Bulwark H3: recorded (snapshot reserves), never bound
     return True
