@@ -292,21 +292,36 @@ def run() -> None:
         nonlocal running
         running = False
 
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
-
-    while running:
+    for _sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            readable, _, _ = select.select([usock, tsock], [], [], 0.5)
-        except (OSError, ValueError):
-            continue  # a dying socket's interrupt is not the zone's death
-        for sock in readable:
-            if sock is usock:
-                _serve_udp(usock, mirror_url, upstream, ttl_cap)
-            else:
-                _serve_tcp_accept(tsock, mirror_url, upstream, ttl_cap)
-    usock.close()
-    tsock.close()
+            signal.signal(_sig, _stop)
+        except (ValueError, OSError):
+            # signal.signal only works in the main thread. An embedded
+            # daemon (an agent hosting the resolver in-process, in a
+            # worker thread) must still serve — the embedding process
+            # owns lifetime there. Refusing to start would break the
+            # never-raises contract for exactly that deployment.
+            print(f"resolverd: cannot install {_sig!s} handler "
+                  f"(not the main thread?) — serving without it",
+                  file=sys.stderr)
+
+    try:
+        while running:
+            try:
+                readable, _, _ = select.select([usock, tsock], [], [], 0.5)
+            except (OSError, ValueError):
+                continue  # a dying socket's interrupt is not the zone's death
+            for sock in readable:
+                if sock is usock:
+                    _serve_udp(usock, mirror_url, upstream, ttl_cap)
+                else:
+                    _serve_tcp_accept(tsock, mirror_url, upstream, ttl_cap)
+    finally:
+        for sock in (usock, tsock):
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 def _serve_udp(sock, mirror_url, upstream, ttl_cap) -> None:

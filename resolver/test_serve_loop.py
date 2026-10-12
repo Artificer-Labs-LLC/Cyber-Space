@@ -259,6 +259,55 @@ def main():
     rebind.close()
     os.environ["CYBERNET_RESOLVER_PORT"] = "5353"
 
+    # Phase C: signal registration fails (ValueError — run() called
+    # from a non-main thread, the embedded-daemon case). run() must
+    # warn and still serve, never raise on registration. The fake
+    # select breaks the loop with a sentinel BaseException on its
+    # second call, after one packet has been answered.
+    class _Sentinel(BaseException):
+        pass
+
+    def _bad_signal(signum, handler):
+        raise ValueError("signal only works in main thread")
+
+    fake_c = _FakeSocket([_query_packet("silent.cyberspace", qid=0x5004)],
+                         lambda s, f: None)
+    calls = {"n": 0}
+
+    class _SentinelSelect:
+        @staticmethod
+        def select(rlist, wlist, xlist, timeout=None):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise _Sentinel()
+            return ([rlist[0]], [], [])
+
+    real_socket_fn = __import__("socket").socket
+    __import__("socket").socket = lambda *a, **k: fake_c
+    daemon.select = _SentinelSelect
+    signal.signal = _bad_signal
+    err_c = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err_c):
+            daemon.run()
+        check("signal failure: run() served then exited cleanly", False,
+              "sentinel never raised — loop did not run as scripted")
+    except _Sentinel:
+        check("signal failure: run() served then exited cleanly", True)
+    except Exception as exc:  # noqa: BLE001
+        check("signal failure: run() served then exited cleanly", False,
+              repr(exc))
+    finally:
+        __import__("socket").socket = real_socket_fn
+        signal.signal = real_signal
+        daemon.select = real_select
+    check("signal failure: warning on stderr",
+          "serving without it" in err_c.getvalue(),
+          f"stderr={err_c.getvalue()!r}")
+    check("signal failure: packet still answered before exit",
+          len(fake_c.sent) == 1, f"sent={len(fake_c.sent)}")
+    check("signal failure: sockets closed on exit", fake_c.closed)
+
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     return 1 if CASES["failed"] else 0
 
