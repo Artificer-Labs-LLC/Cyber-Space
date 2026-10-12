@@ -835,7 +835,8 @@ def _incumbent_is_live(old, now_dt):
 NAME_CONFLICT_CAP = 32
 
 # Examiner gate 4 (ART-29): counts non-IntegrityError failures in
-# _log_name_conflict. Ingest continues; operators monitor this.
+# _log_name_conflict. Ingest continues. The counter is append-only for
+# operator inspection; the logging.warning line is the alert mechanism.
 _name_conflict_error_count = 0
 
 
@@ -899,6 +900,19 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
         logging.warning("name_conflict log failed for %r: %s", name, e)
         global _name_conflict_error_count
         _name_conflict_error_count += 1
+
+
+def name_conflict_error_count():
+    """Examiner gate 4 follow-up (ART-29): live read of the conflict-log
+    error counter.
+
+    _log_name_conflict never raises, so without this the counter would be
+    write-only — the log line alone is ephemeral (logs rotate; the
+    daemon's stdout is all there is on a node). /api/v1/node reads this
+    getter (not an import-time snapshot) so operators can watch it.
+    Process-global by design: the audit trail is per-process.
+    """
+    return _name_conflict_error_count
 
 
 def _old_binding_beaten(old, binding, node_pubkey, now_dt):
