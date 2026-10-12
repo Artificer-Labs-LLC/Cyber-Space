@@ -87,7 +87,11 @@ def _keypair():
 
 
 def _fresh_iso():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Canonical UTC seconds form (twin of mint_name._iso): raw .isoformat()
+    # emits microseconds, which every claim-time seat (_parse_claim_time)
+    # reads as malformed — the claim/rotate routes 400 before any logic runs.
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _mint_binding(label, priv, pub, issued_s, expires_s):
@@ -127,8 +131,8 @@ SK_A, PK_A = _keypair()
 SK_B, PK_B = _keypair()
 SK_C, PK_C = _keypair()
 LABEL = "chainhist"
-LATER = _fresh_iso() and (datetime.datetime.now(datetime.timezone.utc)
-                          + datetime.timedelta(days=30)).isoformat()
+LATER = (datetime.datetime.now(datetime.timezone.utc)
+         + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 st, _ = _post("/api/v1/names/claim",
               {"name": LABEL,
