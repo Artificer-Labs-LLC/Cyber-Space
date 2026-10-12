@@ -95,8 +95,8 @@ def _get(path):
 SK, PK = _keypair()
 TOKEN = "hostd-test-token-" + secrets.token_hex(8)
 NOW = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-NOWS = NOW.isoformat()
-LATER = (NOW + __import__("datetime").timedelta(days=30)).isoformat()
+NOWS = NOW.isoformat(timespec="seconds")
+LATER = (NOW + __import__("datetime").timedelta(days=30)).isoformat(timespec="seconds")
 
 # claim the test name with the test key (never genesis — this key is fresh)
 sig = _fed_ed25519.sign(

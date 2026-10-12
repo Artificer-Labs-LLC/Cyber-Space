@@ -11,7 +11,8 @@ from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _NODE_PUB, _NODE_URL_RE, _authed, _broadcast, _check_rate, _db,
                   _db_lock, _delta_payload, _countersign_payload, _hash_key,
                   _invite_payload, _leave_payload, _now, _pigeonhole_cutoff,
-                  _post_message, _removed_payload, _valid_name, _valid_node_url)
+                  _post_message, _removed_payload, _valid_name, _valid_node_url,
+                  ingest_reach_descriptor)
 
 router = APIRouter()
 
@@ -77,6 +78,34 @@ def fed_announce(env: dict):
     sender_pub = env.get("sender_pub")
     if body.get("node_pub") != sender_pub:
         raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    # .cyberspace depth: the name-key-signed announce half (docs/HOSTING.md).
+    # The reach descriptor rides /fed/announce — the announce whose
+    # sender_pub IS the name key (body.node_pub == sender_pub ==
+    # node_pubkey, checked above). When the body carries a reach
+    # descriptor, the roster half below is skipped entirely: a name key
+    # is a name identity, not a node identity — minting a peers row
+    # under it would poison the directory roster with a non-node key.
+    # Mirrors merge the descriptor via ingest_reach_descriptor — seen
+    # from peer, never gospel. No known-peer gate: the descriptor is
+    # self-authenticating (it only merges against a LIVE registry
+    # binding under the SAME key, so a stranger can only ever publish
+    # reach for a name it genuinely holds) — anyone-can-host. Per-sender
+    # rate bucket of its own: a name key is a different key space than
+    # node keys and shouldn't burn the node-announce quota.
+    # (Restored on this branch line: the branch was lost in the r2
+    # rebase — hostd/_reach_out kept sending, nothing merged, so
+    # primitive-3 hosting announced reach no mirror ever stored.)
+    desc = body.get("reach_descriptor")
+    if desc is not None:
+        if not isinstance(desc, dict):
+            raise HTTPException(status_code=400, detail="bad reach descriptor")
+        if str(desc.get("node_pubkey", "")).lower() != sender_pub.lower():
+            raise HTTPException(status_code=400, detail="name-key mismatch")
+        _check_rate(f"fedreachannounce:{sender_pub}")
+        outcome = ingest_reach_descriptor(desc)
+        return {"ok": True, "reach": outcome,
+                "name": str(desc.get("name", "")).lower(),
+                "node_pubkey": sender_pub.lower()}
     name = str(body.get("name", ""))
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
         raise HTTPException(status_code=400, detail="bad node name")
