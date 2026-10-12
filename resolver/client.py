@@ -163,7 +163,11 @@ def _parse_response(
     checking states the client never asked for (its query sends RD
     only, no AD/CD) and neither daemon response builder ever sets
     (an AD/CD-set packet carries a recursive checker's marks, not
-    the daemon's), and an echoed
+    the daemon's), a packet carrying authority or additional
+    section records (neither daemon response builder ever emits
+    any — build_response sends header counts 0/0 for those sections
+    and error_response sends 0/0/0/0; records the parser would only
+    skip, never read, can carry nothing the daemon meant), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -180,7 +184,9 @@ def _parse_response(
     """
     if len(data) < 12:
         raise ResolveError("short response")
-    resp_id, flags, qdcount, ancount, _, _ = struct.unpack(">HHHHHH", data[:12])
+    resp_id, flags, qdcount, ancount, nscount, arcount = struct.unpack(
+        ">HHHHHH", data[:12]
+    )
     if resp_id != (txid & 0xFFFF):
         raise ResolveError("transaction id mismatch")
     if not flags & 0x8000:
@@ -199,6 +205,10 @@ def _parse_response(
         raise ResolveError("response sets the reserved Z bit")
     if flags & 0x0030:
         raise ResolveError("response sets AD/CD bits the daemon never sets")
+    if nscount or arcount:
+        raise ResolveError(
+            "response carries authority/additional sections the daemon never sends"
+        )
     if qname is not None and qdcount != 1:
         raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or

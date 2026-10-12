@@ -472,6 +472,41 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
 
+    def test_parse_response_nscount_set_raises_resolve_error(self):
+        """A packet claiming authority records is not a daemon reply —
+        both daemon builders emit nscount 0; the parser never reads
+        that section, so its records could only be smuggled weight."""
+        resp = bytearray(self._valid_response())
+        resp[8:10] = struct.pack(">H", 1)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_parse_response_arcount_set_raises_resolve_error(self):
+        """Same for the additional section: arcount is 0 in every
+        reply the daemon builds, so a nonzero count is not its reply."""
+        resp = bytearray(self._valid_response())
+        resp[10:12] = struct.pack(">H", 1)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_resolve_nscount_set_raises_resolve_error(self):
+        def tamper(q):
+            resp = _a_response(q)
+            return resp[:8] + struct.pack(">H", 1) + resp[10:]
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
+    def test_resolve_arcount_set_raises_resolve_error(self):
+        def tamper(q):
+            resp = _a_response(q)
+            return resp[:10] + struct.pack(">H", 1) + resp[12:]
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_parse_response_different_question_raises_resolve_error(self):
         """Right txid, answers for ANOTHER name: a mistransaction."""
         other = dns.parse_query(
