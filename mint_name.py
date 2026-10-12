@@ -21,8 +21,13 @@ turns an agent into a hostable .cyberspace name:
 Usage: ./venv/bin/python mint_name.py <label> [mirror_url] [--env-dir DIR]
   mirror_url defaults to http://127.0.0.1:8471 (the local node).
   --env-dir defaults to ~/.cyberspace/hostd (writes <label>.env there).
-  --expiry-days defaults to 730 (2 years). The binding is renewable by
-  re-signing with the same key before expiry.
+  --expiry-days defaults to 364. The namespace refuses any binding
+  signed for longer than 365 days (core.NAME_EXPIRY_DAYS — admission,
+  verify, resolve and dial all enforce the same intrinsic cap), so the
+  default stays a day under the cap and a value above 365 is refused
+  locally, before any key is written or claim sent: a 730-day default
+  minted bindings the claim route itself refused, dead on arrival.
+  The binding is renewable by re-signing with the same key before expiry.
 
 The server is the authority on every rule: the label grammar here is a
 client-side fast check (mirrors core._valid_name_label); the claim endpoint
@@ -43,7 +48,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign  # noqa: E402
 
 _LABEL_MAX = 63
-_DEFAULT_EXPIRY_DAYS = 730
+# A day under the namespace's 365-day binding-lifetime cap
+# (core.NAME_EXPIRY_DAYS): the minter must never mint what every
+# admission/verify/resolve seat refuses.
+_DEFAULT_EXPIRY_DAYS = 364
+_EXPIRY_DAYS_CAP = 365
 
 
 def _write_secret(path, text, overwrite=False):
@@ -169,6 +178,12 @@ def main(argv: list[str]) -> int:
         expiry_days = max(1, int(opts.get("--expiry-days", _DEFAULT_EXPIRY_DAYS)))
     except ValueError:
         print("refused: --expiry-days must be an integer", file=sys.stderr)
+        return 2
+    if expiry_days > _EXPIRY_DAYS_CAP:
+        print(f"refused: --expiry-days={expiry_days} exceeds the namespace's "
+              f"{_EXPIRY_DAYS_CAP}-day binding-lifetime cap — the claim "
+              f"route refuses any binding signed for longer, so nothing "
+              f"was minted", file=sys.stderr)
         return 2
 
     home = Path.home() / ".cyberspace"

@@ -126,7 +126,7 @@ other_pub = _fed_ed25519.publickey(other_priv).hex()
 from datetime import datetime, timezone, timedelta
 now = datetime.now(timezone.utc) - timedelta(seconds=120)
 issued = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-exp = (now + timedelta(days=730)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+exp = (now + timedelta(days=364)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 payload = (b"name-claim|takenbyother|" + other_pub.encode() + b"|"
            + issued.encode() + b"|" + exp.encode())
 sig = _fed_ed25519.sign(payload, other_priv, bytes.fromhex(other_pub)).hex()
@@ -152,6 +152,10 @@ check("invalid label wrote no key",
       not os.path.exists(os.path.join(HOME, ".cyberspace", "bad label!-name.key")))
 rc = mint_name.main(["willowmint", MIRROR, "--expiry-days=abc"])
 check("bad --expiry-days exits 2", rc == 2, f"rc={rc}")
+rc = mint_name.main(["overcapmint", MIRROR, "--expiry-days=730"])
+check("over-cap --expiry-days exits 2 locally", rc == 2, f"rc={rc}")
+check("over-cap mint wrote no key",
+      not os.path.exists(os.path.join(HOME, ".cyberspace", "overcapmint-name.key")))
 
 server.should_exit = True
 t.join(5)
