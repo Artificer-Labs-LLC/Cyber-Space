@@ -1206,6 +1206,16 @@ async def names_claim(request: Request):
             name_fork.ensure_genesis_pin(conn)
             pin_refused = name_fork.pin_refuses_before_signature(
                 conn, name, node_pubkey)
+            # Villhaze 392140b7: pins never auto-expire. A claim under a
+            # different key after the binding lapsed past day 90 is
+            # refused and the name is marked PIN-STALE for local decision.
+            stale = pin_refused and (name_fork.is_pin_stale(conn, name)
+                                     or name_fork.lapse_refusal(conn, name, node_pubkey))
+        if stale:
+            raise HTTPException(
+                status_code=400,
+                detail="Refused: PIN-STALE — the pin outlived its binding and "
+                       "no rotation certificate moves it; local decision required.")
         if pin_refused:
             raise HTTPException(
                 status_code=400,
@@ -1273,9 +1283,14 @@ async def names_rotate(request: Request):
     """.cyberspace depth (primitive 4, identity): the mirror accepts a name-key
     rotation record and moves the live binding to the successor key.
 
-    The rotation record is name-rotate|<label>|<old_pub>|<new_pub>|<issued_at>,
+    The rotation record is a v2 certificate (rotate_name._rotate_payload_v2:
+    domain tag, length-prefixed label/old/new/issued_at, seq, prev_hash),
     signed by the OLD key — the continuity proof, mintable offline with
-    rotate_name.py. The request also carries the new binding, signed by the
+    rotate_name.py. Form fields rotation_seq and rotation_prev_hash carry
+    seq and prev_hash; a v1 record (no seq) is refused, it never moves a
+    pin (ART-29, Villhaze 524ef05b). The pin gate (name_fork) then requires
+    seq == pin seq + 1 and prev_hash == pin head, and holds the name to one
+    accepted rotation per gossip round (429 while held). The request also carries the new binding, signed by the
     NEW key (the next claim). The mirror verifies the whole chain before it
     moves anything:
 
@@ -1305,13 +1320,21 @@ async def names_rotate(request: Request):
     new_pubkey = (form.get("new_pubkey") or "").strip().lower()
     rotation_issued_at = (form.get("rotation_issued_at") or "").strip()
     rotation_signature = (form.get("rotation_signature") or "").strip().lower()
+    rotation_seq_raw = (form.get("rotation_seq") or "").strip()
+    rotation_prev_hash = (form.get("rotation_prev_hash") or "").strip().lower()
     binding_issued_at = (form.get("binding_issued_at") or "").strip()
     binding_expires_at = (form.get("binding_expires_at") or "").strip()
     binding_signature = (form.get("binding_signature") or "").strip().lower()
     if not _valid_name_label(name):
         raise HTTPException(status_code=400, detail="name: first label only — lowercase alnum/hyphen, 1-63 chars, no dots.")
+    # ART-29 (Villhaze 524ef05b item 3): only a v2 certificate moves a pin.
+    # seq + prev_hash are inside the old key's signature.
+    if not rotation_seq_raw.isdigit() or len(rotation_seq_raw) > 18:
+        raise HTTPException(status_code=400, detail="rotation_seq is required: a v2 rotation certificate (seq + prev_hash) — a v1 record never moves a pin.")
+    rotation_seq = int(rotation_seq_raw)
     for val, want, field in ((old_pubkey, 64, "old_pubkey"),
                              (new_pubkey, 64, "new_pubkey"),
+                             (rotation_prev_hash, 64, "rotation_prev_hash"),
                              (rotation_signature, 128, "rotation_signature"),
                              (binding_signature, 128, "binding_signature")):
         try:
@@ -1324,8 +1347,10 @@ async def names_rotate(request: Request):
     # for the new one, not yet in force if future-dated. The payload uses
     # the raw issued_at string (twin of rotate_name's verify_rotation —
     # payload bytes are built there, never re-derived here).
-    record = {"name": name, "old_pubkey": old_pubkey, "new_pubkey": new_pubkey,
-              "issued_at": rotation_issued_at, "signature": rotation_signature}
+    record = {"v": 2, "name": name, "old_pubkey": old_pubkey,
+              "new_pubkey": new_pubkey, "issued_at": rotation_issued_at,
+              "seq": rotation_seq, "prev_hash": rotation_prev_hash,
+              "signature": rotation_signature}
     reason = _rotation_verify_record(record)
     if reason is not None:
         raise HTTPException(status_code=400, detail=f"Rotation record refused: {reason}.")
@@ -1380,9 +1405,7 @@ async def names_rotate(request: Request):
         # never a tiebreak. The verdict commits before the HTTP refusal
         # so fork evidence is not rolled back with the error.
         import name_fork
-        cert = {"name": name, "old_pubkey": old_pubkey,
-                "new_pubkey": new_pubkey, "issued_at": rotation_issued_at,
-                "signature": rotation_signature}
+        cert = dict(record)
         accepted_at = _now()
         with _db_lock, _db() as conn:
             verdict = name_fork.consider_rotation(conn, cert)
@@ -1395,15 +1418,21 @@ async def names_rotate(request: Request):
                     (name, new_pubkey, binding_issued_at, binding_expires_at, binding_signature))
                 conn.execute(
                     "INSERT OR IGNORE INTO name_rotations "
-                    "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature, accepted_at))
+                    "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at, seq, prev_hash) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (name, old_pubkey, new_pubkey, rotation_issued_at, rotation_signature,
+                     accepted_at, rotation_seq, rotation_prev_hash))
         if verdict == "contested":
             raise HTTPException(status_code=409, detail="name contested")
+        if verdict == "deferred":
+            raise HTTPException(
+                status_code=429,
+                detail="rotation held: one accepted rotation per name per gossip round")
         if verdict != "accepted":
             raise HTTPException(
                 status_code=400,
-                detail="rotation is not contiguous with the current pin")
+                detail="rotation is not contiguous with the current pin "
+                       "(old key, seq, and prev_hash must continue it)")
         return {"name": name, "status": "rotated",
                 "old_pubkey": old_pubkey, "new_pubkey": new_pubkey}
 
@@ -1437,16 +1466,31 @@ def names_rotations(request: Request, name: str):
     label = (name or "").strip().lower()
     if not _valid_name_label(label):
         raise HTTPException(status_code=400, detail="name: first label only — lowercase alnum/hyphen, 1-63 chars, no dots.")
+    import name_fork
     with _db_lock, _db() as conn:
+        name_fork.ensure_schema(conn)
         cur = conn.execute(
-            "SELECT old_pubkey, new_pubkey, issued_at, signature, accepted_at "
+            "SELECT old_pubkey, new_pubkey, issued_at, signature, accepted_at, seq, prev_hash "
             "FROM name_rotations WHERE name=? ORDER BY accepted_at ASC, rowid ASC", (label,))
         rows = cur.fetchall()
+        pin_state = name_fork._pin_state(conn, label)
     if not rows:
         raise HTTPException(status_code=404, detail="No rotations recorded for this name.")
-    return {"name": label,
-            "rotations": [{"old_pubkey": r[0], "new_pubkey": r[1], "issued_at": r[2],
-                           "signature": r[3], "accepted_at": r[4]} for r in rows]}
+    hops = []
+    for r in rows:
+        hop = {"old_pubkey": r[0], "new_pubkey": r[1], "issued_at": r[2],
+               "signature": r[3], "accepted_at": r[4]}
+        if r[5] is not None:  # v2 row: seq + prev_hash are inside the signature
+            hop["seq"] = int(r[5])
+            hop["prev_hash"] = r[6]
+        hops.append(hop)
+    out = {"name": label, "rotations": hops}
+    if pin_state is not None:
+        # A client minting the next v2 cert uses seq = pin_seq + 1 and
+        # prev_hash = pin_head.
+        out["pin_seq"] = pin_state["seq"]
+        out["pin_head"] = pin_state["head"]
+    return out
 
 
 @router.get("/api/v1/names/{name}")
@@ -1465,6 +1509,7 @@ def names_resolve(request: Request, name: str):
     import name_fork
     with _db_lock, _db() as conn:
         contested = name_fork.is_contested(conn, label)
+        stale = name_fork.is_pin_stale(conn, label)
         pin = name_fork.current_pin(conn, label)
         cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (label,))
         row = cur.fetchone()
@@ -1472,6 +1517,8 @@ def names_resolve(request: Request, name: str):
     # node accepted first. Winner determination is witness receipts only.
     if contested:
         raise HTTPException(status_code=409, detail="name contested")
+    if stale:
+        raise HTTPException(status_code=409, detail="name pin-stale")
     if row is None:
         raise HTTPException(status_code=404, detail="No such name.")
     if pin is not None and str(row[1]).lower() != pin:

@@ -951,13 +951,26 @@ def _record_gossiped_rotation(conn, rec) -> None:
     history and applies the same weak-key reserve rule (reserve for K)."""
     if conn is None:
         return
+    row = (rec["name"].strip().lower(), rec["old_pubkey"].strip().lower(),
+           rec["new_pubkey"].strip().lower(), rec["issued_at"],
+           rec["signature"].strip().lower(), _now())
+    from rotate_name import is_v2
+    if is_v2(rec):
+        # ART-29: a v2 record keeps seq + prev_hash so the stored row
+        # re-verifies (its signature covers them). History only — a pin
+        # moves through name_fork, never through this merge.
+        import name_fork
+        name_fork.ensure_rotation_columns(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO name_rotations "
+            "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at,"
+            " seq, prev_hash) VALUES (?,?,?,?,?,?,?,?)",
+            row + (int(rec["seq"]), str(rec["prev_hash"]).strip().lower()))
+        return
     conn.execute(
         "INSERT OR IGNORE INTO name_rotations "
         "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
-        "VALUES (?,?,?,?,?,?)",
-        (rec["name"].strip().lower(), rec["old_pubkey"].strip().lower(),
-         rec["new_pubkey"].strip().lower(), rec["issued_at"],
-         rec["signature"].strip().lower(), _now()))
+        "VALUES (?,?,?,?,?,?)", row)
 
 
 def _gossip_new_key_weak(pub) -> bool:
@@ -1770,6 +1783,8 @@ def ingest_gossiped_binding(binding: dict, sender_pub: str | None = None) -> str
             name_fork.ensure_schema(conn)
             if name_fork.is_contested(conn, name):
                 return "contested"
+            if name_fork.is_pin_stale(conn, name):
+                return "pin-stale"
             pin = name_fork.current_pin(conn, name)
             if pin is not None and node_pubkey != pin:
                 return "dropped-pin"
@@ -2165,6 +2180,11 @@ def _delta_out() -> int:
 
 
 NAMES_GOSSIP_BATCH_CAP = 126
+# ROW 3 (Bulwark 35c9c527 / Villhaze 2dcc893c): every rotation cert costs
+# one namefork token before it is normalized. The send half never puts more
+# certs in one POST than one peer's budget, so honest gossip is never a 429.
+NAMEFORK_LIMIT = 32
+NAMEFORK_WINDOW = 60.0
 
 
 def _names_gossip_rotations(names: list, include_unbound: bool = False) -> list:
@@ -2175,18 +2195,30 @@ def _names_gossip_rotations(names: list, include_unbound: bool = False) -> list:
         wanted = list(names)
         if include_unbound:
             extra = [r[0] for r in conn.execute(
-                "SELECT name FROM name_fork_certs").fetchall()]
-            extra += [r[0] for r in conn.execute(
                 "SELECT name FROM name_contested").fetchall()]
-            wanted = list(dict.fromkeys(wanted + extra))
-        return name_fork.gossip_rotations(conn, wanted)[:NAMES_GOSSIP_BATCH_CAP]
+            extra += [r[0] for r in conn.execute(
+                "SELECT name FROM name_fork_certs").fetchall()]
+            wanted = list(dict.fromkeys(extra + wanted))
+        return name_fork.gossip_rotations(conn, wanted)[:NAMEFORK_LIMIT]
+
+
+def _namefork_charge(sender_pub: str) -> None:
+    _check_rate(f"namefork:{str(sender_pub).lower()}",
+                limit=NAMEFORK_LIMIT, window=NAMEFORK_WINDOW)
 
 
 def ingest_names_gossip(body: dict, sender_pub: str) -> dict:
     """Receive half of name gossip: rotation certificates first, then
-    bindings. One accepted rotation per name in this call (one round).
-    Chain depth is never a tiebreak. Overflow fork certs charge the
-    per-peer namefork bucket (F4) outside the database lock."""
+    bindings.
+
+    G0: the namefork bucket is charged once per cert BEFORE any cert is
+    normalized, outside the database lock — a sender past its budget gets
+    a 429 with zero verifies spent. G1 (weak_reason on both keys, then
+    verify) also runs outside the lock. The sender is passed through: a
+    cert never introduces a name, and an unpinned name needs an introducer.
+    One accepted rotation per name per gossip round, held in the DB across
+    calls. Chain depth is never a tiebreak. Overflow fork certs charge the
+    bucket again (F4), also outside the lock."""
     import name_fork
     if not isinstance(body, dict):
         return {"ok": False}
@@ -2194,11 +2226,13 @@ def ingest_names_gossip(body: dict, sender_pub: str) -> dict:
     bindings = body.get("bindings") or []
     if not isinstance(rotations, list) or not isinstance(bindings, list):
         return {"ok": False}
+    prepared = name_fork.prepare_round(
+        rotations, charge=lambda: _namefork_charge(sender_pub))
     with _db_lock, _db() as conn:
-        summary = name_fork.ingest_rotation_round(conn, rotations)
+        summary = name_fork.ingest_rotation_round(conn, prepared, sender_pub)
         overflow_n = int(summary["overflow_n"])
     for _ in range(overflow_n):
-        _check_rate(f"namefork:{str(sender_pub).lower()}", limit=32, window=60.0)
+        _namefork_charge(sender_pub)
     counts = {"ok": True, "inserted": 0, "kept": 0, "replaced": 0,
               "conflict": 0, "contested": 0}
     for binding in bindings:
@@ -2206,6 +2240,8 @@ def ingest_names_gossip(body: dict, sender_pub: str) -> dict:
         counts[outcome] = counts.get(outcome, 0) + 1
     counts["accepted_rotations"] = len(summary["accepted"])
     counts["contested_names"] = sorted(summary["contested"])
+    counts["deferred_names"] = sorted(summary["deferred"])
+    counts["refused_rotations"] = dict(summary["refused"])
     return counts
 
 
