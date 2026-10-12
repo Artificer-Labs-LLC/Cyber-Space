@@ -33,6 +33,10 @@ ART-41 (start cap anchored to open_window):
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import time
 from datetime import datetime, timezone
 
 import core
@@ -61,6 +65,43 @@ _SCHEMA = (
         account TEXT NOT NULL,
         kind TEXT NOT NULL,
         started_at TEXT NOT NULL)""",
+    # Parallel witness log. legacy_migrations stays the bare cap table the
+    # preconditions suite counts. These rows carry seq, prev_hash and the
+    # R2 fields (agent_prev_seq, name_sha256) so a second node can run
+    # legacy_witness.verify_chain without trusting this node's row count.
+    """CREATE TABLE IF NOT EXISTS legacy_log_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        log_id TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS legacy_migration_log (
+        seq INTEGER PRIMARY KEY,
+        prev_hash TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        agent_id INTEGER,
+        agent_prev_seq INTEGER,
+        name_sha256 TEXT,
+        body_sha256 TEXT NOT NULL,
+        entry_hash TEXT NOT NULL,
+        name TEXT,
+        migration_id INTEGER,
+        k0_pub TEXT,
+        detail TEXT NOT NULL,
+        logged_at INTEGER NOT NULL,
+        node_sig TEXT NOT NULL,
+        log_id TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS legacy_imports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        log_id TEXT NOT NULL,
+        k0_pub TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        head_seq INTEGER NOT NULL,
+        imported_at INTEGER NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS legacy_observed_heads (
+        log_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        head_hash TEXT NOT NULL,
+        seen_at INTEGER NOT NULL,
+        PRIMARY KEY (log_id, seq, head_hash))""",
 )
 
 
@@ -282,12 +323,132 @@ def check_start_cap(conn, account: str) -> tuple[bool, str]:
     return True, f"{n}/{MAX_STARTS_PER_ACCOUNT}"
 
 
+def run_admission(verify, write):
+    """Check order for a write route: verify (signature, then weak_reason),
+    then write. A mutant that writes first is how the belt shows a refused
+    request must not leave a row."""
+    verify()
+    return write()
+
+
+def _account_agent_id(account: str) -> int:
+    """Stable positive agent id. 73a08c2 used agents.id; this tree has no
+    legacy agents row, so the id is 63 bits of sha256(account)."""
+    digest = hashlib.sha256(account.encode()).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+
+
+def _ensure_log_id(conn) -> str:
+    row = conn.execute("SELECT log_id FROM legacy_log_meta WHERE id=1").fetchone()
+    if row is not None:
+        return row[0]
+    pinned = os.environ.get("CYBERNET_GENESIS_LOG_ID", "").strip().lower()
+    if len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned):
+        log_id = pinned
+    else:
+        log_id = hashlib.sha256(
+            b"cyberspace-legacy-log/v1\n" + core._NODE_PUB.encode()).hexdigest()
+    conn.execute("INSERT INTO legacy_log_meta (id, log_id) VALUES (1, ?)", (log_id,))
+    return log_id
+
+
+def append_log_entry(conn, *, kind: str, account: str | None = None,
+                     name: str | None = None, migration_id: int | None = None,
+                     k0_pub: str | None = None, detail: dict | None = None) -> dict:
+    """Append one witness-log entry on an open connection. Caller owns the
+    transaction. logged_at is the node clock (unix seconds); an equal stamp
+    is allowed, a backwards clock is refused so verify_chain can succeed."""
+    import legacy_witness as lw
+    if kind not in lw.KINDS:
+        raise ValueError(f"unknown legacy-log kind {kind!r}")
+    init_schema(conn)
+    log_id = _ensure_log_id(conn)
+    prev = conn.execute(
+        "SELECT seq, entry_hash, agent_id, logged_at FROM legacy_migration_log ORDER BY seq DESC LIMIT 1"
+    ).fetchone()
+    seq = 1 if prev is None else int(prev[0]) + 1
+    prev_hash = "none" if prev is None else prev[1]
+    now = int(time.time())
+    if prev is not None and now < int(prev[3]):
+        raise RuntimeError("legacy log clock moved backwards")
+    agent_id = _account_agent_id(account) if account is not None else None
+    agent_prev = None
+    if agent_id is not None:
+        back = conn.execute(
+            "SELECT MAX(seq) FROM legacy_migration_log WHERE agent_id=?", (agent_id,)
+        ).fetchone()
+        if back is not None and back[0] is not None:
+            agent_prev = int(back[0])
+    detail_s = json.dumps(detail or {}, sort_keys=True, separators=(",", ":"))
+    entry = {
+        "seq": seq,
+        "prev_hash": prev_hash,
+        "kind": kind,
+        "agent_id": agent_id,
+        "agent_prev_seq": agent_prev,
+        "name_sha256": lw.name_hash(name),
+        "name": name,
+        "migration_id": migration_id,
+        "k0_pub": k0_pub,
+        "detail": detail_s,
+        "logged_at": now,
+    }
+    # body_hash reads name/migration_id/k0_pub/detail/logged_at.
+    entry["body_sha256"] = lw.body_hash(entry)
+    ehash = lw.entry_hash(entry, log_id)
+    msg = lw.header_bytes(entry, log_id)
+    node_sig = _ed.sign(msg, bytes.fromhex(core._NODE_PRIV), bytes.fromhex(core._NODE_PUB)).hex()
+    conn.execute(
+        """INSERT INTO legacy_migration_log
+           (seq, prev_hash, kind, agent_id, agent_prev_seq, name_sha256,
+            body_sha256, entry_hash, name, migration_id, k0_pub, detail,
+            logged_at, node_sig, log_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (seq, prev_hash, kind, agent_id, agent_prev, entry["name_sha256"],
+         entry["body_sha256"], ehash, name, migration_id, k0_pub, entry["detail"],
+         now, node_sig, log_id))
+    entry["entry_hash"] = ehash
+    return entry
+
+
+def export_log(conn) -> tuple[str, list]:
+    """(log_id, full entries) for legacy_witness.verify_chain. Empty when
+    nothing has been appended."""
+    init_schema(conn)
+    meta = conn.execute("SELECT log_id FROM legacy_log_meta WHERE id=1").fetchone()
+    if meta is None:
+        return "", []
+    rows = conn.execute(
+        """SELECT seq, prev_hash, kind, agent_id, agent_prev_seq, name_sha256,
+                  body_sha256, name, migration_id, k0_pub, detail, logged_at, entry_hash
+           FROM legacy_migration_log ORDER BY seq"""
+    ).fetchall()
+    entries = []
+    for r in rows:
+        entries.append({
+            "seq": r[0], "prev_hash": r[1], "kind": r[2], "agent_id": r[3],
+            "agent_prev_seq": r[4], "name_sha256": r[5], "body_sha256": r[6],
+            "name": r[7], "migration_id": r[8], "k0_pub": r[9], "detail": r[10],
+            "logged_at": r[11], "entry_hash": r[12],
+        })
+    return meta[0], entries
+
+
 def record_start(account: str, kind: str) -> str:
-    """Write one start row or raise StartRefused (409); a refusal writes nothing."""
+    """Write one start row or raise StartRefused (409); a refusal writes nothing.
+
+    On success the same transaction appends a migrate-pending witness-log
+    entry (seq, prev hash, agent_prev_seq, name_sha256). The caller's kind
+    (rotation / recovery) is not a log kind; it is stored in the entry detail.
+    """
     with core._db_lock, core._db() as conn:
         ok, why = check_start_cap(conn, account)
         if not ok:
             raise StartRefused(why)
-        conn.execute("INSERT INTO legacy_migrations (account, kind, started_at) VALUES (?,?,?)",
-                     (account, kind, _now()))
+        started = _now()
+        cur = conn.execute("INSERT INTO legacy_migrations (account, kind, started_at) VALUES (?,?,?)",
+                           (account, kind, started))
+        append_log_entry(conn, kind="migrate-pending", account=account,
+                         migration_id=cur.lastrowid,
+                         detail={"account": account, "start_kind": kind, "started_at": started})
     return why
