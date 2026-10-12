@@ -216,6 +216,33 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client._build_query(0x1, name, 1)
 
+    def _valid_response(self, txid=0x42):
+        q = dns.parse_query(client._build_query(txid, "node.cyberspace", 1))
+        return dns.build_response(
+            q, [(1, 120, socket.inet_aton("10.9.8.7"))], rcode=0
+        )
+
+    def test_parse_response_garbled_question_name_raises_resolve_error(self):
+        resp = bytearray(self._valid_response())
+        resp[12] = 0xFF  # bad label-length bits in the echoed question
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42)
+
+    def test_parse_response_truncated_answer_raises_resolve_error(self):
+        resp = self._valid_response()
+        with self.assertRaises(client.ResolveError):
+            # 12 header + 21 question + only 5 of the 12 answer bytes
+            client._parse_response(resp[:38], 0x42)
+
+    def test_parse_response_truncated_rdata_raises_resolve_error(self):
+        resp = self._valid_response()
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(resp[:-2], 0x42)  # rdata claims 4, holds 2
+
+    def test_parse_response_valid_still_parses(self):
+        flags, answers = client._parse_response(self._valid_response(), 0x42)
+        self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)

@@ -128,19 +128,34 @@ def _parse_response(data: bytes, txid: int) -> tuple[int, list[tuple[int, bytes]
     resp_id, flags, qdcount, ancount, _, _ = struct.unpack(">HHHHHH", data[:12])
     if resp_id != (txid & 0xFFFF):
         raise ResolveError("transaction id mismatch")
-    off = 12
-    for _ in range(qdcount):
-        _, off = _read_name(data, off)
-        off += 4  # qtype + qclass
-    answers: list[tuple[int, bytes]] = []
-    for _ in range(ancount):
-        _, off = _read_name(data, off)
-        rtype, rclass, _ttl, rdlen = struct.unpack_from(">HHIH", data, off)
-        off += 10
-        rdata = data[off : off + rdlen]
-        off += rdlen
-        if rclass == 1 and rtype in (QTYPE_A, QTYPE_AAAA):
-            answers.append((rtype, rdata))
+    # Everything past the header is peer-controlled: a truncated or
+    # garbled question/answer section must surface as ResolveError
+    # (this module's documented malformed-response contract), never as
+    # a leaked ValueError/struct.error from the codec, and an rdata
+    # claiming more bytes than the packet holds must never be sliced
+    # short and trusted downstream.
+    try:
+        off = 12
+        for _ in range(qdcount):
+            _, off = _read_name(data, off)
+            if off + 4 > len(data):
+                raise ResolveError("truncated question")
+            off += 4  # qtype + qclass
+        answers: list[tuple[int, bytes]] = []
+        for _ in range(ancount):
+            _, off = _read_name(data, off)
+            if off + 10 > len(data):
+                raise ResolveError("truncated answer")
+            rtype, rclass, _ttl, rdlen = struct.unpack_from(">HHIH", data, off)
+            off += 10
+            if off + rdlen > len(data):
+                raise ResolveError("truncated rdata")
+            rdata = data[off : off + rdlen]
+            off += rdlen
+            if rclass == 1 and rtype in (QTYPE_A, QTYPE_AAAA):
+                answers.append((rtype, rdata))
+    except (ValueError, struct.error) as exc:
+        raise ResolveError(f"malformed response: {exc}") from exc
     return flags, answers
 
 
