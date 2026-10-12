@@ -36,6 +36,10 @@ Config (environment, bad values degrade to silence, never to a lie):
                            a mirror is a public node. Unset or invalid
                            -> the daemon refuses to start, loudly.)
   CYBERNET_PUBLIC_URL      direct dial URL (optional if relay is set)
+                           — set but not a valid public URL -> the
+                           direct strategy is silently dropped by
+                           _reach_build, so run() warns loudly on
+                           stderr at startup (see _public_url_warnings)
   CYBERNET_RELAY_URL / CYBERNET_RELAY_PUBKEY / CYBERNET_RELAY_TOKEN
                            relay hold-open (optional if direct is set)
                            — all three together or nothing: a
@@ -193,6 +197,25 @@ def _relay_warnings() -> list[str]:
     return problems
 
 
+def _public_url_warnings() -> list[str]:
+    """Loud direct-dial config mistake, or []. Unset means direct dial
+    simply not configured (silent, a choice — relay-only hosting is
+    honest). Set but not a valid public node URL is a mistake
+    core._reach_build hides: it drops the direct strategy, so the
+    descriptor carries relay only (or nothing, and announce fails
+    generically) while the operator believes direct hosting is on.
+    Mirrors _relay_warnings; never prints the value itself."""
+    url = os.environ.get("CYBERNET_PUBLIC_URL", "").strip()
+    if not url:
+        return []
+    try:
+        core._valid_node_url(url)
+        return []
+    except Exception:
+        return ["CYBERNET_PUBLIC_URL is not a valid public node URL "
+                "— direct strategy will not be advertised"]
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
     """Signed POST to the mirror. True on HTTP 200; anything else
     (4xx/5xx/timeout) is silence, never a crash. Never raises."""
@@ -279,6 +302,9 @@ def run() -> int:
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
+
+    for warn in _public_url_warnings():
+        print(f"hostd: direct disabled: {warn}", file=sys.stderr)
 
     relay = _relay_cfg()
     if relay is None:
