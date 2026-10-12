@@ -13,9 +13,14 @@ four days and had no TCP face). (2) **Caddy site addresses need explicit
 `http://`** — the on-disk Caddyfile's bare-IP block had drifted from the
 running config; a restart silently upgraded the IP face to an HTTPS
 redirect. Also: `systemctl reload caddy` cannot reach this instance's
-admin socket — restart the unit instead. Remaining client half: her
-current Windows machine is not wired yet (NRPT rule for the cyberspace
-suffix → 100.86.209.63:5354 is the path; her machine is hers to open).
+admin socket — restart the unit instead. Remaining client half: her machines wire one by one, each on her word.
+**Phone door (2026-10-12, later):** Tailscale split DNS speaks only to
+port 53, so HQ now also runs `cybernet-resolver-dns53.service` — the same
+daemon on 100.86.209.63:**53** (UDP+TCP smoke PASS; firewall opened for
+100.64.0.0/10 and saved). Her remaining step: Tailscale admin console →
+DNS → Add nameserver → Custom `100.86.209.63`, restrict to domain
+`cyberspace`. Windows machine: NRPT rule for the suffix → the same
+address; her machine is hers to open.
 
 When both gates open, run these steps in order. Every step fails closed —
 stop at the first red line and fix it before moving on.
