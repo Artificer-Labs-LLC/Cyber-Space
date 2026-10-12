@@ -9,7 +9,11 @@ Items, each with a belt row and one mutant:
      refused before ingest with no row written, memory capped.
   2. per-peer cap on NEW-name inserts per gossip call; over-cap new
      names are dropped-peer-cap; updates of existing names still apply.
+  3. route check order: size, per-source bucket, envelope verify,
+     known-peer and allowlist, binding-count 400, replay, per-peer
+     bucket, ingest. More than 128 bindings is 400, not a truncation.
 """
+import json
 import os
 import secrets
 import sys
@@ -21,6 +25,7 @@ os.environ["CYBERNET_DB_DIR"] = tempfile.mkdtemp(prefix="names-gossip-hard-")
 os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import core  # noqa: E402
@@ -121,6 +126,32 @@ def detail(resp):
         return resp.json().get("detail")
     except Exception:
         return resp.text
+
+
+def hits(bucket):
+    with core._db_lock:
+        q = core._hits.get(bucket)
+        return 0 if not q else len(q)
+
+
+def call_direct(env, request=None):
+    try:
+        out = federation.fed_names_gossip(env, request)
+        return 200, out
+    except HTTPException as exc:
+        return exc.status_code, exc.detail
+
+
+def flip_hex(h):
+    return ("0" if h[0] != "0" else "1") + h[1:]
+
+
+class _LenReq:
+    """Enough of a Request for the size cap and request_source."""
+
+    def __init__(self, n):
+        self.headers = {"content-length": str(n)}
+        self.client = None
 
 
 def record_mutant(name, row, real_ok, mutant_fails):
@@ -349,6 +380,151 @@ real_ok = (real_outcomes == ["inserted"] * cap + ["dropped-peer-cap"]
 record_mutant("per-peer new-name cap skipped",
               "one extra new name past the cap is not inserted",
               real_ok, mutant_fails)
+
+# --------------------------------------------------------- check order
+print("check order:")
+federation._gossip_seen.clear()
+reset_hits()
+saved_limit = federation.FED_SOURCE_LIMIT
+peer_bucket = f"fednamesgossip:{sender_pub}"
+
+federation.FED_SOURCE_LIMIT = 1
+try:
+    huge = {"pad": "x" * (federation.NAMES_GOSSIP_BODY_CAP + 1)}
+    status, why = call_direct(huge)
+    one = mint("sizecheck", secrets.token_hex(32))
+    env128 = gossip_env(sender_priv, sender_pub, [one] * 128)
+    wire = len(json.dumps(env128).encode("utf-8"))
+    check("a 128-binding envelope is under the size cap",
+          wire < federation.NAMES_GOSSIP_BODY_CAP, wire)
+    nxt, out = call_direct(env128)
+    check("oversize -> 413 and does not spend the per-source token",
+          status == 413 and why == "Request body too large"
+          and nxt == 200 and out.get("outcomes", [None])[0] == "inserted",
+          (status, why, nxt, out if isinstance(out, str) else out.get("outcomes", [])[:2]))
+finally:
+    federation.FED_SOURCE_LIMIT = saved_limit
+
+reset_hits()
+federation._gossip_seen.clear()
+federation.FED_SOURCE_LIMIT = 1
+try:
+    status, why = call_direct({"v": "tiny-but-claimed-huge"},
+                              _LenReq(federation.NAMES_GOSSIP_BODY_CAP + 10))
+    follow = mint("clenfollow", secrets.token_hex(32))
+    nxt, out = call_direct(gossip_env(sender_priv, sender_pub, [follow]),
+                           _LenReq(100))
+    check("lying Content-Length -> 413 before the source bucket",
+          status == 413 and why == "Request body too large"
+          and nxt == 200 and isinstance(out, dict)
+          and out.get("outcomes") == ["inserted"],
+          (status, why, nxt, out if isinstance(out, str) else str(out)[:200]))
+finally:
+    federation.FED_SOURCE_LIMIT = saved_limit
+
+reset_hits()
+federation._gossip_seen.clear()
+federation.FED_SOURCE_LIMIT = 1
+try:
+    spent = mint("sourcespent", secrets.token_hex(32))
+    ok_status, _ok = call_direct(gossip_env(sender_priv, sender_pub, [spent]))
+    bad_status, bad_why = call_direct({"v": "not-an-envelope"})
+    check("source bucket exhausted -> 429 even for an invalid envelope",
+          ok_status == 200 and bad_status == 429 and bad_status != 400,
+          (ok_status, bad_status, bad_why))
+finally:
+    federation.FED_SOURCE_LIMIT = saved_limit
+
+reset_hits()
+federation._gossip_seen.clear()
+stranger_priv, stranger_pub = node_key()
+bad_env = gossip_env(stranger_priv, stranger_pub,
+                     [mint("strangername", secrets.token_hex(32))])
+bad_env["sig"] = flip_hex(bad_env["sig"])
+r = post(bad_env)
+check("bad signature from an unknown sender -> 400, not 404",
+      r.status_code == 400 and detail(r) == "invalid envelope",
+      (r.status_code, detail(r)))
+
+os.environ["CYBERNET_PEER_ALLOWLIST"] = sender_pub
+try:
+    unk = gossip_env(stranger_priv, stranger_pub,
+                     [mint("unkallow", secrets.token_hex(32))])
+    r = post(unk)
+    check("unknown sender with the allowlist set -> 404, not 403",
+          r.status_code == 404 and detail(r) == "unknown peer",
+          (r.status_code, detail(r)))
+finally:
+    os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+
+reset_hits()
+federation._gossip_seen.clear()
+os.environ["CYBERNET_PEER_ALLOWLIST"] = "ab" * 32
+held = mint("allowheld", secrets.token_hex(32))
+held_env = gossip_env(sender_priv, sender_pub, [held])
+try:
+    r = post(held_env)
+    refused = (r.status_code == 403
+               and "allowlist" in (detail(r) or ""))
+    untouched = hits(peer_bucket) == 0 and binding_row("allowheld") is None
+finally:
+    os.environ.pop("CYBERNET_PEER_ALLOWLIST", None)
+r2 = post(held_env)
+check("unlisted peer -> 403 without spending the per-peer bucket or the seen-set",
+      refused and untouched and r2.status_code == 200
+      and r2.json().get("outcomes") == ["inserted"],
+      (r.status_code, detail(r), hits(peer_bucket), r2.status_code, r2.text[:200]))
+
+reset_hits()
+federation._gossip_seen.clear()
+filler = mint("orderfill", secrets.token_hex(32))
+codes = [post(gossip_env(sender_priv, sender_pub, [filler])).status_code
+         for _ in range(core.RATE_LIMIT)]
+blocked = mint("orderblocked", secrets.token_hex(32))
+r = post(gossip_env(sender_priv, sender_pub, [blocked]))
+check("per-peer bucket exhausted -> 429 and the new name is not written",
+      codes == [200] * core.RATE_LIMIT and r.status_code == 429
+      and binding_row("orderblocked") is None,
+      (codes[:3], codes[-1:], r.status_code, detail(r)))
+
+# The per-peer bucket is still exhausted. The binding-count gate is
+# earlier, so 129 bindings are 400 rather than 429, and nothing is written.
+many = [mint(f"over{i:03d}", secrets.token_hex(32))
+        for i in range(federation.NAMES_GOSSIP_RECV_CAP + 1)]
+r = post(gossip_env(sender_priv, sender_pub, many))
+none_written = (binding_row(many[0]["name"]) is None
+                and binding_row(many[-1]["name"]) is None)
+over_real_ok = (r.status_code == 400
+                and detail(r) == f"bindings exceed {federation.NAMES_GOSSIP_RECV_CAP}"
+                and none_written)
+check(">128 bindings -> 400 before the per-peer bucket, no row written",
+      over_real_ok, (r.status_code, detail(r), none_written))
+
+reset_hits()
+exact = mint("exact128", secrets.token_hex(32))
+r = post(gossip_env(sender_priv, sender_pub, [exact] * federation.NAMES_GOSSIP_RECV_CAP))
+check("exactly 128 bindings -> 200",
+      r.status_code == 200 and r.json().get("outcomes", [None])[0] == "inserted"
+      and len(r.json().get("outcomes", [])) == 128
+      and binding_row("exact128") is not None,
+      (r.status_code, r.text[:200]))
+
+print("mutant binding cap:")
+federation._gossip_seen.clear()
+reset_hits()
+real_too_many = federation._too_many_bindings
+mut_names = [mint(f"mutover{i:03d}", secrets.token_hex(32))
+             for i in range(federation.NAMES_GOSSIP_RECV_CAP + 1)]
+federation._too_many_bindings = lambda count: False
+try:
+    mutant = post(gossip_env(sender_priv, sender_pub, mut_names))
+    mutant_fails = (mutant.status_code == 200
+                    and binding_row(mut_names[0]["name"]) is not None)
+finally:
+    federation._too_many_bindings = real_too_many
+record_mutant("binding-count gate skipped",
+              "129 bindings are refused before any row is written",
+              over_real_ok, mutant_fails)
 
 print("mutant results:")
 for name, row, real_ok, mutant_fails in MUTANTS:

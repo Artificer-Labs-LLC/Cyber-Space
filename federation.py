@@ -306,6 +306,38 @@ def _allow_new_name(inserted_so_far: int) -> bool:
     return inserted_so_far < NAMES_GOSSIP_NEW_CAP
 
 
+# A full 128-binding envelope is tens of kilobytes. 256KiB rejects a
+# padded body before the per-source bucket is charged, and still accepts
+# a legitimate batch.
+NAMES_GOSSIP_BODY_CAP = 256 * 1024
+
+
+def _gossip_body_too_large(env, request) -> bool:
+    """True when the claimed Content-Length or the parsed body exceeds the
+    route cap. An oversize post must not spend a per-source token."""
+    if request is not None:
+        raw = request.headers.get("content-length")
+        if raw is not None and str(raw).strip() != "":
+            try:
+                claimed = int(raw)
+            except (TypeError, ValueError):
+                return True
+            if claimed > NAMES_GOSSIP_BODY_CAP:
+                return True
+    try:
+        size = len(json.dumps(env).encode("utf-8"))
+    except (TypeError, ValueError):
+        return True
+    return size > NAMES_GOSSIP_BODY_CAP
+
+
+def _too_many_bindings(count: int) -> bool:
+    """True when the envelope carries more bindings than this route folds.
+    The route answers 400; it does not truncate. Patchable by the
+    check-order mutant."""
+    return count > NAMES_GOSSIP_RECV_CAP
+
+
 # Replay seen-set (ART-29 d9ff58e3). Keyed on (sender_pub, envelope sig),
 # not the sig alone: two senders never share a replay slot. An envelope
 # minted at the future edge of MAX_SKEW_SEC still verifies 2×MAX_SKEW_SEC
@@ -356,38 +388,46 @@ def fed_names_gossip(env: dict, request: Request = None):
     """Name-bindings gossip receive half (docs/FEDERATION.md).
 
     Check order, fail-closed, no existing gate weakened:
-      1. Per-source sybil cap (`src:fed:<source>`, 4× RATE_LIMIT / 60s)
-         before signature verification or any database read.
-      2. Envelope is a dict and `verify_envelope` accepts it, else 400
-         "invalid envelope".
-      3. Recipient is this node's pubkey, else 400
-         "not addressed to this node".
-      4. Body is a dict, else 400 "invalid envelope".
-      5. `body.from_node_pub` equals the verified sender_pub, else 400
-         "sender_pub mismatch".
-      6. Per-sender rate limit (`fednamesgossip:<sender_pub>`, default
-         RATE_LIMIT / RATE_WINDOW).
-      7. Sender is a known unretired peer, else 404 "unknown peer"
-         (a retired row is the same refusal as a stranger).
-      8. Operator allowlist, if CYBERNET_PEER_ALLOWLIST is set:
-         `_pal.require(sender_pub, "/fed/names/gossip")`.
-      9. `body.bindings` is a list, else 400 "bindings must be a list".
-     10. Replay: `(sender_pub, sig)` already seen within 2×MAX_SKEW is
-         400 "replay" before any ingest, and no binding row is written.
-         The seen-set is pruned to that horizon and capped.
-     11. Fold at most 128 bindings through `ingest_gossiped_binding`
-         only. The route does not pre-verify the claimant signature;
-         ingest re-verifies it fail-closed. Bindings past the cap are
-         not processed and not counted. At most NAMES_GOSSIP_NEW_CAP
+      1. Request size cap (Content-Length and serialized body,
+         NAMES_GOSSIP_BODY_CAP). Oversize is 413 "Request body too large"
+         and does not spend a per-source token.
+      2. Per-source sybil cap (`src:fed:<source>` via request_source,
+         4× RATE_LIMIT / 60s; "direct" when request is None) before
+         signature verification or any database read.
+      3. Envelope verify: `verify_envelope` (version, signature, skew,
+         body hash) else 400 "invalid envelope"; recipient is this
+         node's pubkey else 400 "not addressed to this node"; body is a
+         dict else 400 "invalid envelope"; `body.from_node_pub` equals
+         the verified sender_pub else 400 "sender_pub mismatch".
+      4. Sender is a known unretired peer, else 404 "unknown peer"
+         (a retired row is the same refusal as a stranger). Then the
+         operator allowlist, if CYBERNET_PEER_ALLOWLIST is set:
+         `_pal.require(sender_pub, "/fed/names/gossip")` (403).
+      5. `body.bindings` is a list, else 400 "bindings must be a list".
+         More than NAMES_GOSSIP_RECV_CAP bindings is 400
+         "bindings exceed {cap}" — the route does not truncate, and it
+         does not ingest or charge the per-peer bucket.
+      6. Replay: `(sender_pub, sig)` already seen within 2×MAX_SKEW is
+         400 "replay" before the per-peer bucket and before any ingest.
+         A replay writes no row and does not spend a rate token.
+      7. Per-peer bucket (`fednamesgossip:<sender_pub>`, one charge per
+         call, RATE_LIMIT / RATE_WINDOW). A 429 does not record the
+         envelope, so the sender can retry it.
+      8. Record the envelope in the seen-set, then fold each binding
+         through `ingest_gossiped_binding`. At most NAMES_GOSSIP_NEW_CAP
          of those folds may INSERT a name that was not already in the
          registry (`_allow_new_name`); further new names are
          dropped-peer-cap. Updates of existing names are not charged.
+         The route does not pre-verify the claimant signature; ingest
+         re-verifies it fail-closed.
 
     Returns inserted / replaced / kept / dropped / conflict plus the
     per-binding outcome list. `dropped` counts every ingest result that
     is not inserted, replaced, kept, or conflict (malformed, unverifiable,
-    expired, stale, over-cap, full, weak).
+    expired, stale, over-cap, full, weak, peer-cap).
     """
+    if _gossip_body_too_large(env, request):
+        raise HTTPException(status_code=413, detail="Request body too large")
     _charge_fed_source(request)
     if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
         raise HTTPException(status_code=400, detail="invalid envelope")
@@ -399,7 +439,6 @@ def fed_names_gossip(env: dict, request: Request = None):
     sender_pub = env.get("sender_pub")
     if body.get("from_node_pub") != sender_pub:
         raise HTTPException(status_code=400, detail="sender_pub mismatch")
-    _check_rate(f"fednamesgossip:{sender_pub}")
     with _db_lock, _db() as conn:
         known = conn.execute(
             "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
@@ -410,14 +449,20 @@ def fed_names_gossip(env: dict, request: Request = None):
     bindings = body.get("bindings")
     if not isinstance(bindings, list):
         raise HTTPException(status_code=400, detail="bindings must be a list")
-    # Before any ingest. A replay writes nothing, including no second merge.
+    if _too_many_bindings(len(bindings)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"bindings exceed {NAMES_GOSSIP_RECV_CAP}")
+    # Before the per-peer bucket and before any ingest. A replay writes
+    # nothing and does not spend a rate token.
     if _gossip_is_replay(sender_pub, env.get("sig", "")):
         raise HTTPException(status_code=400, detail="replay")
+    _check_rate(f"fednamesgossip:{sender_pub}")
     _gossip_mark_seen(sender_pub, env.get("sig", ""))
     inserted = replaced = kept = conflict = dropped = 0
     outcomes = []
     new_inserts = 0
-    for binding in bindings[:NAMES_GOSSIP_RECV_CAP]:
+    for binding in bindings:
         outcome = ingest_gossiped_binding(
             binding, allow_new=_allow_new_name(new_inserts))
         outcomes.append(outcome)

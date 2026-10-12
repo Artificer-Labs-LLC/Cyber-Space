@@ -248,11 +248,20 @@ check("bindings not a list -> 400",
       (r.status_code, detail(r)))
 
 # ---------------------------------------------------------------- cap 128
+# Hardening: more than 128 bindings is 400 with nothing folded. Exactly
+# 128 is still accepted (one insert, the rest kept).
 capped = mint("capname", secrets.token_hex(32))
 past = mint("capextra", secrets.token_hex(32))
 r = post(gossip_env(sender_priv, sender_pub, [capped] * 128 + [past]))
+check(">128 bindings -> 400, nothing folded",
+      r.status_code == 400
+      and detail(r) == f"bindings exceed {federation.NAMES_GOSSIP_RECV_CAP}"
+      and binding_row("capname")[0] is None
+      and binding_row("capextra")[0] is None,
+      (r.status_code, detail(r)))
+r = post(gossip_env(sender_priv, sender_pub, [capped] * 128))
 body = r.json()
-check(">128 bindings capped at 128 (call accepted, extra not folded)",
+check("exactly 128 bindings accepted",
       r.status_code == 200 and len(body.get("outcomes", [])) == 128
       and body["outcomes"][0] == "inserted"
       and body["outcomes"][1:] == ["kept"] * 127
