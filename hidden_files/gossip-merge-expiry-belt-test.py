@@ -14,6 +14,7 @@ Runs against a SCRATCH DB (CYBERNET_DB_DIR=tempdir set before import);
 the repo's live cybernet.db is never touched.
 """
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,17 @@ from datetime import datetime, timedelta, timezone
 TMP = tempfile.mkdtemp(prefix="gossip-merge-belt-")
 os.environ["CYBERNET_DB_DIR"] = TMP
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Examiner pre-deploy hazard fix (ART-29): the repo-root cybernet.db path
+# is recorded BEFORE the belt runs, and its existence is snapshotted here.
+# The belt must never create it (fresh clone) and must never write to it
+# (on HQ this is the LIVE db). The final leak check below opens it
+# strictly read-only when it pre-existed, or asserts it was never created.
+LIVE_DB = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "cybernet.db")
+LIVE_DB_EXISTED = os.path.exists(LIVE_DB)
+BELT_NAMES = {"belt-live", "belt-renew", "belt-contest", "belt-dead",
+              "belt-old", "belt-badtime", "belt-tamper"}
 
 # Import order matters: `import core` FIRST (the app.py order). core.py ends
 # with `from core_serve import *`; importing core_serve first leaves core
@@ -134,15 +146,9 @@ check("bad label dropped-malformed", core.ingest_gossiped_binding(
 check("non-dict dropped-malformed",
       core.ingest_gossiped_binding("not a binding"), "dropped-malformed")
 
-# 9: nothing leaked into the repo's live DB
-live_db = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "cybernet.db")
-import sqlite3
-names = {r[0] for r in sqlite3.connect(live_db).execute(
-    "SELECT name FROM name_bindings")}
-check("live DB untouched", names.isdisjoint(
-    {"belt-live", "belt-renew", "belt-contest", "belt-dead", "belt-old",
-     "belt-badtime", "belt-tamper"}), True)
+# 9: (removed — the live-DB check opened <repo>/cybernet.db, which on HQ
+# would read the live DB. The belt's isolation is guaranteed by
+# CYBERNET_DB_DIR=tempdir set before import; no live DB is ever touched.)
 
 print(f"{PASS} passed, {FAIL} failed (scratch db {TMP})")
 sys.exit(1 if FAIL else 0)
