@@ -705,6 +705,23 @@ def init_db() -> None:
             accepted_at TEXT NOT NULL,
             PRIMARY KEY (name, old_pubkey, new_pubkey)
         );
+        -- r3 (Bulwark High, ART-29): conflict records. When a live foreign
+        -- incumbent keeps a name against a challenger, the rejected claim is
+        -- logged here — an audit trail, not a queue. Mirrors never act on
+        -- these rows; they exist so operators can see steal attempts.
+        -- Append-only: rows are never updated or deleted by the mirror.
+        CREATE TABLE IF NOT EXISTS name_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            incumbent_pubkey TEXT NOT NULL,
+            incumbent_issued_at TEXT NOT NULL,
+            challenger_pubkey TEXT NOT NULL,
+            challenger_issued_at TEXT NOT NULL,
+            challenger_expires_at TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_name_conflicts_name ON name_conflicts(name);
         """)
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'")

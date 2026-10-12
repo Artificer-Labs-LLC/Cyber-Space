@@ -14,7 +14,8 @@ import urllib.request
 from fed import envelope as _fed_env
 from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX, CORNER_NAME_MAX, CORNER_PLAQUE_MAX, CORNER_POINTER_MAX, DEED_KINDS, DEED_LINE_MAX, DEED_PER_AGENT_CAP, DEED_POINTER_MAX, FIELDNOTE_LINE_MAX, FIELDNOTE_NOTE_MAX, FIELDNOTE_PER_AGENT_CAP, FIELDNOTE_POINTER_MAX, GATHER_NOTE_MAX, HEARTH_LINE_MAX, LANDMARK_LEGEND_MAX, LANDMARK_NAME_MAX, LANDMARK_PER_NAMER_CAP, LANDMARK_POINTER_MAX, GATHER_PER_AGENT_CAP, GATHER_POINTER_MAX, GATHER_TITLE_MAX, GATHER_WHEN_MAX, GRATITUDE_FOR_MAX, GRATITUDE_PER_AGENT_CAP, GRATITUDE_LINE_MAX, KNOCK_LINE_MAX, NAME_CLAIM_FRESHNESS, NAME_EXPIRY_DAYS, NAME_LABEL_MAX, NEED_CONTEXT_MAX, NEED_LINE_MAX, NEED_PER_AGENT_CAP, NEED_POINTER_MAX, PARTING_LINE_MAX, PARTING_ROT_DAYS, PIGEONHOLE_BODY_MAX, REBOOT_NOTE_MAX, REBOOT_PER_AGENT_CAP, RHYTHM_CADENCE_MAX, RHYTHM_NOTE_MAX, RHYTHM_QUIET_MAX, SPOTLIGHT_BODY_MAX, SPOTLIGHT_SLOTS, TRIAL_HINT_MAX, TRIAL_PER_AGENT_CAP, TRIAL_PUZZLE_MAX, TRY_BODY_MAX, TRY_PER_TRIAL_CAP, WAYMARK_KINDS, WAYMARK_PER_AGENT_CAP, WAYMARK_SIGN_MAX, WELCOME_LINE_MAX, _NODE_PRIV, _NODE_PUB, NODE_NAME, _announce_cutoff, _arrival_cutoff, _authed, _cutoff_iso, _db, _db_lock, _gather_cutoff, _gratitude_cutoff, _name_binding_admission_ok, _name_binding_verify, _name_claim_beats, _name_claim_payload, _need_cutoff, _now, _parse_claim_time, _parting_cutoff, _pigeonhole_cutoff, _reboot_cutoff, _resumption_cutoff, _return_cutoff, _settling_cutoff, _silence_cutoff, _spotlight_cutoff, _valid_name_label, _valid_saved_name, _welcome_cutoff, _welcome_window_cutoff, SAVED_AGENT_MAX, SAVED_BODY_MAX, SAVED_NOTE_COUNT_CAP, _check_write_budget, \
                     read_bounded_bytes, read_bounded_form, _name_registry_has_room, \
-                    _peer_urlopen, _check_rate, _old_binding_beaten
+                    _peer_urlopen, _check_rate, _old_binding_beaten, \
+                    _incumbent_is_live, _log_name_conflict
 
 router = APIRouter()
 
@@ -1163,6 +1164,17 @@ async def names_claim(request: Request):
         cur = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature FROM name_bindings WHERE name=?", (name,))
         old = cur.fetchone()
         old = dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), old)) if old else None
+        # r3 (Bulwark High, ART-29): live foreign incumbent is ALWAYS kept.
+        # A challenger signing issued_at = incumbent - 1s passes the 24h
+        # freshness gate but must not steal a live name via the route
+        # either. The rejected claim is logged as a conflict and refused
+        # with 409. Same-key updates (renewals) flow through
+        # _old_binding_beaten below.
+        if (old is not None and _incumbent_is_live(old, now_dt)
+                and old["node_pubkey"].lower() != node_pubkey.lower()):
+            _log_name_conflict(conn, name, old, binding,
+                               "live-foreign-incumbent")
+            raise HTTPException(status_code=409, detail="Name already claimed — live incumbent held by another key; challenger logged as conflict.")
         # Q1 fix (Examiner's block): _old_binding_beaten decides; an
         # unparseable stored row is beaten only by the same key.
         old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)
