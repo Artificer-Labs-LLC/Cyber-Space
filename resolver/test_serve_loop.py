@@ -257,6 +257,23 @@ def main():
         check("tcp-only bind failure: half-bound UDP socket was closed",
               False, repr(exc))
     rebind.close()
+
+    # B3: port above 65535 — _env_int honors it (the config warning
+    # predicts the bind will fail) but bind() raises OverflowError,
+    # not OSError. run() must still refuse loudly and return.
+    os.environ["CYBERNET_RESOLVER_PORT"] = "70000"
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            daemon.run()
+        check("oversize port: run() returned, never raised", True)
+    except Exception as exc:  # noqa: BLE001 — the contract is the test
+        check("oversize port: run() returned, never raised", False,
+              repr(exc))
+    check("oversize port: refusal names the bind on stderr",
+          "refusing to start" in err.getvalue()
+          and "cannot bind" in err.getvalue(),
+          f"stderr={err.getvalue()!r}")
     os.environ["CYBERNET_RESOLVER_PORT"] = "5353"
 
     # Phase C: signal registration fails (ValueError — run() called

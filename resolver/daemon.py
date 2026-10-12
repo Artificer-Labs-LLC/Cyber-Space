@@ -269,13 +269,18 @@ def run() -> None:
         tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         tsock.bind((bind_host, port))
         tsock.listen(_TCP_BACKLOG)
-    except OSError as exc:
+    except (OSError, OverflowError) as exc:
         # The bind is the one step run() cannot degrade past: the port
         # is taken (a second resolverd — an install re-run beside a
         # stale daemon is the common case) or the address is not local.
-        # Refuse loudly and return, per the never-raises contract:
-        # a raw traceback under systemd reads as a crash loop, and a
-        # half-bound pair (UDP bound, TCP refused) must not leak.
+        # OverflowError rides along: a port above 65535 is honored by
+        # _env_int (the config warnings say the bind will fail) but
+        # bind() raises OverflowError for it, NOT OSError — uncaught,
+        # it broke the never-raises contract exactly where the warning
+        # predicted failure. Refuse loudly and return: a raw traceback
+        # under systemd reads as a crash loop, and a half-bound pair
+        # (UDP bound, TCP refused) must not leak. (getattr: OverflowError
+        # carries no .strerror.)
         for sock in (usock, tsock):
             if sock is not None:
                 try:
@@ -283,8 +288,9 @@ def run() -> None:
                 except OSError:
                     pass
         print(f"resolverd: refusing to start: cannot bind "
-              f"{bind_host}:{port} ({exc.strerror or exc}) — is "
-              f"another resolverd already running?", file=sys.stderr)
+              f"{bind_host}:{port} ({getattr(exc, 'strerror', None) or exc})"
+              f" — is another resolverd already running?",
+              file=sys.stderr)
         return
     running = True
 
