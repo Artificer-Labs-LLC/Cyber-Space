@@ -13,7 +13,9 @@ Convergence that this path does guarantee:
 - the holder's own later re-sign (same key) lands on every mirror,
   whichever order the two bindings arrive in;
 - once a diverged mirror's incumbent is no longer live, propagating the
-  other still-fresh claim replaces the dead row and the mirrors agree.
+  other still-fresh claim replaces the dead row and the mirrors agree;
+- a key transfer converges when the stored key's rotation record
+  designates the successor. A bare foreign claim still conflicts.
 A key transfer is not a timestamp win. This belt does not treat a T-1s
 earlier challenger as the legitimate successor.
 
@@ -31,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core  # noqa: E402
 import core_serve  # noqa: E402
+import rotate_name  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
 
 PASS = FAIL = 0
@@ -261,6 +264,65 @@ check("case5: fresh claim replaces the dead divergent row",
       core.ingest_gossiped_binding(claim_early), "replaced")
 check("case5: mirrors converge once the live incumbent is gone",
       winner_of("mirror-early"), winner_A)
+
+# --- Case 6: rotation transfer converges; a timestamp does not ---
+# Both mirrors hold the same key. A bare foreign claim conflicts. The
+# same claim carrying the holder's rotation record replaces on both,
+# and the hop is stored. A stranger's rotation does not displace.
+k_hold6 = os.urandom(32).hex()
+k_next = os.urandom(32).hex()
+pub_hold6 = _ed.publickey(bytes.fromhex(k_hold6)).hex()
+pub_next = _ed.publickey(bytes.fromhex(k_next)).hex()
+hold_claim = mint("mirror-xfer", k_hold6,
+                  iso_z(NOW - timedelta(minutes=10)), expires)
+rot_issued = iso_z(NOW - timedelta(minutes=2))
+bind_issued = iso_z(NOW - timedelta(minutes=1))
+rotation = rotate_name.mint_rotation(
+    "mirror-xfer", bytes.fromhex(k_hold6), pub_next, rot_issued)
+xfer = mint("mirror-xfer", k_next, bind_issued, expires)
+xfer["rotation"] = rotation
+bare = mint("mirror-xfer", k_next, bind_issued, expires)
+
+mG = make_mirror("mG")
+use_mirror(mG)
+check("mG: holder inserts", core.ingest_gossiped_binding(hold_claim),
+      "inserted")
+check("mG: bare foreign claim stays conflict",
+      core.ingest_gossiped_binding(bare), "conflict")
+check("mG: holder still in place before rotation",
+      winner_of("mirror-xfer"), pub_hold6)
+check("mG: rotation transfer replaces",
+      core.ingest_gossiped_binding(xfer), "replaced")
+winner_G = winner_of("mirror-xfer")
+
+mH = make_mirror("mH")
+use_mirror(mH)
+check("mH: holder inserts", core.ingest_gossiped_binding(hold_claim),
+      "inserted")
+check("mH: rotation transfer replaces",
+      core.ingest_gossiped_binding(xfer), "replaced")
+winner_H = winner_of("mirror-xfer")
+
+check("case6: both mirrors converge on the successor", winner_G, winner_H)
+check("case6: successor is the designated key", winner_G, pub_next)
+with core._db_lock, core._db() as conn:
+    hop = conn.execute(
+        "SELECT old_pubkey, new_pubkey FROM name_rotations WHERE name=?",
+        ("mirror-xfer",)).fetchone()
+check("case6: rotation hop stored",
+      (hop[0], hop[1]) if hop else None, (pub_hold6, pub_next))
+
+k_stranger = os.urandom(32).hex()
+bad_rot = rotate_name.mint_rotation(
+    "mirror-xfer", bytes.fromhex(k_stranger), pub_early,
+    iso_z(NOW - timedelta(minutes=1)))
+squat = mint("mirror-xfer", k_early,
+             iso_z(NOW - timedelta(seconds=30)), expires)
+squat["rotation"] = bad_rot
+check("case6: foreign rotation does not displace the successor",
+      core.ingest_gossiped_binding(squat), "conflict")
+check("case6: successor still holds after foreign rotation",
+      winner_of("mirror-xfer"), pub_next)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

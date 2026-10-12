@@ -1017,6 +1017,45 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
     return True
 
 
+def _gossiped_transfer_records(binding, name, stored_pubkey, new_pubkey,
+                               binding_issued_at):
+    """Rotation proof that may succeed a live foreign incumbent.
+
+    Returns the verified record list when the stored key designated this
+    challenger (chain, else a single hop), else None. An earlier issued_at
+    is not a transfer — only the stored key's own signature is. A live
+    foreign incumbent is never displaced via _name_claim_beats.
+    """
+    if not isinstance(binding, dict):
+        return None
+    chain = binding.get("rotation_chain")
+    if _gossiped_rotation_chain_designates(
+            chain, name, stored_pubkey, new_pubkey, binding_issued_at):
+        return [r for r in chain if isinstance(r, dict)]
+    record = binding.get("rotation")
+    if _gossiped_rotation_designates(
+            record, name, stored_pubkey, new_pubkey, binding_issued_at):
+        return [record]
+    return None
+
+
+def _persist_rotation_records(conn, records):
+    """Store verified rotation hops. Insert-ignore: a replay of the same
+    designation does not duplicate the point-event history."""
+    accepted_at = _now()
+    for rec in records:
+        conn.execute(
+            "INSERT OR IGNORE INTO name_rotations "
+            "(name, old_pubkey, new_pubkey, issued_at, signature, accepted_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(rec["name"]).strip().lower(),
+             str(rec["old_pubkey"]).strip().lower(),
+             str(rec["new_pubkey"]).strip().lower(),
+             rec["issued_at"],
+             str(rec["signature"]).strip().lower(),
+             accepted_at))
+
+
 CYBERSPACE_SUFFIX = ".cyberspace"
 _RESOLVE_TIMEOUT = 8  # seconds — same outbound budget as the rest of core.py
 
@@ -1617,8 +1656,10 @@ def ingest_gossiped_binding(binding: dict) -> str:
     older than NAME_CLAIM_FRESHNESS (24h) or dated in the future is
     dropped — the originator re-signs fresh (ART-29 ruling a). An
     uncontested admissible name is inserted. A live foreign incumbent
-    is always kept: a different key never displaces it, the challenger
-    is logged, and the call returns "conflict". Same-key renewals and
+    is kept: a different key never displaces it via _name_claim_beats,
+    the challenger is logged, and the call returns "conflict". A
+    transfer replaces that incumbent only when the stored key's rotation
+    record (or chain) designates the challenger. Same-key renewals and
     expired incumbents go through _old_binding_beaten. Expiry is
     CHRONOLOGICAL (_parse_claim_time), never lexicographic: a
     "+05:00"-stamped hours-dead binding sorts AFTER a "+00:00" now as
@@ -1691,22 +1732,29 @@ def ingest_gossiped_binding(binding: dict) -> str:
             old = {"name": name, "node_pubkey": row[0],
                    "issued_at": row[1], "expires_at": row[2]}
             # ART-29 ruling (a) (security outranks convergence): a live
-            # foreign incumbent is ALWAYS kept. A different key never
-            # displaces it — not by an earlier issued_at, not by a T-1s
-            # backdate that still passes the 24h freshness gate. The
-            # rejected claim is logged as a conflict. There is no
-            # displaced-by-earlier-claim handover of a live foreign row.
-            # Same-key updates (renewals) flow through _old_binding_beaten.
-            if (_incumbent_is_live(old, now_dt)
-                    and old["node_pubkey"].lower() != node_pubkey.lower()):
+            # foreign incumbent is kept. A different key never displaces
+            # it via _name_claim_beats — not by an earlier issued_at, not
+            # by a T-1s backdate that still passes the 24h freshness
+            # gate. The rejected claim is logged as a conflict. There is
+            # no displaced-by-earlier-claim handover. A transfer converges
+            # only when the stored key's rotation record designates the
+            # challenger. Same-key renewals flow through _old_binding_beaten.
+            same_key = old["node_pubkey"].lower() == node_pubkey.lower()
+            transfer = None if same_key else _gossiped_transfer_records(
+                binding, name, old["node_pubkey"], node_pubkey, issued_at)
+            if (_incumbent_is_live(old, now_dt) and not same_key
+                    and transfer is None):
                 _log_name_conflict(conn, name, old, new,
                                    "live-foreign-incumbent")
                 return "conflict"
-            if _old_binding_beaten(old, new, node_pubkey, now_dt):
+            if transfer is not None or _old_binding_beaten(
+                    old, new, node_pubkey, now_dt):
                 conn.execute(
                     "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
                     " expires_at=?, signature=? WHERE name=?",
                     (node_pubkey, issued_at, expires_at, signature, name))
+                if transfer is not None:
+                    _persist_rotation_records(conn, transfer)
                 return "replaced"
             return "kept"
     except Exception:
