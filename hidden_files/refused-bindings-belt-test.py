@@ -66,7 +66,7 @@ rows = [
     row("edge-ok-1", None),                   # 5 expiry-cap NULL
     row("edge-ok-1", (NOW + timedelta(days=30)).strftime("%Y-%m-%d")),          # 6 expiry-cap date-only
     row("notinmanifest"),                     # 7 not-in-manifest (valid shape)
-    row("a_"),                                # 8 length+grammar -> length wins
+    row("a_"),                                # 8 length+grammar -> grammar wins (B1: grammar before length, spec §7.3.9)
 ]
 
 holds, refused = rb.snapshot_refused_bindings(rows, MANIFEST)
@@ -81,7 +81,7 @@ check("one leaf per refused binding", len(refused) == 8,
 reasons = [r for _, r in refused]
 check("reasons in input order",
       reasons == ["grammar", "length", "length", "expiry-cap", "expiry-cap",
-                  "expiry-cap", "not-in-manifest", "length"],
+                  "expiry-cap", "not-in-manifest", "grammar"],
       f"got {reasons}")
 
 print("leaf bytes")
