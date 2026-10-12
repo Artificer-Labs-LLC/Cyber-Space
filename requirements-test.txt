@@ -1,2 +1,2 @@
 -r requirements.txt
-httpx>=0.28  # required by fastapi.testclient (belt tests only, not runtime)
+httpx==0.28.1  # required by fastapi.testclient (belt tests only, not runtime)
