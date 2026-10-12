@@ -62,7 +62,9 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
       // lead line. Shared truncateEcho bounds it; taxonomy is untouched
       // (classifyResolveError ran on the raw error above, and the bridge
       // itself is never classified).
-      bridge = truncateEcho(await getDohUrl());
+      // Scrub basic-auth userinfo before the bridge is echoed on the page
+      // (bridge-creds-scrub-test B): the stored URL may carry user:pass@.
+      bridge = truncateEcho(scrubBridgeCreds(await getDohUrl()));
     } catch (be) {
       const bem = truncateEcho((be && be.message) || be);
       bridge = /^Configured DoH bridge/.test(bem)
