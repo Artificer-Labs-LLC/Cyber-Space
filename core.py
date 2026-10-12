@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import http.client
 import json
+import logging
 import os
 import random
 import re
@@ -833,6 +834,10 @@ def _incumbent_is_live(old, now_dt):
 # stored are never deleted — an attacker cannot flood the audit trail out.
 NAME_CONFLICT_CAP = 32
 
+# Examiner gate 4 (ART-29): counts non-IntegrityError failures in
+# _log_name_conflict. Ingest continues; operators monitor this.
+_name_conflict_error_count = 0
+
 
 def _log_name_conflict(conn, name, incumbent, challenger, reason):
     """r3 (Bulwark High, ART-29): record a rejected challenger.
@@ -887,8 +892,13 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
         conn.commit()  # r3: commit immediately — the caller may raise
         # (409 on the route) after logging, which would roll back the
         # conflict record if we relied on the context manager.
-    except Exception:
-        pass  # logging is best-effort; the refusal itself already happened
+    except sqlite3.IntegrityError:
+        pass  # duplicate challenger claim — expected, ignore
+    except Exception as e:
+        # Examiner gate 4: log it, count it, keep ingesting.
+        logging.warning("name_conflict log failed for %r: %s", name, e)
+        global _name_conflict_error_count
+        _name_conflict_error_count += 1
 
 
 def _old_binding_beaten(old, binding, node_pubkey, now_dt):
