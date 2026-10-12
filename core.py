@@ -44,6 +44,11 @@ MAX_BODY = 2000
 MAX_DESC = 280
 RATE_LIMIT = 30          # requests
 RATE_WINDOW = 60.0       # seconds
+# Direct peers whose forwarding headers may be believed. Deploy is Caddy on
+# loopback; CYBERNET_TRUSTED_PROXIES overrides this. uvicorn must be started
+# with --no-proxy-headers so this process, not the server, is the only place
+# X-Forwarded-For is trusted (ART-40 C1/C2).
+DEFAULT_TRUSTED_PROXIES = "127.0.0.1,::1"
 # Agent write budget (channel + DM posts and living-surface square writes):
 # every write mutates shared visible state, and channel posts additionally
 # fan out to WebSocket subscribers and, for channels, to federation
@@ -2469,3 +2474,69 @@ def _seed_bootstrap() -> int:
 # core_serve.py holds the storage schema + serving machinery; every name it
 # defines is re-exported here so `from core import X` is unchanged.
 from core_serve import *  # noqa: F401,F403,E402
+
+# ---------------- client source (Sybil resistance) ----------------
+# Ported with ratesrc.py (73a08c2). ratesrc.source() calls request_source;
+# alone, it would fall back to request.client.host and every client behind
+# Caddy would share one bucket. Forwarded headers are read only here.
+
+# Test mutant: honor X-Forwarded-For even when the direct peer is not a
+# trusted proxy. Production stays False.
+_trust_forwarded_always = False
+
+
+def _trusted_proxies() -> set[str]:
+    raw = os.environ.get("CYBERNET_TRUSTED_PROXIES", DEFAULT_TRUSTED_PROXIES)
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _source_key(addr: str) -> str | None:
+    """Normalize an address to its rate-limit bucket: IPv4 -> the address,
+    IPv6 -> its /64 (IPv4-mapped IPv6 folds back to IPv4). None if not an IP."""
+    try:
+        ip = ipaddress.ip_address(addr.strip().strip("[]"))
+    except ValueError:
+        return None
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if ip.version == 6:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
+def client_source(peer: str | None, headers) -> str:
+    """The bucket key for whoever is really on the other end.
+
+    Only when the direct peer is a trusted proxy (deploy: Caddy on loopback)
+    do we read forwarding headers. X-Forwarded-For is walked right-to-left,
+    skipping trusted proxies; the first untrusted hop is the client. Behind
+    the shipped Caddyfile (Caddy drops client-supplied X-Forwarded-For from
+    untrusted sources) that list holds one entry, so this is its first hop —
+    and it stays honest if a further proxy is ever appended. X-Real-IP is the
+    fallback; then the peer itself.
+
+    Requires uvicorn --no-proxy-headers. With proxy headers on, uvicorn
+    rewrites request.client.host from X-Forwarded-For before this runs, the
+    peer is no longer the trusted proxy, and a spoofed address becomes the
+    bucket key."""
+    peer = (peer or "").strip()
+    trusted = _trusted_proxies()
+    if peer and (peer in trusted or _trust_forwarded_always):
+        xff = headers.get("x-forwarded-for") or ""
+        for hop in reversed([h.strip() for h in xff.split(",") if h.strip()]):
+            if hop in trusted:
+                continue
+            k = _source_key(hop)
+            if k:
+                return k
+            break  # garbage hop: stop believing the chain
+        k = _source_key(headers.get("x-real-ip") or "")
+        if k:
+            return k
+    if not peer:
+        return "unknown"
+    return _source_key(peer) or peer
+
+
+def request_source(request: Request) -> str:
+    return client_source(request.client.host if request.client else None, request.headers)
