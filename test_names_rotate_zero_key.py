@@ -45,7 +45,8 @@ import core_serve  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
 import app as appmod  # noqa: E402
 import routes_social_serve as rss  # noqa: E402
-from rotate_name import _rotate_payload  # noqa: E402
+from rotate_name import _rotate_payload_v2, pin_anchor_hash  # noqa: E402
+import name_fork  # noqa: E402
 
 client = TestClient(appmod.app)
 PASS = FAIL = 0
@@ -90,10 +91,13 @@ def seed(name, priv):
 
 def rotation(name, old_priv, new_pub, binding_sig):
     old_pub = pub_of(old_priv)
-    rsig = _ed.sign(_rotate_payload(name, old_pub, new_pub, ROT_ISSUED),
+    # ART-29 v2 cert: seq 1 off the claimed key, prev_hash = pin anchor.
+    prev = pin_anchor_hash(name, old_pub)
+    rsig = _ed.sign(_rotate_payload_v2(name, old_pub, new_pub, ROT_ISSUED, 1, prev),
                     bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
     return {"name": name, "old_pubkey": old_pub, "new_pubkey": new_pub,
             "rotation_issued_at": ROT_ISSUED, "rotation_signature": rsig,
+            "rotation_seq": "1", "rotation_prev_hash": prev,
             "binding_issued_at": B_ISSUED, "binding_expires_at": B_EXPIRES,
             "binding_signature": binding_sig}
 
@@ -172,16 +176,19 @@ if old_src:
     spec.loader.exec_module(old)
     strict = core._fed_ed25519
     real_weak = rss._rotate_weak_reason
+    real_nf_weak = name_fork._weak_reason
     core._fed_ed25519 = old
     try:
         # (a) the hole still reproduces once weak_reason is stubbed out
         rss._rotate_weak_reason = lambda pub: None
+        name_fork._weak_reason = lambda pub: None
         reset_rate()
         restore_rotz2()
         r_a = client.post("/api/v1/names/rotate", data=vec)
         after_a = state("rotz2")
         # (b) real path: same loose verifier, weak_reason left in place
         rss._rotate_weak_reason = real_weak
+        name_fork._weak_reason = real_nf_weak
         reset_rate()
         restore_rotz2()
         before_b = state("rotz2")
@@ -189,6 +196,7 @@ if old_src:
         after_b = state("rotz2")
         # Mutant: the weak_reason call on rotate is gone. Arm (b) must fail.
         rss._rotate_weak_reason = lambda pub: None
+        name_fork._weak_reason = lambda pub: None
         reset_rate()
         restore_rotz2()
         r_m = client.post("/api/v1/names/rotate", data=vec)
@@ -196,6 +204,7 @@ if old_src:
     finally:
         core._fed_ed25519 = strict
         rss._rotate_weak_reason = real_weak
+        name_fork._weak_reason = real_nf_weak
     restore_rotz2()
     print(f"  info old verifier {old_rev}: arm (a) {r_a.status_code}, arm (b) {r_b.status_code}, mutant {r_m.status_code}")
     check("(a) old verifier with weak_reason stubbed admits the zero key",

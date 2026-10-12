@@ -175,14 +175,47 @@ fail-closed by construction. The design note permits this.)
 
 The fork rule buys per-node consistency. It does not buy mirror agreement after a fork. It does not recover a stolen key.
 
-A second valid rotation certificate for the same (name, prior key) is
-stored as fork evidence and the name is marked CONTESTED. Resolve refuses
-a contested name and does not serve the local winner. Winner determination
-is by witness receipts only. Chain depth is never a tiebreak. Cross-node
-first-seen is never a tiebreak.
+A pin moves only by a v2 rotation certificate signed by the current pin:
+domain tag, length-prefixed fields, `seq` (the next pin generation) and
+`prev_hash` (sha256 over the previous cert's signed fields plus its
+signature; at seq 1, the anchor over the label and the first pin). Weak
+keys are refused on both sides of the cert before any signature check. A
+cert never introduces a name: a name this node has neither pinned nor
+bound is refused, and a bound-but-unpinned name moves only on a cert from
+a node key pinned out of band. A replayed older cert continues nothing.
 
-Bootstrap does not pick a first-seen winner when more than one certificate
-for the same prior key arrives with the name. At most one rotation is
-accepted per name per gossip round. Anyone holding the pinned key can
-freeze the name by signing two certificates for that prior key until a
-witness-receipt rule exists.
+A second valid rotation certificate for the same (name, prior key, seq) is
+stored as fork evidence and the name is marked CONTESTED. Resolve refuses
+a contested name (409) and does not serve the local winner; `/reach` reads
+it as absent (404). Winner determination is by witness receipts only.
+Chain depth is never a tiebreak. Cross-node first-seen is never a
+tiebreak.
+
+Bootstrap does not pick a first-seen winner when two continuations of the
+same generation arrive together. At most one rotation is accepted per name
+per gossip round, and the round is held in the database across calls, so
+fork evidence has time to gossip before a fast chain builds depth.
+
+### Contested names: what holders should know
+
+A contested name has no recovery path in this build. Once two valid
+certificates exist for one generation, this node refuses the name for good:
+it serves neither key, it accepts no further rotation for it, and nothing
+un-contests it. Anyone who holds a key the chain has pinned (the current
+key or any earlier one) can contest the name by signing a second
+certificate for that key's generation, so a leaked old key can freeze a
+name its holder has since rotated away from.
+
+The contested-recovery spec is an open board item (witness-receipt
+determination, per the F1 ruling). It is named, owned, and unscheduled
+until the board specs it; it is not a condition of this build and not a
+silent gap.
+
+### Pins never expire
+
+Pins never expire automatically. A pin dies only by a rotation certificate
+signed by the pinned key, or by the operator's own logged local unpin. If
+the binding has expired, day 90 has passed, and a claim arrives under a
+different key with no rotation certificate, the node refuses it and marks
+the name PIN-STALE for local decision. It serves neither the old key nor
+the new one silently.

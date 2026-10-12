@@ -35,7 +35,20 @@ import routes_legacy_witness as rlw  # noqa: E402
 import routes_social_serve as rss  # noqa: E402
 import window_open as wo  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
-from rotate_name import _rotate_payload  # noqa: E402
+from rotate_name import _rotate_payload_v2, pin_anchor_hash  # noqa: E402
+import name_fork  # noqa: E402
+
+
+def _rotate_payload(name, old_pub, new_pub, issued):
+    # ART-29: the rotate route takes only v2 certs. seq 1 off the claimed
+    # key; prev_hash is the pin anchor. Callers add V2_FIELDS(name, old).
+    return _rotate_payload_v2(name, old_pub, new_pub, issued, 1,
+                              pin_anchor_hash(name, old_pub))
+
+
+def V2_FIELDS(name, old_pub):
+    return {"rotation_seq": "1",
+            "rotation_prev_hash": pin_anchor_hash(name, old_pub)}
 
 PASS = FAIL = 0
 MUTANTS = []
@@ -366,6 +379,7 @@ rsig = _ed.sign(_rotate_payload("weakrot", old_pub, npub, ISSUED),
                 bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
 before = bindings("weakrot")
 r = claimer.post("/api/v1/names/rotate", data={
+    **V2_FIELDS("weakrot", old_pub),
     "name": "weakrot", "old_pubkey": old_pub, "new_pubkey": npub,
     "rotation_issued_at": ISSUED, "rotation_signature": rsig,
     "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
@@ -386,6 +400,7 @@ strong_nsig = _ed.sign(core._name_claim_payload("strongrot", new_pub, ISSUED, EX
 strong_rsig = _ed.sign(_rotate_payload("strongrot", old_pub, new_pub, ISSUED),
                        bytes.fromhex(old_priv), bytes.fromhex(old_pub)).hex()
 r = claimer.post("/api/v1/names/rotate", data={
+    **V2_FIELDS("strongrot", old_pub),
     "name": "strongrot", "old_pubkey": old_pub, "new_pubkey": new_pub,
     "rotation_issued_at": ISSUED, "rotation_signature": strong_rsig,
     "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
@@ -415,6 +430,7 @@ with core._db_lock, core._db() as conn:
 reset_hits()
 weak_ip = "203.0.113.61"
 r = client_at(weak_ip).post("/api/v1/names/rotate", data={
+    **V2_FIELDS("weakold", old_weak),
     "name": "weakold", "old_pubkey": old_weak, "new_pubkey": weak_new_pub,
     "rotation_issued_at": ISSUED, "rotation_signature": weak_rsig,
     "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
@@ -611,9 +627,14 @@ record_mutant("signature checked after write",
 
 # 3. weak_reason skipped on rotate
 real_rot = rss._rotate_weak_reason
+real_nf_weak = name_fork._weak_reason
+# Every weak_reason on the rotate path is removed: the route's and the
+# pin gate's (ART-29 G1). Either one alone still refuses the key.
 rss._rotate_weak_reason = lambda pub: None
+name_fork._weak_reason = lambda pub: None
 try:
     r = claimer.post("/api/v1/names/rotate", data={
+        **V2_FIELDS("weakrot", old_pub),
         "name": "weakrot", "old_pubkey": old_pub, "new_pubkey": npub,
         "rotation_issued_at": ISSUED, "rotation_signature": rsig,
         "binding_issued_at": ISSUED, "binding_expires_at": EXPIRES,
@@ -621,6 +642,7 @@ try:
     mutant_rot = r.status_code == 200 and bindings("weakrot") == (npub, 1)
 finally:
     rss._rotate_weak_reason = real_rot
+    name_fork._weak_reason = real_nf_weak
 record_mutant("weak_reason skipped on rotate",
               "mixed-order rotate is 400 and writes nothing",
               True, mutant_rot)
