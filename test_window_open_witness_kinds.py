@@ -185,10 +185,11 @@ check("orphan pin adds ENTRIES_PER_NAME to the log ceiling",
       and lw.max_log_entries(0, 1, 1) == lw.max_log_entries(0, 1, 0) + lw.ENTRIES_PER_NAME)
 check("proof byte budget grows when the orphan pin grows",
       lw.proof_max_bytes(0, 1, 1) > lw.proof_max_bytes(0, 1, 0))
-check("64 hops is inside the per-name cap",
-      wo.bounds_problem({"hops_per_name": {"n": 64}, "kind_source": []}) is None)
-check("65 hops is over the per-name cap",
-      wo.bounds_problem({"hops_per_name": {"n": 65}, "kind_source": []}) is not None)
+check("64 counted hops is inside the per-name cap",
+      wo.over_cap_names({"hops_per_name": {"n": 64}, "kind_source": []}) == {})
+check("65 counted hops is over the per-name cap, and is not a window problem",
+      wo.over_cap_names({"hops_per_name": {"n": 65}, "kind_source": []}) == {"n": 65}
+      and wo.bounds_problem({"hops_per_name": {"n": 65}, "kind_source": []}) is None)
 check("unknown kind never reaches checkvalid", bad_kind_skips_checkvalid())
 domain = lw.witness_message("reserve-hold", {"orphan": 1, "reserved_for": K})
 check("domain tag is cyberspace-witness/v0|<kind>",
@@ -331,69 +332,89 @@ record_mutant("overflow demotes reserve-hold to name-refused",
               "global overflow refuses whole; honest chain is not name-refused",
               real_c, mutant_c)
 
-# ---------------------------------------------------------------- (d) 10^5 junk hops across 1,000 names
-wipe()
-junk = []
-for i in range(1000):
-    name = f"j{i:04d}"
-    for h in range(100):
-        n = 1 + i * 100 + h
-        if h == 0:
-            old, new = ZERO, f"{n:064x}"
-        else:
-            old, new = f"{n:064x}", f"{n + 1000000:064x}"
-        junk.append((name, old, new, PAST, SIG, PAST))
-with core._db_lock, core._db() as conn:
-    wo.init_schema(conn)
-    conn.executemany(
-        "INSERT INTO name_rotations "
-        "(name,old_pubkey,new_pubkey,issued_at,signature,accepted_at) VALUES (?,?,?,?,?,?)",
-        junk)
-    bind(conn, "honest", ZERO, PAST)
-    rot(conn, "honest", K, ZERO, PAST)
-del junk
-t0 = time.monotonic()
-opened, err = open_or("d")
-elapsed = time.monotonic() - t0
-empty = counts()
-check("(d) 10^5 junk hops: open refuses cleanly within 30s",
-      opened is None and err and elapsed < 30 and empty == {"window": 0, "log": 0, "kinds": 0},
-      (elapsed, opened, err, empty))
-check("(d) junk refuse did not record the honest name", empty["log"] == 0 and empty["kinds"] == 0)
-with core._db_lock, core._db() as conn:
-    conn.execute("DELETE FROM name_rotations WHERE name != 'honest'")
-    conn.execute("DELETE FROM name_bindings WHERE name != 'honest'")
-reap()
-opened, err = open_or("d-clean")
-log_id, entries, ok, why, view = rebuilt()
-hold = for_name(view, "reserve-hold", "honest")
-saved_entries = entries
-saved_log = log_id
-check("(d) after the junk is gone, the honest reserve-hold rebuilds at node B",
-      err is None and ok and len(hold) == 1 and hold[0]["reserved_for"] == K and hold[0]["orphan"] == 1,
-      (err, ok, why, hold))
-real_d = (opened is not None and ok and len(hold) == 1 and hold[0]["orphan"] == 1
-          and empty == {"window": 0, "log": 0, "kinds": 0} and elapsed < 30)
+# ---------------------------------------------------------------- (d) ART-42 392140b7: clean rotations are not admissions
+# A pool of real prime-order keys, so every clean hop is genuinely clean.
+POOL = [_ed.publickey(bytes([0x10 + (i % 200)]) * 31 + bytes([i])).hex() for i in range(90)]
+assert all(not wo.is_weak_pubkey(k) for k in POOL)
 
-wo._overflow = demote_to_refused
-try:
-    wipe()
+
+def clean_chain(conn, name, n, base=0, minute0=0):
+    """n clean hops POOL[base] -> POOL[base+1] -> ... ; returns the last key."""
+    for h in range(n):
+        rot(conn, name, POOL[base + h], POOL[base + h + 1],
+            f"2001-01-01T{(minute0 + h) // 60:02d}:{(minute0 + h) % 60:02d}:00+00:00")
+    return POOL[base + n]
+
+
+def plant_flood(names=20, hops=70):
     with core._db_lock, core._db() as conn:
+        wo.init_schema(conn)
         bind(conn, "honest", ZERO, FUT)
         rot(conn, "honest", K, ZERO, PAST)
-        prev = ZERO
-        for h in range(65):
-            nxt = f"{h + 1:064x}"
-            rot(conn, "flood", prev, nxt, f"2001-01-01T00:{h:02d}:00+00:00")
-            prev = nxt
-    open_or("d-mut")
-    _lid, _ent, _ok, _why, mview = rebuilt()
-    mutant_d = bool(for_name(mview, "name-refused", "honest"))
+        for i in range(names):
+            last = clean_chain(conn, f"c{i:04d}", hops)
+            bind(conn, f"c{i:04d}", last, FUT)
+        last = clean_chain(conn, "flood", 80)
+        bind(conn, "flood", last, FUT)
+
+
+def flood_row():
+    """Row: 20 names x 70 clean hops plus one name with 80 clean hops.
+    The window opens, the honest hold rebuilds at node B, and no clean name
+    gets any kind row (no refusal, no hold)."""
+    wipe()
+    plant_flood()
+    t0 = time.monotonic()
+    opened, err = open_or("d")
+    el = time.monotonic() - t0
+    lid, ent, ok, why, view = rebuilt()
+    hold = for_name(view, "reserve-hold", "honest")
+    clean_rows = [r for k in KINDS_IN for r in view[k]
+                  if r.get("name") and (r["name"].startswith("c") or r["name"] == "flood")]
+    good = (err is None and ok and len(hold) == 1 and hold[0]["reserved_for"] == K
+            and not clean_rows and el < 30)
+    return good, (err, ok, why, len(hold), len(clean_rows), round(el, 2)), lid, ent
+
+
+real_d, info_d, saved_log, saved_entries = flood_row()
+check("(d) 65+ clean rotations on one name (and 20x70 elsewhere): window opens for other names",
+      real_d, info_d)
+
+real_counted = wo.counted_hops
+wo.counted_hops = lambda hops: len(hops)
+try:
+    mut_d1, _i, _l, _e = flood_row()
 finally:
-    wo._overflow = real_overflow
-record_mutant("per-name overflow demotes the honest hold",
-              "10^5 junk refuses cleanly; honest hold still rebuilds",
-              real_d, mutant_d)
+    wo.counted_hops = real_counted
+record_mutant("clean rotations counted toward the per-name cap",
+              "65+ clean rotations: window opens, no clean-name kind row",
+              real_d, not mut_d1)
+
+real_snapshot = wo.snapshot_bindings
+real_bounds = wo.bounds_problem
+
+
+def charging_snapshot(conn):
+    snap = real_snapshot(conn)
+    snap["charged"] = conn.execute("SELECT COUNT(*) FROM name_rotations").fetchone()[0]
+    return snap
+
+
+def charging_bounds(snap):
+    used = len(snap.get("kind_source", ())) + snap.get("charged", 0)
+    if used > wo.SNAPSHOT_GLOBAL_CAP:
+        return f"window budget exceeded ({used}/{wo.SNAPSHOT_GLOBAL_CAP})"
+    return real_bounds(snap)
+
+
+wo.snapshot_bindings, wo.bounds_problem = charging_snapshot, charging_bounds
+try:
+    mut_d2, _i, _l, _e = flood_row()
+finally:
+    wo.snapshot_bindings, wo.bounds_problem = real_snapshot, real_bounds
+record_mutant("clean rotations draw on the shared window budget",
+              "65+ clean rotations: window opens, no clean-name kind row",
+              real_d, not mut_d2)
 
 # ---------------------------------------------------------------- (e) KINDS missing a new kind => node B rejects
 ok_saved, why_saved = lw.verify_chain(saved_entries, saved_log)
@@ -453,8 +474,11 @@ entries, ok, why, closures = closure_view()
 one = closures[0] if len(closures) == 1 else {}
 detail = dict(one.get("detail") or {})
 sig = detail.pop("witness_sig", None)
+signed_detail = dict(detail)
+closure_root = detail.pop("rows_root", None)
+closure_n = detail.pop("rows_n", None)
 signed_ok = bool(sig) and lw.verify_witness_signature(
-    "hold-closure", lw.witness_message("hold-closure", detail), core._NODE_PUB, sig)
+    "hold-closure", lw.witness_message("hold-closure", signed_detail), core._NODE_PUB, sig)
 check("(h) one hold-closure, state closed, on the accepted port",
       err is None and ok and len(closures) == 1 and one.get("name") is None
       and detail == {
@@ -466,7 +490,7 @@ check("(h) one hold-closure, state closed, on the accepted port",
       and one.get("state") == "closed" and one.get("port") == "c259535"
       and one.get("ruling") == "49a4fdca"
       and one.get("precondition") == "witness+weak_reason"
-      and signed_ok
+      and signed_ok and isinstance(closure_root, str) and isinstance(closure_n, int)
       and not any(e.get("kind") == "resolution" for e in entries),
       (err, ok, why, closures, signed_ok))
 real_h = (err is None and ok and len(closures) == 1 and detail.get("state") == "closed"
@@ -475,7 +499,7 @@ real_h = (err is None and ok and len(closures) == 1 and detail.get("state") == "
 real_close = wo._append_hold_closure
 
 
-def skip_closure(conn, rows):
+def skip_closure(conn, rows, *_a):
     del conn, rows
 
 
@@ -494,7 +518,7 @@ record_mutant("hold-closure writer is a no-op",
               real_h, mutant_h)
 
 
-def per_row(conn, rows):
+def per_row(conn, rows, *_a):
     for row in rows:
         real_close(conn, [row])
 
@@ -512,6 +536,192 @@ finally:
 record_mutant("hold-closure written once per frozen row",
               "two reserved names still produce one hold-closure",
               real_h, mutant_rows)
+
+# ---------------------------------------------------------------- (i) per-name isolation, witnessed in rows_root
+def plant_isolation():
+    """'over': 70 clean hops, then a weak hop (to ZERO), then 5 more hops.
+    Counted hops = 71 (up to and including the earliest weak hop), not 76.
+    Clean names: c-held0, c-held2 (held), c-res1 (K->ZERO reserve-hold)."""
+    with core._db_lock, core._db() as conn:
+        wo.init_schema(conn)
+        last = clean_chain(conn, "over", 70)
+        rot(conn, "over", last, ZERO, "2002-01-01T00:00:00+00:00")
+        prev = ZERO
+        for h in range(5):
+            rot(conn, "over", prev, POOL[80 + h], f"2002-01-01T00:{h + 1:02d}:00+00:00")
+            prev = POOL[80 + h]
+        bind(conn, "over", prev, FUT)
+        bind(conn, "c-held0", POOL[0], FUT)
+        bind(conn, "c-held2", POOL[1], FUT)
+        bind(conn, "c-res1", ZERO, FUT)
+        rot(conn, "c-res1", K, ZERO, PAST)
+
+
+def isolation_row():
+    wipe()
+    plant_isolation()
+    with core._db_lock, core._db() as conn:
+        held = {r[0] for r in wo.snapshot_bindings(conn)["held"]}
+    opened, err = open_or("iso")
+    lid, ent, ok, why, view = rebuilt()
+    ref = for_name(view, "name-refused", "over")
+    res = for_name(view, "reserve-hold", "c-res1")
+    clean_refused = [r for r in view["name-refused"] if r["name"] != "over"]
+    good = (err is None and counts()["window"] == 1 and ok
+            and len(ref) == 1 and ref[0]["reason"] == "hop-cap"
+            and ref[0]["detail"].get("hops") == 71 and ref[0]["detail"].get("cap") == 64
+            and len(res) == 1 and res[0]["reserved_for"] == K
+            and {"c-held0", "c-held2"} <= held and not clean_refused)
+    return good, (err, ok, why, ref, len(res), sorted(held)), lid, ent, view
+
+
+real_i, info_i, iso_log, iso_entries, iso_view = isolation_row()
+check("(i) one name over the cap: window opens, clean names bind, over-cap name refused "
+      "with hops=71 (up to the earliest weak hop)", real_i, info_i)
+
+real_isolate = wo.isolate_over_cap
+
+
+def refuse_whole(snap):
+    over = wo.over_cap_names(snap)
+    if over:
+        raise wo.WindowRefused(f"per-name cap exceeded {over}")
+    return over
+
+
+wo.isolate_over_cap = refuse_whole
+try:
+    mut_i1 = isolation_row()[0]
+finally:
+    wo.isolate_over_cap = real_isolate
+record_mutant("per-name overflow refuses the whole window",
+              "isolation: window opens, only the over-cap name refused",
+              real_i, not mut_i1)
+
+wo.counted_hops = lambda hops: len(hops)
+try:
+    mut_i2 = isolation_row()[0]
+finally:
+    wo.counted_hops = real_counted
+record_mutant("refusal counts every hop, not only up to the earliest weak hop",
+              "isolation: refusal row records hops=71",
+              real_i, not mut_i2)
+
+# ---------------------------------------------------------------- (j) the window cap is per name
+def plant_two_at_cap_minus_one():
+    """Two names, each with 63 clean hops then one weak hop: 64 counted each."""
+    with core._db_lock, core._db() as conn:
+        wo.init_schema(conn)
+        for name in ("pa", "pb"):
+            last = clean_chain(conn, name, 63)
+            rot(conn, name, last, ZERO, "2003-01-01T00:00:00+00:00")
+            bind(conn, name, ZERO, FUT)
+
+
+def per_name_row():
+    wipe()
+    plant_two_at_cap_minus_one()
+    opened, err = open_or("pn")
+    lid, ent, ok, why, view = rebuilt()
+    holds = {r["name"] for r in view["reserve-hold"]}
+    good = (err is None and ok and holds == {"pa", "pb"} and not view["name-refused"])
+    return good, (err, ok, holds, view["name-refused"])
+
+
+real_j, info_j = per_name_row()
+check("(j) two names each at the cap both admit (reserve-hold), neither refused", real_j, info_j)
+real_over = wo.over_cap_names
+
+
+def global_total(snap):
+    tot = sum(snap.get("hops_per_name", {}).values())
+    if tot > wo.SNAPSHOT_PER_NAME:
+        return {n: tot for n, c in snap["hops_per_name"].items() if c}
+    return {}
+
+
+wo.over_cap_names = global_total
+try:
+    mut_j = per_name_row()[0]
+finally:
+    wo.over_cap_names = real_over
+record_mutant("one global hop total across all names",
+              "two names at the cap both admit",
+              real_j, not mut_j)
+
+# ---------------------------------------------------------------- (k) node B re-derives the refusal
+def b_rederive(entries, log_id):
+    ok, why = lw.verify_chain(entries, log_id)
+    rok, rwhy = lw.verify_rows_root(entries)
+    dok, refused = lw.rederive_refusals(entries)
+    return (ok and rok and dok and refused == {"over": 71}), (ok, why, rok, rwhy, dok, refused)
+
+
+real_k, info_k = b_rederive(iso_entries, iso_log)
+check("(k) node B: chain verifies, rows_root covers every row, refusal re-derived (over: 71 > 64)",
+      real_k, info_k)
+
+real_append = wo._append_kind_entries
+real_close = wo._append_hold_closure
+_late = []
+
+
+def append_skip_refusal(conn, rows):
+    keep = [r for r in rows if r.get("reason") != "hop-cap"]
+    _late[:] = [r for r in rows if r.get("reason") == "hop-cap"]
+    return real_append(conn, keep)
+
+
+def close_then_refusal(conn, rows, rows_root=None, rows_n=None):
+    real_close(conn, rows, rows_root, rows_n)
+    real_append(conn, _late)
+
+
+wo._append_kind_entries, wo._append_hold_closure = append_skip_refusal, close_then_refusal
+try:
+    wipe()
+    plant_isolation()
+    open_or("k-mut")
+    _l, _e = exported()
+    mut_k = b_rederive(_e, _l)[0]
+finally:
+    wo._append_kind_entries, wo._append_hold_closure = real_append, real_close
+record_mutant("refusal row written outside rows_root",
+              "node B re-derives the refusal inside rows_root",
+              real_k, not mut_k)
+
+# ---------------------------------------------------------------- (l) advisory: reserve-hold carries weak-hop evidence
+res = for_name(iso_view, "reserve-hold", "c-res1")
+d = res[0]["detail"] if res else {}
+dok, _r = lw.rederive_refusals(iso_entries)
+real_l = (d.get("weak_index") == 0 and d.get("weak_old") == K and d.get("weak_new") == ZERO
+          and wo.weak_reason(d.get("weak_new")) is not None and dok)
+check("(l) reserve-hold carries weak_index/weak_old/weak_new and node B re-derives it", real_l, d)
+real_plan = wo._plan_entries
+
+
+def plan_no_evidence(row):
+    out = real_plan(row)
+    for _k, _k0, det in out:
+        for f in ("weak_index", "weak_old", "weak_new"):
+            det.pop(f, None)
+    return out
+
+
+wo._plan_entries = plan_no_evidence
+try:
+    wipe()
+    plant_isolation()
+    open_or("l-mut")
+    _lid, _ent, _ok, _why, mv = rebuilt()
+    r2 = for_name(mv, "reserve-hold", "c-res1")
+    d2 = r2[0]["detail"] if r2 else {}
+    mut_l = d2.get("weak_old") == K and d2.get("weak_new") == ZERO
+finally:
+    wo._plan_entries = real_plan
+record_mutant("reserve-hold written without weak-hop evidence",
+              "reserve-hold carries evidence node B re-derives",
+              real_l, not mut_l)
 
 print("mutant table:")
 print(f"  {'mutant':<52} {'row':<62} real mutant-fails")

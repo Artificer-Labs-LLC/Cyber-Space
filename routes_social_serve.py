@@ -1251,6 +1251,26 @@ def _names_rotate_check_rate(request: Request) -> None:
     _names_claim_check_rate(request)
 
 
+# ART-42 392140b7: per-NAME rotation cap at the rotate route. name_rotations
+# is never deleted, so this is a lifetime count per name. The default sits
+# well under window_open.SNAPSHOT_PER_NAME, so the live route alone cannot
+# push one name's history to the admission cap. Exhausting one name never
+# affects another (the count is keyed on the name).
+NAME_ROTATE_PER_NAME_CAP = int(_os.environ.get("CYBERNET_NAME_ROTATE_PER_NAME_CAP", "16"))
+
+
+def _rotate_name_cap_count(conn, name: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM name_rotations WHERE name=?",
+                        (name,)).fetchone()[0]
+
+
+def _rotate_name_cap_check(conn, name: str) -> None:
+    n = _rotate_name_cap_count(conn, name)
+    if n >= NAME_ROTATE_PER_NAME_CAP:
+        raise HTTPException(status_code=429, detail=(
+            f"Per-name rotation cap reached ({n}/{NAME_ROTATE_PER_NAME_CAP}) for this name."))
+
+
 @router.post("/api/v1/names/rotate")
 async def names_rotate(request: Request):
     """.cyberspace depth (primitive 4, identity): the mirror accepts a name-key
@@ -1359,6 +1379,7 @@ async def names_rotate(request: Request):
             raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
         accepted_at = _now()
         with _db_lock, _db() as conn:
+            _rotate_name_cap_check(conn, name)  # same txn as the insert
             conn.execute(
                 "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
                 "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "

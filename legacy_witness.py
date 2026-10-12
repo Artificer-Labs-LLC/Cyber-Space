@@ -170,6 +170,12 @@ WITNESS_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff",
 HOLD_CLOSURE_PORT = "c259535"
 HOLD_CLOSURE_RULING = "49a4fdca"
 HOLD_CLOSURE_PRECONDITION = "witness+weak_reason"
+# ART-42 392140b7: per-name admission hop cap (hops up to and including the
+# earliest weak hop). Node B applies the same constant to re-derive a
+# hop-cap refusal from the witnessed row alone.
+PER_NAME_HOP_CAP = 64
+HOP_CAP_REASON = "hop-cap"
+ROWS_ROOT_DOMAIN = b"cyberspace-rows-root/v0\n"
 if any((not isinstance(k, str)) or ("|" in k) or (k.encode("ascii") != k.encode()) for k in KINDS):
     raise RuntimeError("KINDS must be exact ASCII byte strings with no '|'")
 LATE_CANCEL_SEC = 86400
@@ -609,6 +615,65 @@ def rebuild_window_kinds(entries: list) -> dict:
             "ruling": detail.get("ruling"),
         })
     return out
+
+
+def rows_root(entry_hashes) -> str:
+    """Commitment to the window kind entries of one open, in seq order."""
+    h = hashlib.sha256(ROWS_ROOT_DOMAIN)
+    for eh in entry_hashes:
+        h.update(str(eh).encode("ascii") + b"\n")
+    return h.hexdigest()
+
+
+_ROW_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
+
+
+def verify_rows_root(entries: list) -> tuple:
+    """(ok, why). Node B: every row-kind entry in the span is covered by the
+    single hold-closure's rows_root, and nothing after it is a row kind."""
+    if not isinstance(entries, list):
+        return False, "no entries"
+    closures = [e for e in entries if isinstance(e, dict) and e.get("kind") == "hold-closure"]
+    if len(closures) != 1:
+        return False, "expected one hold-closure"
+    try:
+        d = json.loads(closures[0]["detail"])
+    except (TypeError, ValueError, KeyError):
+        return False, "hold-closure detail unreadable"
+    root = d.get("rows_root") if isinstance(d, dict) else None
+    if not isinstance(root, str):
+        return False, "hold-closure carries no rows_root"
+    cseq = closures[0]["seq"]
+    rows = [e for e in entries if e.get("kind") in _ROW_KINDS]
+    if any(e["seq"] > cseq for e in rows):
+        return False, "row entry outside rows_root (after hold-closure)"
+    if rows_root([e["entry_hash"] for e in rows]) != root or d.get("rows_n") != len(rows):
+        return False, "rows_root mismatch"
+    return True, None
+
+
+def rederive_refusals(entries: list) -> tuple:
+    """(ok, refused). Node B re-derives every hop-cap refusal and every
+    reserve-hold carrying weak-hop evidence from the witnessed rows alone.
+    refused is {name: hops} for hop-cap refusals that check out."""
+    from window_open import weak_reason
+    view = rebuild_window_kinds(entries)
+    refused = {}
+    for r in view["name-refused"]:
+        if r["reason"] != HOP_CAP_REASON:
+            continue
+        hops = r["detail"].get("hops")
+        if not isinstance(hops, int) or hops <= PER_NAME_HOP_CAP:
+            return False, {"bad": r["name"], "hops": hops}
+        refused[r["name"]] = hops
+    for r in view["reserve-hold"]:
+        d = r["detail"]
+        if "weak_index" not in d:
+            continue
+        if d.get("weak_old") != r["reserved_for"] or weak_reason(d.get("weak_old")) is not None \
+                or weak_reason(d.get("weak_new")) is None:
+            return False, {"bad-hold": r["name"]}
+    return True, refused
 
 
 def _accept(proof, name, wset, log_id, store) -> dict:

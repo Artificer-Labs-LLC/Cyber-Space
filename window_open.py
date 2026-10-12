@@ -33,6 +33,7 @@ ART-41 (start cap anchored to open_window):
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -43,10 +44,19 @@ import core
 from fed import ed25519 as _ed
 
 MAX_STARTS_PER_ACCOUNT = 3
-# The snapshot counts against these. There is no per-source overflow
-# column: exceeding either cap refuses open_window whole.
-SNAPSHOT_PER_NAME = 64
+# ART-42 392140b7 (Villhaze): the window cap bounds window ADMISSIONS only.
+# SNAPSHOT_PER_NAME bounds the hops one name's admission reads: the hops up
+# to and including its earliest weak hop. Clean hops after that, and every
+# hop of a name with no weak hop, are never read and never counted. A name
+# over this cap is refused alone (a witnessed name-refused row carrying the
+# hop count); the window opens for every other name.
+# SNAPSHOT_GLOBAL_CAP bounds the admitted kind rows; exceeding it still
+# refuses the open whole. Clean rotations never produce a kind row, so they
+# never draw on it.
+import legacy_witness as _lw_caps  # noqa: E402
+SNAPSHOT_PER_NAME = _lw_caps.PER_NAME_HOP_CAP
 SNAPSHOT_GLOBAL_CAP = 1024
+HOP_CAP_REASON = _lw_caps.HOP_CAP_REASON
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS window_open_log (
@@ -134,6 +144,7 @@ def init_schema(conn) -> None:
             "ALTER TABLE window_open_log ADD COLUMN orphan_count INTEGER NOT NULL DEFAULT 0")
 
 
+@functools.lru_cache(maxsize=8192)
 def weak_reason(pubkey_hex) -> str | None:
     """None if the key is a canonical, non-small-order point; else why not."""
     try:
@@ -216,6 +227,21 @@ def _anchor_from_hops(hops):
     return None, None
 
 
+def earliest_weak_index(hops):
+    """0-based index of the earliest hop touching a weak key, or None."""
+    for i, (old, new) in enumerate(hops):
+        if is_weak_pubkey(old) or is_weak_pubkey(new):
+            return i
+    return None
+
+
+def counted_hops(hops) -> int:
+    """Hops an admission reads: up to and including the earliest weak hop.
+    A history with no weak hop admits nothing and counts 0."""
+    i = earliest_weak_index(hops)
+    return 0 if i is None else i + 1
+
+
 def _all_histories(conn):
     """ONE indexed scan of name_rotations (PK prefix = name), grouped in
     Python: {name: [(old, new), ...]} in accepted_at, rowid order. No
@@ -256,7 +282,13 @@ def _kind_source_row(name, hops, disposition, *, orphan, reason, reserved_for, p
     because window_refused_bindings.pubkey is NOT NULL."""
     origin = hops[0][0] if hops else None
     successor = hops[0][1] if hops else None
+    wi = earliest_weak_index(hops) if hops else None
+    weak_hop = hops[wi] if wi is not None else (None, None)
     return {
+        "hops": None,
+        "weak_index": wi,
+        "weak_old_raw": _exact32(weak_hop[0]),
+        "weak_new_raw": _exact32(weak_hop[1]),
         "name": name,
         "source": "name_rotations" if orphan else "name_bindings",
         "disposition": disposition,
@@ -339,7 +371,8 @@ def snapshot_bindings(conn):
         "reserved": reserved,
         "kind_source": kind_source,
         "orphan_count": len(orphan_names),
-        "hops_per_name": {name: len(hops) for name, hops in hist.items()},
+        # Only the hops an admission reads (ART-42 392140b7).
+        "hops_per_name": {name: counted_hops(hops) for name, hops in hist.items()},
     }
 
 
@@ -372,19 +405,46 @@ class WindowRefused(Exception):
     status_code = 409
 
 
+def over_cap_names(snap) -> dict:
+    """{name: counted hops} for names whose admission reads more than
+    SNAPSHOT_PER_NAME hops. Each name is judged on its own count."""
+    return {name: n for name, n in snap.get("hops_per_name", {}).items()
+            if n > SNAPSHOT_PER_NAME}
+
+
 def bounds_problem(snap) -> str | None:
-    """None when the snapshot fits. Per-name hop cap, then the global ceiling
-    on saved kind rows. No per-source column, so this never demotes a row."""
-    for name, n in snap.get("hops_per_name", {}).items():
-        if n > SNAPSHOT_PER_NAME:
-            return f"per-name cap exceeded for {name} ({n}/{SNAPSHOT_PER_NAME})"
+    """None when the admitted rows fit the shared window budget (the global
+    ceiling on kind rows). Per-name overflow is not a window problem: it is
+    isolated by isolate_over_cap and never refuses the window."""
     if len(snap.get("kind_source", ())) > SNAPSHOT_GLOBAL_CAP:
         return f"global ceiling exceeded ({len(snap['kind_source'])}/{SNAPSHOT_GLOBAL_CAP})"
     return None
 
 
+def isolate_over_cap(snap) -> dict:
+    """Refuse only the offending names. Each over-cap name's kind row is
+    replaced by a name-refused row (reason HOP_CAP_REASON) carrying the hop
+    count that tripped the cap. That row is written to the log like every
+    other kind row, so it is inside rows_root. Returns {name: hops}."""
+    over = over_cap_names(snap)
+    if not over:
+        return over
+    rows = [r for r in snap["kind_source"] if r["name"] not in over]
+    for name in sorted(over):
+        prior = [r for r in snap["kind_source"] if r["name"] == name]
+        orphan = bool(prior[0]["orphan"]) if prior else False
+        pubkey = prior[0]["pubkey"] if prior else None
+        row = _kind_source_row(name, (), "name-refused", orphan=orphan,
+                               reason=HOP_CAP_REASON, reserved_for=None, pubkey=pubkey)
+        row["source"] = prior[0]["source"] if prior else "name_rotations"
+        row["hops"] = over[name]
+        rows.append(row)
+    snap["kind_source"] = rows
+    return over
+
+
 def _overflow(snap, why: str) -> None:
-    """Real policy: refuse whole. A mutant may return and demote instead."""
+    """Global ceiling: refuse whole. A mutant may return and demote instead."""
     raise WindowRefused(why)
 
 
@@ -400,13 +460,24 @@ def _plan_entries(row: dict) -> list:
     out = []
     if row["disposition"] == "reserve-hold" and row["reserved_for_raw"] is not None:
         k = _hex32(row["reserved_for_raw"])
-        out.append(("reserve-hold", k, {"reserved_for": k, "orphan": orphan}))
+        d = {"reserved_for": k, "orphan": orphan}
+        # Advisory item 5: the weak hop that triggered the hold, so node B
+        # re-derives reserved_for == weak_old and weak_reason(weak_new).
+        if row.get("weak_index") is not None:
+            d["weak_index"] = row["weak_index"]
+            d["weak_old"] = _hex32(row.get("weak_old_raw"))
+            d["weak_new"] = _hex32(row.get("weak_new_raw"))
+        out.append(("reserve-hold", k, d))
     elif row["disposition"] == "name-refused":
-        out.append(("name-refused", _hex32(row["pubkey_raw"]), {
+        d = {
             "reason": row["reason"] or "refused",
             "orphan": orphan,
             "source": row["source"],
-        }))
+        }
+        if row.get("hops") is not None:
+            d["hops"] = int(row["hops"])
+            d["cap"] = SNAPSHOT_PER_NAME
+        out.append(("name-refused", _hex32(row["pubkey_raw"]), d))
     else:
         return out
     if row["origin_raw"] is not None:
@@ -438,30 +509,36 @@ def _save_kind_source(conn, rows) -> None:
          for r in rows])
 
 
-def _append_kind_entries(conn, rows) -> int:
-    n = 0
+def _append_kind_entries(conn, rows) -> list:
+    """Append every kind entry; return their entry hashes in seq order."""
+    hashes = []
     for row in rows:
         for kind, k0, detail in _plan_entries(row):
             signed = dict(detail)
             signed["witness_sig"] = _sign_witness(kind, {k: detail[k] for k in detail})
-            append_log_entry(conn, kind=kind, name=row["name"], k0_pub=k0, detail=signed)
-            n += 1
-    return n
+            e = append_log_entry(conn, kind=kind, name=row["name"], k0_pub=k0, detail=signed)
+            hashes.append(e["entry_hash"])
+    return hashes
 
 
-def _hold_closure_fields() -> dict:
+def _hold_closure_fields(rows_root: str | None = None, rows_n: int | None = None) -> dict:
     """The admission hold is closed on Villhaze's accepted witness port.
-    A resolution record is not this and is not written here."""
+    A resolution record is not this and is not written here. rows_root
+    commits to every kind entry this open wrote (ART-42 392140b7)."""
     import legacy_witness as lw
-    return {
+    d = {
         "precondition": lw.HOLD_CLOSURE_PRECONDITION,
         "state": "closed",
         "port": lw.HOLD_CLOSURE_PORT,
         "ruling": lw.HOLD_CLOSURE_RULING,
     }
+    if rows_root is not None:
+        d["rows_root"] = rows_root
+        d["rows_n"] = int(rows_n or 0)
+    return d
 
 
-def _append_hold_closure(conn, rows) -> None:
+def _append_hold_closure(conn, rows, rows_root=None, rows_n=None) -> None:
     """One hold-closure for the open, not one per frozen row.
 
     `rows` is the snapshot the caller just froze. The real writer does not
@@ -469,7 +546,7 @@ def _append_hold_closure(conn, rows) -> None:
     singular. The basis is the closed witness + weak_reason precondition.
     """
     del rows
-    detail = _hold_closure_fields()
+    detail = _hold_closure_fields(rows_root, rows_n)
     signed = dict(detail)
     signed["witness_sig"] = _sign_witness("hold-closure", detail)
     append_log_entry(conn, kind="hold-closure", detail=signed)
@@ -506,6 +583,8 @@ def open_window(opened_by: str) -> dict:
             return {"id": existing[0], "opened_at": existing[1], "opened_by": existing[2],
                     "already_open": True}
         snap = snapshot_bindings(conn)
+        # Per-name overflow refuses only that name, inside the snapshot.
+        isolated = isolate_over_cap(snap)
         why = bounds_problem(snap)
         if why:
             # Raises WindowRefused before any write. A mutant may return
@@ -527,11 +606,13 @@ def open_window(opened_by: str) -> dict:
             (opened_at, opened_by, snap["orphan_count"]))
         n = record_refused_bindings(conn, 1)
         _save_kind_source(conn, rows)
-        kinds_n = _append_kind_entries(conn, rows)
-        _append_hold_closure(conn, rows)
+        hashes = _append_kind_entries(conn, rows)
+        kinds_n = len(hashes)
+        _append_hold_closure(conn, rows, lw.rows_root(hashes), kinds_n)
     return {"id": 1, "opened_at": opened_at, "opened_by": opened_by,
             "refused_recorded": n, "already_open": False,
-            "orphan_count": snap["orphan_count"], "kinds_recorded": kinds_n}
+            "orphan_count": snap["orphan_count"], "kinds_recorded": kinds_n,
+            "isolated": isolated}
 
 
 def check_start_cap(conn, account: str) -> tuple[bool, str]:

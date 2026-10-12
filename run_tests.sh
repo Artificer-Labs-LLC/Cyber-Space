@@ -29,12 +29,22 @@ if ! grep -q -- '--no-proxy-headers' "$ROOT/deploy/cybernet-node.service"; then
   exit 1
 fi
 
+# Standing rule (Villhaze 5f028f12 / Cipher): fed/envelope.py self-test
+# must run in the suite. A check outside the suite is a check that does
+# not exist.
+if ! "$PY" -m fed.envelope; then
+  echo "FAIL: fed/envelope.py self-test"
+  exit 1
+fi
+echo "PASS: fed/envelope.py (self-test)"
+
 TESTS=(
   "test_dial.py"
   "test_name_claim.py"
   "test_names_claim_cap.py"
   "test_ed25519_strict.py"
   "test_names_rotate_zero_key.py"
+  "test_names_rotate_name_cap.py"
   "test_window_open_preconditions.py"
   "test_window_open_witness_kinds.py"
   "test_legacy_migrate_stub.py"
