@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Label-grammar agreement belt (primitive 1: naming).
 
-The label grammar is enforced in THREE places and only one of them is the
+The label grammar is enforced in FOUR places and only one of them is the
 mirror: core._valid_name_label (server), mint_name._valid_label (client
-fast check), verify_name._valid_label (offline verifier). The promise that
+fast check), verify_name._valid_label (offline verifier),
+rotate_name._valid_label (rotation client). The promise that
 breaks if they drift: mint's refusal must never surprise the operator (a
 label mint refuses but the mirror would accept is an ugly false negative),
 and verify's accept set must stay a twin of the mirror's.
@@ -52,6 +53,7 @@ from app import app  # noqa: E402
 from fed import ed25519 as _fed_ed25519  # noqa: E402
 import mint_name  # noqa: E402
 import verify_name  # noqa: E402
+import rotate_name  # noqa: E402
 
 PASSED = FAILED = 0
 
@@ -129,22 +131,23 @@ def _bind_fields(label, sk, pk, issued, expires):
 
 # --- corpus: checker agreement on the raw form -------------------------------
 valid = ["a", "ab", "ab-cd", "x1", "0", "a" * 63, "grammar-one-9"]
-# 'oké' dropped from the corpus: str.isalnum() accepts unicode letters, so
-# ALL THREE checkers agree True — no disagreement to pin. Whether the
-# namespace should accept non-ASCII labels is a spec question (DNS wire
-# vs opaque string), not a checker-agreement bug; documented here.
+# Spec question settled 2026-10-12: str.isalnum() used to accept unicode
+# letters, so all checkers agreed True on 'oké' — but the resolver's DNS
+# wire face decodes labels as ASCII and refuses them, making such names
+# claimable yet never resolvable. Ruled: ASCII-only grammar; unicode
+# labels now sit in the invalid corpus and pin the refusal.
 invalid = ["", "A", "UPPER", "a b", "a.b", "-a", "a-", "ab_cd", "a" * 64,
-           "a/b", "x:y", "-", "a.-b", "  "]
+           "a/b", "x:y", "-", "a.-b", "  ", "oké", "génèrïs"]
 
 for label in valid:
     g = (mint_name._valid_label(label), verify_name._valid_label(label),
-         core._valid_name_label(label))
+         core._valid_name_label(label), rotate_name._valid_label(label))
     check(f"all-true: {label!r}" if len(label) < 63 else "all-true: 63-char label",
-          g == (True, True, True), repr(g))
+          g == (True, True, True, True), repr(g))
 for label in invalid:
     g = (mint_name._valid_label(label), verify_name._valid_label(label),
-         core._valid_name_label(label))
-    check(f"all-false: {label!r}", g == (False, False, False), repr(g))
+         core._valid_name_label(label), rotate_name._valid_label(label))
+    check(f"all-false: {label!r}", g == (False, False, False, False), repr(g))
 
 # --- claim route honors the grammar ------------------------------------------
 sk, pk = _keypair()

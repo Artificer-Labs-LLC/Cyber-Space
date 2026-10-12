@@ -71,7 +71,7 @@ def _valid_label(label: str) -> bool:
         return False
     if label.startswith("-") or label.endswith("-"):
         return False
-    return all(c.isalnum() or c == "-" for c in label)
+    return all((c.isascii() and c.isalnum()) or c == "-" for c in label)
 
 
 def _normalize(s: str) -> str:

@@ -58,11 +58,14 @@ def label_cases():
     check("trailing hyphen", _valid_name_label("gen-") is False)
     check("space", _valid_name_label("ge n") is False)
     check("underscore", _valid_name_label("ge_n") is False)
-    # str.isalnum() is unicode-aware: the grammar currently admits
-    # non-ascii alnum (nothing on the wire decodes it to bytes yet, but
-    # nothing forbids it either). Frozen as observed, not blessed.
-    check("unicode alnum admitted (observed)",
-          _valid_name_label("génèrïs") is True)
+    # Ruled 2026-10-12 (was: frozen as observed, not blessed):
+    # str.isalnum() is unicode-aware, but the resolver's DNS wire face
+    # decodes labels as ASCII and refuses the rest — a unicode label was
+    # claimable yet never resolvable. The grammar is ASCII-only now.
+    check("unicode alnum refused (ASCII-only grammar)",
+          _valid_name_label("génèrïs") is False)
+    check("unicode single char refused",
+          _valid_name_label("é") is False)
 
 
 def conflict_cases():

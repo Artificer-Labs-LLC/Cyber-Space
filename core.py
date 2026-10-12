@@ -686,16 +686,21 @@ def _name_claim_payload(name: str, node_pubkey: str, issued_at: str, expires_at:
 
 def _valid_name_label(name: str) -> bool:
     """First label only: no dots (subdomains are the node's own business),
-    lowercase alnum/hyphen, 1..NAME_LABEL_MAX chars, no leading/trailing
-    hyphen. A nickname, not an asset — nothing that looks like a path,
-    nothing that looks like money."""
+    lowercase ASCII alnum/hyphen, 1..NAME_LABEL_MAX chars, no
+    leading/trailing hyphen. A nickname, not an asset — nothing that
+    looks like a path, nothing that looks like money. ASCII only, ruled
+    2026-10-12: str.isalnum() is unicode-aware and admitted labels the
+    resolver's DNS wire face refuses outright (dns.py decodes labels as
+    ASCII) — claimable but never resolvable — and a grammar whose accept
+    set depends on the host language's Unicode table cannot be
+    deterministic across independent implementations."""
     if not name or len(name) > NAME_LABEL_MAX:
         return False
     if name != name.lower() or "." in name:
         return False
     if name.startswith("-") or name.endswith("-"):
         return False
-    return all(c.isalnum() or c == "-" for c in name)
+    return all((c.isascii() and c.isalnum()) or c == "-" for c in name)
 
 
 def _name_binding_verify(name: str, node_pubkey: str, issued_at: str,
