@@ -1726,6 +1726,12 @@ def ingest_gossiped_binding(binding: dict, allow_new: bool = True) -> str:
                 or len(signature) != 128 or not issued_at
                 or not expires_at):
             return "dropped-malformed"
+        # Strict checkvalid (canonical point, S < L, neither A nor R
+        # small-order). The zero key and every small-order key fail here,
+        # before any write. weak_reason below is the second layer: it
+        # also refuses those keys, and mixed-order keys that checkvalid
+        # accepts. Admission stays between them so stale / over-cap keep
+        # their own labels.
         if not _name_binding_verify(name, node_pubkey, issued_at,
                                     expires_at, signature):
             return "dropped-unverifiable"

@@ -12,6 +12,8 @@ Items, each with a belt row and one mutant:
   3. route check order: size, per-source bucket, envelope verify,
      known-peer and allowlist, binding-count 400, replay, per-peer
      bucket, ingest. More than 128 bindings is 400, not a truncation.
+  4. ingest uses strict checkvalid and weak_reason. The zero key and a
+     small-order key are dropped on an empty DB, with no row written.
 """
 import json
 import os
@@ -525,6 +527,87 @@ finally:
 record_mutant("binding-count gate skipped",
               "129 bindings are refused before any row is written",
               over_real_ok, mutant_fails)
+
+# -------------------------------------------- zero and small-order keys
+print("weak keys on an empty node:")
+# Throwaway empty DB. Adversarial rows call ingest in-process; they do
+# not ride the HTTP route.
+_saved_db = (core.DB_PATH, core_serve.DB_PATH)
+_empty_path = os.path.join(tempfile.mkdtemp(prefix="names-gossip-empty-"),
+                           "cybernet.db")
+core.DB_PATH = _empty_path
+core_serve.DB_PATH = _empty_path
+core.init_db()
+
+ZERO_KEY = "00" * 32
+# Identity, the first canonical small-order encoding (8*P == identity).
+IDENTITY_KEY = "01" + ("00" * 31)
+ZERO_SIG = "00" * 64
+
+
+def raw_binding(name, pub, sig=ZERO_SIG):
+    return {"name": name, "node_pubkey": pub, "issued_at": ISSUED,
+            "expires_at": EXPIRES, "signature": sig}
+
+
+def empty_count():
+    with core._db_lock, core._db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
+
+
+import window_open  # noqa: E402
+
+check("empty node starts with no name bindings", empty_count() == 0, empty_count())
+for label, pub in (("zero key", ZERO_KEY), ("identity small-order key", IDENTITY_KEY)):
+    check(f"premise: {label} fails strict checkvalid",
+          _ed.checkvalid(bytes.fromhex(ZERO_SIG),
+                         core._name_claim_payload(label.replace(" ", ""), pub, ISSUED, EXPIRES),
+                         bytes.fromhex(pub)) is False)
+    check(f"premise: {label} is small-order under weak_reason",
+          window_open.weak_reason(pub) == "small-order")
+
+zero_b = raw_binding("zerokey", ZERO_KEY)
+ident_b = raw_binding("identkey", IDENTITY_KEY)
+zero_out = core.ingest_gossiped_binding(zero_b)
+ident_out = core.ingest_gossiped_binding(ident_b)
+dropped = {"dropped-unverifiable", "dropped-weak"}
+check("zero key dropped on an empty node, no row",
+      zero_out in dropped and binding_row("zerokey") is None
+      and empty_count() == 0,
+      (zero_out, empty_count()))
+check("small-order identity key dropped on an empty node, no row",
+      ident_out in dropped and binding_row("identkey") is None
+      and empty_count() == 0,
+      (ident_out, empty_count()))
+
+print("mutant both key gates:")
+real_verify = core._name_binding_verify
+real_weak = core._gossip_claim_weak
+mut_b = raw_binding("mutzero", ZERO_KEY)
+core._name_binding_verify = lambda *a, **k: True
+core._gossip_claim_weak = lambda *a, **k: None
+try:
+    mut_out = core.ingest_gossiped_binding(mut_b)
+    mutant_fails = (mut_out == "inserted"
+                    and binding_row("mutzero") == (ZERO_KEY, ZERO_SIG))
+finally:
+    core._name_binding_verify = real_verify
+    core._gossip_claim_weak = real_weak
+# Restored gates: a different small-order key is dropped again.
+rest = raw_binding("restident", IDENTITY_KEY)
+rest_out = core.ingest_gossiped_binding(rest)
+real_ok = (zero_out in dropped and ident_out in dropped
+           and rest_out in dropped and binding_row("restident") is None)
+record_mutant("strict checkvalid and weak_reason both skipped",
+              "zero key is not inserted on an empty node",
+              real_ok, mutant_fails)
+# The mutant left one row. The empty-node refusals above wrote none of theirs.
+check("only the mutant's row exists; the real refusals wrote nothing",
+      empty_count() == 1 and binding_row("zerokey") is None
+      and binding_row("identkey") is None and binding_row("restident") is None,
+      empty_count())
+
+core.DB_PATH, core_serve.DB_PATH = _saved_db
 
 print("mutant results:")
 for name, row, real_ok, mutant_fails in MUTANTS:
