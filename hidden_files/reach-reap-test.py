@@ -36,8 +36,17 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-NOW = datetime.now(timezone.utc)
-AT = lambda s: (NOW + timedelta(seconds=s)).isoformat()  # noqa: E731
+NOW = datetime.now(timezone.utc) - timedelta(seconds=300)
+# Base is 300s in the past: the reap pokes below issue at +60..+240s
+# offsets (each newer than the last, so later-issued-wins replaces),
+# and _reach_descriptor_verify refuses a future issued_at — offsets
+# from a now-base would be dropped-unverifiable before any reap ran.
+# Canonical UTC, seconds precision (twin of mint_name._iso): raw
+# .isoformat() carries microseconds, and every seat (_parse_claim_time)
+# reads a fractional-second stamp as malformed — the fixture's own
+# bindings/descriptors were refused before any reap logic ran.
+AT = lambda s: (NOW + timedelta(seconds=s)).strftime(  # noqa: E731
+    "%Y-%m-%dT%H:%M:%S+00:00")
 PAST = AT(-86400)
 
 
