@@ -141,6 +141,7 @@ def _signed_view(name: str | None):
     so a proof poll does not re-sign every hit."""
     with core._db_lock, core._db() as conn:
         log_id, entries = window_open.export_log(conn)
+        hop_rows = window_open.export_hop_rows(conn)
     if not entries:
         return None
     if name is not None and not any(e["kind"] == "hold" and e.get("name") == name for e in entries):
@@ -165,7 +166,8 @@ def _signed_view(name: str | None):
     def _sign(msg, sk=core._NODE_PRIV, pk=pub):
         return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
 
-    body = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries]}
+    body = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
+            "hops": hop_rows}
     _proof_cache[key] = body
     return body
 

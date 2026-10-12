@@ -87,6 +87,14 @@ _SCHEMA = (
         orphan INTEGER NOT NULL,
         reason TEXT,
         PRIMARY KEY (name, source))""",
+    # ART-42 node B wiring: hop rows committed under the hold-closure's
+    # hops_root (see legacy_witness.hops_root).
+    """CREATE TABLE IF NOT EXISTS window_hop_rows (
+        name TEXT NOT NULL,
+        i INTEGER NOT NULL,
+        old_pubkey TEXT NOT NULL,
+        new_pubkey TEXT NOT NULL,
+        PRIMARY KEY (name, i))""",
     """CREATE TABLE IF NOT EXISTS window_close_log (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         closed_at TEXT NOT NULL,
@@ -242,6 +250,20 @@ def counted_hops(hops) -> int:
     return 0 if i is None else i + 1
 
 
+def committed_hop_rows(name, hops) -> list:
+    """Hop rows node B re-derives this name from with counted_hops: the
+    first SNAPSHOT_PER_NAME + 1 hops of the history (clean or not), plus
+    the earliest weak hop at its real index when it lies beyond them. On
+    these rows counted_hops is the true count up to the cap, and stays over
+    the cap for any name truly over it. Bounded at SNAPSHOT_PER_NAME + 2."""
+    k = min(len(hops), SNAPSHOT_PER_NAME + 1)
+    idx = list(range(k))
+    wi = earliest_weak_index(hops)
+    if wi is not None and wi >= k:
+        idx.append(wi)
+    return [{"name": name, "i": i, "old": hops[i][0], "new": hops[i][1]} for i in idx]
+
+
 def _all_histories(conn):
     """ONE indexed scan of name_rotations (PK prefix = name), grouped in
     Python: {name: [(old, new), ...]} in accepted_at, rowid order. No
@@ -373,6 +395,7 @@ def snapshot_bindings(conn):
         "orphan_count": len(orphan_names),
         # Only the hops an admission reads (ART-42 392140b7).
         "hops_per_name": {name: counted_hops(hops) for name, hops in hist.items()},
+        "hop_rows": [r for name in sorted(hist) for r in committed_hop_rows(name, hist[name])],
     }
 
 
@@ -509,6 +532,19 @@ def _save_kind_source(conn, rows) -> None:
          for r in rows])
 
 
+def _save_hop_rows(conn, hop_rows) -> None:
+    conn.executemany(
+        "INSERT INTO window_hop_rows (name, i, old_pubkey, new_pubkey) VALUES (?,?,?,?)",
+        [(r["name"], r["i"], r["old"], r["new"]) for r in hop_rows])
+
+
+def export_hop_rows(conn) -> list:
+    """Hop rows in (name, i) order, the order hops_root commits."""
+    init_schema(conn)
+    return [{"name": r[0], "i": r[1], "old": r[2], "new": r[3]} for r in conn.execute(
+        "SELECT name, i, old_pubkey, new_pubkey FROM window_hop_rows ORDER BY name, i")]
+
+
 def _append_kind_entries(conn, rows) -> list:
     """Append every kind entry; return their entry hashes in seq order."""
     hashes = []
@@ -521,7 +557,8 @@ def _append_kind_entries(conn, rows) -> list:
     return hashes
 
 
-def _hold_closure_fields(rows_root: str | None = None, rows_n: int | None = None) -> dict:
+def _hold_closure_fields(rows_root: str | None = None, rows_n: int | None = None,
+                         hops_root: str | None = None, hops_n: int | None = None) -> dict:
     """The admission hold is closed on Villhaze's accepted witness port.
     A resolution record is not this and is not written here. rows_root
     commits to every kind entry this open wrote (ART-42 392140b7)."""
@@ -535,10 +572,14 @@ def _hold_closure_fields(rows_root: str | None = None, rows_n: int | None = None
     if rows_root is not None:
         d["rows_root"] = rows_root
         d["rows_n"] = int(rows_n or 0)
+    if hops_root is not None:
+        d["hops_root"] = hops_root
+        d["hops_n"] = int(hops_n or 0)
     return d
 
 
-def _append_hold_closure(conn, rows, rows_root=None, rows_n=None) -> None:
+def _append_hold_closure(conn, rows, rows_root=None, rows_n=None,
+                         hops_root=None, hops_n=None) -> None:
     """One hold-closure for the open, not one per frozen row.
 
     `rows` is the snapshot the caller just froze. The real writer does not
@@ -546,7 +587,7 @@ def _append_hold_closure(conn, rows, rows_root=None, rows_n=None) -> None:
     singular. The basis is the closed witness + weak_reason precondition.
     """
     del rows
-    detail = _hold_closure_fields(rows_root, rows_n)
+    detail = _hold_closure_fields(rows_root, rows_n, hops_root, hops_n)
     signed = dict(detail)
     signed["witness_sig"] = _sign_witness("hold-closure", detail)
     append_log_entry(conn, kind="hold-closure", detail=signed)
@@ -608,7 +649,10 @@ def open_window(opened_by: str) -> dict:
         _save_kind_source(conn, rows)
         hashes = _append_kind_entries(conn, rows)
         kinds_n = len(hashes)
-        _append_hold_closure(conn, rows, lw.rows_root(hashes), kinds_n)
+        hop_rows = snap["hop_rows"]
+        _save_hop_rows(conn, hop_rows)
+        _append_hold_closure(conn, rows, lw.rows_root(hashes), kinds_n,
+                             lw.hops_root(hop_rows), len(hop_rows))
     return {"id": 1, "opened_at": opened_at, "opened_by": opened_by,
             "refused_recorded": n, "already_open": False,
             "orphan_count": snap["orphan_count"], "kinds_recorded": kinds_n,

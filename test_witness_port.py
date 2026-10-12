@@ -19,6 +19,9 @@ os.environ["CYBERNET_NAME_CLAIM_RATE_LIMIT"] = "10000"
 # Pin is request-time. Leave it unset until a row needs it.
 os.environ.pop("CYBERNET_GENESIS_WITNESSES", None)
 os.environ.pop("CYBERNET_GENESIS_LOG_ID", None)
+# ART-42 node B wiring: _rules checks the pinned sizing first.
+os.environ["CYBERNET_GENESIS_LEGACY_ACCOUNTS"] = "1000"
+os.environ["CYBERNET_GENESIS_LIVE_BINDINGS"] = "1000"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -157,8 +160,16 @@ class Builder:
         return {"head": lw.sign_head(h, signers), "span": span}
 
 
+def add_closure(b):
+    """ART-42: every open writes one hold-closure committing its (here, no)
+    row-kind entries and hop rows; node B's verify_rows_root requires it."""
+    b.add("hold-closure", detail={"rows_root": lw.rows_root([]), "rows_n": 0,
+                                  "hops_root": lw.hops_root([]), "hops_n": 0})
+
+
 def standard(b, k0):
     b.add("window-open")
+    add_closure(b)
     b.add("hold", 7, "zed")
     b.add("hold", 8, "yan")
     b.add("migrate-pending", 7, "zed", 1, k0, at=T0 + 10)
@@ -751,6 +762,7 @@ cut_priv = "ab" * 32
 cut_pub = _ed.publickey(bytes.fromhex(cut_priv)).hex()
 mismatch = Builder(ilog)
 mismatch.add("window-open")
+add_closure(mismatch)
 mismatch.add("hold", 7, "zed")
 mismatch.add("migrate-pending", 7, "zed", 1, k0_pub, at=T0 + 10)
 close = mismatch.add("window-close", at=T0 + 30 * DAY)

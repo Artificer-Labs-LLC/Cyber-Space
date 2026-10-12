@@ -74,6 +74,7 @@ cutover is final, and nothing can contest it after it.
 import base64
 import hashlib
 import json
+import os
 import re
 
 from fed import ed25519 as _ed
@@ -176,6 +177,12 @@ HOLD_CLOSURE_PRECONDITION = "witness+weak_reason"
 PER_NAME_HOP_CAP = 64
 HOP_CAP_REASON = "hop-cap"
 ROWS_ROOT_DOMAIN = b"cyberspace-rows-root/v0\n"
+# ART-42 node B wiring: every name in name_rotations commits hop rows under
+# hops_root in the hold-closure. At most PER_NAME_HOP_CAP + 2 rows per
+# name (window_open.committed_hop_rows): its first
+# PER_NAME_HOP_CAP + 1 hops plus its earliest weak hop at its real index.
+HOPS_ROOT_DOMAIN = b"cyberspace-hops-root/v0\n"
+HOP_ROWS_PER_NAME = PER_NAME_HOP_CAP + 2
 if any((not isinstance(k, str)) or ("|" in k) or (k.encode("ascii") != k.encode()) for k in KINDS):
     raise RuntimeError("KINDS must be exact ASCII byte strings with no '|'")
 LATE_CANCEL_SEC = 86400
@@ -247,6 +254,13 @@ def _json_len(x) -> int:
 
 
 MAX_SKELETON_BYTES = _json_len(_worst_entry(False)) + 2   # + ", " list separator
+MAX_HOP_ROW_BYTES = _json_len({"name": "\U0001F600" * MAX_NAME_LEN, "i": 10 ** 10 - 1,
+                               "old": "f" * 64, "new": "f" * 64}) + 2
+
+
+def max_hop_rows(bindings: int, orphans: int = 0) -> int:
+    """Ceiling on committed hop rows: HOP_ROWS_PER_NAME per pinned name."""
+    return HOP_ROWS_PER_NAME * (int(bindings) + int(orphans))
 MAX_FULL_BYTES = _json_len(_worst_entry(True)) + 2
 FULL_ENTRIES_PER_PROOF = ENTRIES_PER_ACCOUNT + WINDOW_EDGES  # the agent's own + edges
 
@@ -261,6 +275,7 @@ def proof_max_bytes(accounts: int, bindings: int, orphans: int = 0) -> int:
     full_slots = FULL_ENTRIES_PER_PROOF + ENTRIES_PER_NAME * names + HOLD_CLOSURE_ENTRIES
     return (HEAD_BUDGET + max_log_entries(accounts, bindings, orphans) * MAX_SKELETON_BYTES
             + full_slots * (MAX_FULL_BYTES - MAX_SKELETON_BYTES) + 64
+            + max_hop_rows(bindings, orphans) * MAX_HOP_ROW_BYTES
             + KEY_STATE_BUDGET)
 
 
@@ -628,11 +643,36 @@ def rows_root(entry_hashes) -> str:
 _ROW_KINDS = ("reserve-hold", "name-refused", "origin-pin", "origin-handoff")
 
 
-def verify_rows_root(entries: list) -> tuple:
+def hop_row_hash(row: dict) -> str:
+    """Hash of one committed hop row {name, i, old, new}."""
+    body = json.dumps([row["name"], row["i"], row["old"], row["new"]],
+                      separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(HOPS_ROOT_DOMAIN + body.encode("ascii")).hexdigest()
+
+
+def hops_root(rows) -> str:
+    """Commitment to the hop rows of one open, in (name, i) order."""
+    h = hashlib.sha256(HOPS_ROOT_DOMAIN)
+    for r in rows:
+        h.update(hop_row_hash(r).encode("ascii") + b"\n")
+    return h.hexdigest()
+
+
+def _hop_row_ok(r) -> bool:
+    return (isinstance(r, dict) and set(r) == {"name", "i", "old", "new"}
+            and isinstance(r["name"], str) and type(r["i"]) is int and r["i"] >= 0
+            and isinstance(r["old"], str) and isinstance(r["new"], str))
+
+
+def verify_rows_root(entries: list, hops: list | None = None, log_id: str | None = None) -> tuple:
     """(ok, why). Node B: every row-kind entry in the span is covered by the
-    single hold-closure's rows_root, and nothing after it is a row kind."""
+    single hold-closure's rows_root, nothing after it is a row kind, and the
+    proof's hop rows match the hold-closure's hops_root."""
     if not isinstance(entries, list):
         return False, "no entries"
+    hops = [] if hops is None else hops
+    if not isinstance(hops, list) or not all(_hop_row_ok(r) for r in hops):
+        return False, "hop rows malformed"
     closures = [e for e in entries if isinstance(e, dict) and e.get("kind") == "hold-closure"]
     if len(closures) != 1:
         return False, "expected one hold-closure"
@@ -647,33 +687,105 @@ def verify_rows_root(entries: list) -> tuple:
     rows = [e for e in entries if e.get("kind") in _ROW_KINDS]
     if any(e["seq"] > cseq for e in rows):
         return False, "row entry outside rows_root (after hold-closure)"
-    if rows_root([e["entry_hash"] for e in rows]) != root or d.get("rows_n") != len(rows):
+    hashes = [entry_hash(e, log_id) if log_id is not None else e["entry_hash"] for e in rows]
+    if rows_root(hashes) != root or d.get("rows_n") != len(rows):
         return False, "rows_root mismatch"
+    if d.get("hops_n") != len(hops) or hops_root(hops) != d.get("hops_root"):
+        return False, "hops_root mismatch"
     return True, None
 
 
-def rederive_refusals(entries: list) -> tuple:
-    """(ok, refused). Node B re-derives every hop-cap refusal and every
-    reserve-hold carrying weak-hop evidence from the witnessed rows alone.
-    refused is {name: hops} for hop-cap refusals that check out."""
-    from window_open import weak_reason
+def _hops_by_name(hops: list) -> tuple:
+    """({name: {i: (old, new)}}, {name: [(old, new), ...] in i order}) or
+    raises WitnessRefused when a name's rows are not the committed shape:
+    i = 0..k-1 contiguous, then at most one row beyond, only when
+    k == PER_NAME_HOP_CAP + 1 (the earliest weak hop at its real index)."""
+    by = {}
+    for r in hops:
+        by.setdefault(r["name"], []).append(r)
+    at, seq = {}, {}
+    for name, rs in by.items():
+        idx = [r["i"] for r in rs]
+        k = len(rs)
+        if idx != list(range(k)):
+            k -= 1
+            if k != PER_NAME_HOP_CAP + 1 or idx[:k] != list(range(k)) or idx[-1] <= k - 1:
+                raise WitnessRefused(f"hop rows for {name!r} are not the committed shape")
+        at[name] = {r["i"]: (r["old"], r["new"]) for r in rs}
+        seq[name] = [(r["old"], r["new"]) for r in rs]
+    return at, seq
+
+
+def rederive_refusals(entries: list, hops: list | None = None) -> tuple:
+    """(ok, refused). Node B re-derives every hop-cap refusal from the
+    witnessed hop rows with the SAME counted_hops the writer uses
+    (window_open.counted_hops). A FLAG on a name at or under the cap is
+    forged; a name over the cap without a FLAG is a dropped FLAG. Either
+    refuses. Every reserve-hold carrying weak-hop evidence must match the
+    committed earliest weak hop. refused is {name: hops}."""
+    import window_open as wo
+    hops = [] if hops is None else hops
+    try:
+        at, seq = _hops_by_name(hops)
+    except WitnessRefused as e:
+        return False, {"bad-hops": str(e)}
+    counted = {name: wo.counted_hops(h) for name, h in seq.items()}
+    over = {name for name, n in counted.items() if n > PER_NAME_HOP_CAP}
     view = rebuild_window_kinds(entries)
     refused = {}
     for r in view["name-refused"]:
         if r["reason"] != HOP_CAP_REASON:
             continue
-        hops = r["detail"].get("hops")
-        if not isinstance(hops, int) or hops <= PER_NAME_HOP_CAP:
-            return False, {"bad": r["name"], "hops": hops}
-        refused[r["name"]] = hops
+        n = r["detail"].get("hops")
+        if r["name"] not in over or not isinstance(n, int) or n != max(at[r["name"]]) + 1:
+            return False, {"forged": r["name"], "hops": n, "counted": counted.get(r["name"])}
+        refused[r["name"]] = n
+    dropped = sorted(over - set(refused))
+    if dropped:
+        return False, {"dropped": dropped}
     for r in view["reserve-hold"]:
         d = r["detail"]
         if "weak_index" not in d:
             continue
-        if d.get("weak_old") != r["reserved_for"] or weak_reason(d.get("weak_old")) is not None \
-                or weak_reason(d.get("weak_new")) is None:
+        if d.get("weak_old") != r["reserved_for"] or wo.weak_reason(d.get("weak_old")) is not None \
+                or wo.weak_reason(d.get("weak_new")) is None:
             return False, {"bad-hold": r["name"]}
+        wi = d["weak_index"]
+        if r["name"] not in at or counted[r["name"]] != (wi + 1 if isinstance(wi, int) else None) \
+                or tuple(str(k).strip().lower() for k in at[r["name"]].get(wi, ("", ""))) \
+                != (d.get("weak_old"), d.get("weak_new")):
+            return False, {"bad-hold-hops": r["name"]}
     return True, refused
+
+
+def pinned_sizing() -> tuple | None:
+    """(accounts, bindings, orphans) the operator pinned for this log, or
+    None. Orphans default to 0 when unset (Loom: third pin still open)."""
+    try:
+        a = int(os.environ.get("CYBERNET_GENESIS_LEGACY_ACCOUNTS", ""))
+        b = int(os.environ.get("CYBERNET_GENESIS_LIVE_BINDINGS", ""))
+        o = int(os.environ.get("CYBERNET_GENESIS_ORPHANS", "0") or "0")
+    except ValueError:
+        return None
+    if a < 0 or b < 0 or o < 0:
+        return None
+    return a, b, o
+
+
+def check_size_limits(proof: dict, pins) -> None:
+    """First check (Bulwark): nothing is hashed or counted before the
+    proof's span, hop rows and bytes are inside the pinned ceilings."""
+    if pins is None:
+        raise WitnessRefused("no pinned sizing (accounts / bindings) on this node")
+    accounts, bindings, orphans = pins
+    span = proof.get("span")
+    if not isinstance(span, list) or len(span) > max_log_entries(accounts, bindings, orphans):
+        raise WitnessRefused("span exceeds max_log_entries")
+    hop_rows = proof.get("hops", [])
+    if not isinstance(hop_rows, list) or len(hop_rows) > max_hop_rows(bindings, orphans):
+        raise WitnessRefused("hop rows exceed the pinned ceiling")
+    if len(json.dumps(proof).encode()) > proof_max_bytes(accounts, bindings, orphans):
+        raise WitnessRefused("proof exceeds proof_max_bytes")
 
 
 def _accept(proof, name, wset, log_id, store) -> dict:
@@ -683,9 +795,12 @@ def _accept(proof, name, wset, log_id, store) -> dict:
     return ident
 
 
-def _rules(proof, name, wset, log_id) -> tuple:
+def _rules(proof, name, wset, log_id, pins=None) -> tuple:
     if not isinstance(proof, dict):
         raise WitnessRefused("proof is not an object")
+    # ART-42 node B order: size limits, then verify_rows_root, then
+    # rederive_refusals. Size first, before any entry or row is hashed.
+    check_size_limits(proof, pinned_sizing() if pins is None else pins)
     h = verify_head(proof.get("head") or {}, wset, log_id)
     if h["window_state"] != "closed" or h["window_close_seq"] is None:
         raise WitnessRefused("head is before window-close; a legacy identity stays pending")
@@ -697,6 +812,13 @@ def _rules(proof, name, wset, log_id) -> tuple:
         raise WitnessRefused(f"span does not chain: {last}")
     if last != h["head_hash"]:
         raise WitnessRefused("span does not end at the signed head")
+    hop_rows = proof.get("hops", [])
+    ok, why = verify_rows_root(entries, hop_rows, log_id)
+    if not ok:
+        raise WitnessRefused(f"rows_root: {why}")
+    ok, why = rederive_refusals(entries, hop_rows)
+    if not ok:
+        raise WitnessRefused(f"hop-cap refusals do not re-derive: {why}")
     o, c = h["window_open_seq"], h["window_close_seq"]
     kinds = [e["kind"] for e in entries]
     if kinds.count("window-open") != 1 or kinds.count("window-close") != 1 \

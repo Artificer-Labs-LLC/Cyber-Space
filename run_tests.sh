@@ -46,7 +46,12 @@ TESTS=(
   "test_names_rotate_zero_key.py"
   "test_names_rotate_name_cap.py"
   "test_window_open_preconditions.py"
-  "test_window_open_witness_kinds.py"
+  # Split from test_window_open_witness_kinds.py by mutant group (41 rows
+  # took ~7 min, past the suite timeout); each mutant dies in one file.
+  "test_wok_kinds.py"
+  "test_wok_hopcap.py"
+  "test_wok_closure.py"
+  "test_wok_nodeb.py"
   "test_legacy_migrate_stub.py"
   "test_witness_port.py"
   "resolver/test_answer_aaaa.py"
