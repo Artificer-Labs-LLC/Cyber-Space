@@ -2,13 +2,15 @@
 """Window-open witness kinds, split 4/4: node B wiring (ART-42).
 
 legacy_witness._rules runs, in order: the size limits (max_log_entries /
-proof_max_bytes), verify_rows_root, rederive_refusals. window_open and
-rederive_refusals share ONE counted_hops. Every proof here goes through the
-real _rules with a real signed head, full span and committed hop rows.
+proof_max_bytes), verify_rows_root, rederive_refusals, held-name
+proof-vs-local (Villhaze 35e546b9). window_open and rederive_refusals share
+ONE counted_hops. Every proof here goes through the real _rules with a real
+signed head, full span and committed hop rows.
 Rows: Examiner (forged / dropped FLAG), Lodestar (clean 65 / 1 weak + 64
 clean accepted), Cipher (tampered hop row refused before re-derivation),
-Bulwark (over-limit refused with nothing hashed or counted). Every mutant
-here is killed by a row in this file."""
+Bulwark (over-limit refused with nothing hashed or counted), held-name
+proof-vs-local (omit without FLAG refused; FLAG covers; unheard ok).
+Every mutant here is killed by a row in this file."""
 import inspect
 import json
 
@@ -20,6 +22,7 @@ real_counted = wo.counted_hops
 real_vrr = lw.verify_rows_root
 real_rr = lw.rederive_refusals
 real_size = lw.check_size_limits
+real_held = lw.check_held_name_diff
 
 # ---------------------------------------------------------------- one shared counted_hops
 src_lw = inspect.getsource(lw)
@@ -39,6 +42,7 @@ def both_true():
 def restore():
     lw.verify_rows_root, lw.rederive_refusals = real_vrr, real_rr
     lw.check_size_limits = real_size
+    lw.check_held_name_diff = real_held
     wo.counted_hops = real_counted
 
 
@@ -240,5 +244,50 @@ record_mutant("Bulwark: limits checked after verify_rows_root",
               "one over max_log_entries: 0 hashed, 0 counted", real_bw1, m1.n["hashed"] > 0)
 record_mutant("Bulwark: limits checked after verify_rows_root",
               "one over proof_max_bytes: 0 hashed, 0 counted", real_bw2, m2.n["hashed"] > 0)
+
+
+# ---------------------------------------------------------------- held-name proof-vs-local (35e546b9)
+# B holds witnessed state for a name. Silent omission from the closure is
+# refused; a FLAG (name-refused) covers the omission; a name B has never
+# seen does not refuse (known limitation).
+
+
+def flagged_held_proof():
+    """Genesis FLAGs 'hx' (weak binding, no hops). B will hold state for hx."""
+    wipe()
+    with core._db_lock, core._db() as conn:
+        wo.init_schema(conn)
+        bind(conn, "hx", ZERO, FUT)
+    open_or("held-flag")
+    finish_window()
+    return b_proof()
+
+
+flagged = flagged_held_proof()
+# Control: omit from admission but carry a FLAG row for the held name → accept.
+flag_ok, flag_why = b_accepts(*flagged, held_names={"hx"})
+real_flag = flag_ok and flag_why["name"] == "imp"
+check("(held-name) a closure that FLAGs a name B holds state for is accepted",
+      real_flag, flag_why)
+
+# Silent omit: B holds 'hx', Genesis proof has no hop row and no FLAG for it.
+omit_ok, omit_why = b_accepts(*c65, held_names={"hx"})
+real_omit = (not omit_ok) and "held name omitted" in omit_why and "'hx'" in omit_why
+check("(held-name) a closure that omits a name B holds state for, with no FLAG, is refused",
+      real_omit, omit_why)
+
+# Unheard: name B has never seen stays a known limitation (does not refuse).
+unheard_ok, unheard_why = b_accepts(*c65, held_names=set())
+real_unheard = unheard_ok and unheard_why["name"] == "imp"
+check("(held-name) a name B has never seen (empty held_names) does not refuse the closure",
+      real_unheard, unheard_why)
+
+lw.check_held_name_diff = lambda *a, **k: None
+try:
+    mo_ok, _ = b_accepts(*c65, held_names={"hx"})
+finally:
+    restore()
+record_mutant("held-name: check_held_name_diff is a no-op",
+              "omit held name with no FLAG refused", real_omit, mo_ok)
 
 finish("test_wok_nodeb.py")

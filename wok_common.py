@@ -218,10 +218,12 @@ def b_proof():
 B_PINS = (1, 200, 0)
 
 
-def b_accepts(proof, wset, log_id, pins=B_PINS):
-    """(accepted, ident-or-reason) through node B's real _rules."""
+def b_accepts(proof, wset, log_id, pins=B_PINS, held_names=None):
+    """(accepted, ident-or-reason) through node B's real _rules.
+    held_names: names B holds witnessed state for (ART-42 35e546b9)."""
     try:
-        return True, lw._rules(proof, IMP_NAME, wset, log_id, pins)[2]
+        return True, lw._rules(proof, IMP_NAME, wset, log_id, pins,
+                               held_names=held_names)[2]
     except lw.WitnessRefused as e:
         return False, str(e)
 

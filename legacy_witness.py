@@ -559,25 +559,28 @@ class HeadStore:
 
 
 def accept_legacy_identity(proof: dict, name: str, wset: WitnessSet, log_id: str,
-                           store) -> dict:
+                           store, held_names=None) -> dict:
     """Node B's rule (Loom 4b, Cipher's order; late path per 5fe976e8).
     Returns {name, k0_pub, agent_key_id, ...} or raises WitnessRefused,
     and only WitnessRefused: any other failure on hostile input is turned
-    into a clean refusal, never a crash."""
+    into a clean refusal, never a crash. held_names (ART-42 35e546b9) is
+    the set of names B already holds witnessed state for."""
     try:
-        return _accept(proof, name, wset, log_id, store)
+        return _accept(proof, name, wset, log_id, store, held_names=held_names)
     except WitnessRefused:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as e:
         raise WitnessRefused(f"malformed proof ({type(e).__name__})") from None
 
 
-def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str) -> tuple:
+def check_identity(proof: dict, name: str, wset: WitnessSet, log_id: str,
+                   held_names=None) -> tuple:
     """The 4a rules without touching any store: -> (head, entries, identity).
     Callers that persist the head (node B's import) use this, then run
-    their own store check and commit inside their transaction."""
+    their own store check and commit inside their transaction.
+    held_names: see check_held_name_diff (ART-42 35e546b9)."""
     try:
-        return _rules(proof, name, wset, log_id)
+        return _rules(proof, name, wset, log_id, held_names=held_names)
     except WitnessRefused:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as e:
@@ -772,6 +775,44 @@ def pinned_sizing() -> tuple | None:
     return a, b, o
 
 
+def proof_name_coverage(entries: list, hops: list | None = None) -> set:
+    """Names the closure accounts for: hop rows plus witness kind rows
+    (reserve-hold, name-refused / FLAG, origin-pin, origin-handoff)."""
+    names = set()
+    for r in ([] if hops is None else hops):
+        if isinstance(r, dict) and isinstance(r.get("name"), str):
+            names.add(r["name"])
+    view = rebuild_window_kinds(entries)
+    for kind in ("reserve-hold", "name-refused", "origin-pin", "origin-handoff"):
+        for r in view.get(kind, []):
+            n = r.get("name")
+            if isinstance(n, str):
+                names.add(n)
+    return names
+
+
+def check_held_name_diff(entries: list, hops: list | None = None,
+                         held_names=None) -> None:
+    """Villhaze ART-42 35e546b9: proof-vs-local diff for held names.
+
+    B refuses a closure that silently omits a name B already holds
+    witnessed state for. A FLAG (name-refused) row for that name covers
+    the omission. Names B has never seen remain a known limitation and
+    do not refuse."""
+    if not held_names:
+        return
+    held = {n for n in held_names if isinstance(n, str)}
+    if not held:
+        return
+    omitted = sorted(held - proof_name_coverage(entries, hops))
+    if omitted:
+        if len(omitted) == 1:
+            raise WitnessRefused(
+                f"held name omitted from closure (no FLAG): {omitted[0]!r}")
+        raise WitnessRefused(
+            f"held names omitted from closure (no FLAG): {omitted}")
+
+
 def check_size_limits(proof: dict, pins) -> None:
     """First check (Bulwark): nothing is hashed or counted before the
     proof's span, hop rows and bytes are inside the pinned ceilings."""
@@ -788,18 +829,19 @@ def check_size_limits(proof: dict, pins) -> None:
         raise WitnessRefused("proof exceeds proof_max_bytes")
 
 
-def _accept(proof, name, wset, log_id, store) -> dict:
-    h, entries, ident = _rules(proof, name, wset, log_id)
+def _accept(proof, name, wset, log_id, store, held_names=None) -> dict:
+    h, entries, ident = _rules(proof, name, wset, log_id, held_names=held_names)
     store.check(h, entries)
     store.commit(h)
     return ident
 
 
-def _rules(proof, name, wset, log_id, pins=None) -> tuple:
+def _rules(proof, name, wset, log_id, pins=None, held_names=None) -> tuple:
     if not isinstance(proof, dict):
         raise WitnessRefused("proof is not an object")
     # ART-42 node B order: size limits, then verify_rows_root, then
-    # rederive_refusals. Size first, before any entry or row is hashed.
+    # rederive_refusals, then held-name proof-vs-local (35e546b9). Size
+    # first, before any entry or row is hashed.
     check_size_limits(proof, pinned_sizing() if pins is None else pins)
     h = verify_head(proof.get("head") or {}, wset, log_id)
     if h["window_state"] != "closed" or h["window_close_seq"] is None:
@@ -819,6 +861,7 @@ def _rules(proof, name, wset, log_id, pins=None) -> tuple:
     ok, why = rederive_refusals(entries, hop_rows)
     if not ok:
         raise WitnessRefused(f"hop-cap refusals do not re-derive: {why}")
+    check_held_name_diff(entries, hop_rows, held_names)
     o, c = h["window_open_seq"], h["window_close_seq"]
     kinds = [e["kind"] for e in entries]
     if kinds.count("window-open") != 1 or kinds.count("window-close") != 1 \
