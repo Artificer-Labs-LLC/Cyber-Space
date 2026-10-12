@@ -40,6 +40,11 @@ Config (environment, bad values degrade to silence, never to a lie):
                            direct strategy is silently dropped by
                            _reach_build, so run() warns loudly on
                            stderr at startup (see _public_url_warnings)
+                           — NEITHER a usable direct URL nor a usable
+                           relay triple -> _reach_build returns None and
+                           no announce can ever succeed, so run() warns
+                           loudly on stderr at startup that there is no
+                           reach strategy at all (see _no_reach_warnings)
   CYBERNET_RELAY_URL / CYBERNET_RELAY_PUBKEY / CYBERNET_RELAY_TOKEN
                            relay hold-open (optional if direct is set)
                            — all three together or nothing: a
@@ -254,6 +259,40 @@ def _relay_strategy_present() -> bool:
         return False
 
 
+def _direct_strategy_present() -> bool:
+    """Whether core._reach_build will carry a direct strategy — the
+    exact gate it applies (valid public CYBERNET_PUBLIC_URL). Never
+    raises."""
+    try:
+        core._valid_node_url(os.environ.get("CYBERNET_PUBLIC_URL", "").strip())
+        return True
+    except Exception:
+        return False
+
+
+def _no_reach_warnings() -> list[str]:
+    """Loud no-reach config mistake, or []. Direct and relay are each
+    optional IF the other is set, so a minted env (mint_name.py writes
+    neither — both stay commented, unknown at mint time) installed
+    as-is, or any config with an invalid public URL and an absent or
+    half-filled relay triple, has NO usable strategy: _reach_build
+    returns None, announce_once returns False forever, and the only
+    trace was the first announce note's ambiguous 'no honest reach'
+    among three possible causes. run() names the real cause at
+    startup: the name will not be reachable until one strategy is
+    configured. The daemon still runs and retries (a strategy can
+    only arrive via a restart with fixed env, but the announce loop's
+    retry contract is unchanged); never prints secret VALUES."""
+    if _direct_strategy_present() or _relay_strategy_present():
+        return []
+    return ["no usable reach strategy — neither a valid "
+            "CYBERNET_PUBLIC_URL (direct) nor a complete relay triple "
+            "(CYBERNET_RELAY_URL + CYBERNET_RELAY_PUBKEY + "
+            "CYBERNET_RELAY_TOKEN) is configured, so no reach "
+            "descriptor can be built and the name will NOT be "
+            "reachable"]
+
+
 def _rendezvous_warnings() -> list[str]:
     """Loud rendezvous config mistakes, or []. Rendezvous is enabled
     only by exactly CYBERNET_RENDEZVOUS=1 (unset and "0" are silent —
@@ -449,6 +488,9 @@ def run() -> int:
             target=hold_open.hold_open_cycle,
             args=(relay_url, relay_token, name_priv, stop),
             daemon=True).start()
+
+    for warn in _no_reach_warnings():
+        print(f"hostd: reach: {warn}", file=sys.stderr)
 
     for warn in _rendezvous_warnings():
         print(f"hostd: rendezvous: {warn}", file=sys.stderr)
