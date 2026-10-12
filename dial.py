@@ -27,6 +27,7 @@ reach (silent host) | 4 bad arguments.
 import argparse
 import os
 import sys
+import urllib.parse
 from datetime import datetime, timezone
 
 import core
@@ -55,6 +56,20 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     mirror = (mirror or "").strip().rstrip("/")
     if not mirror:
         return 4, ["args: empty mirror URL"]
+    # A mirror that is not an http(s) URL with a host can never be
+    # fetched (_resolve_get_json swallows the urlopen error as None),
+    # so without this check it read as exit 2 "mirror: silent" — a
+    # well-formed mirror that is merely down — when it is really a bad
+    # argument. Shape only, mirroring resolverd's mirror warning:
+    # loopback is honest here, no public-address gate. Never echo the
+    # value (it is operator config, not the caller's to see repeated).
+    try:
+        parts = urllib.parse.urlsplit(mirror)
+        mirror_ok = parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:
+        mirror_ok = False
+    if not mirror_ok:
+        return 4, ["args: malformed mirror URL (not an http(s) URL with a host)"]
 
     # Step 1: mirror liveness — a silent mirror is distinguishable from
     # a withheld name. The liveness answer is untrusted for everything

@@ -123,6 +123,19 @@ class SpecBelt(unittest.TestCase):
         self.assertEqual(code, 4)
         self.assertTrue(any("empty mirror" in l for l in lines))
 
+    def test_malformed_mirror_is_exit_4_not_silent(self):
+        # _resolve_get_json swallows the urlopen error for these as
+        # None, so they used to read as exit 2 "mirror: silent" — a
+        # down mirror — when no fetch was ever possible.
+        for bad in ("notaurl", "ftp://x", "http://", "https://",
+                    "127.0.0.1:8471", "http://[::1"):
+            with ScriptedMirror({"raise": None}) as sm:
+                sm.routes.clear()
+                code, lines = dial.plan("x.cyberspace", bad)
+            self.assertEqual(code, 4, bad)
+            self.assertTrue(any("malformed mirror" in l for l in lines), bad)
+            self.assertFalse(any(bad in l for l in lines), bad)
+
     # --- step 1: mirror liveness ---
     def test_silent_mirror_is_exit_2(self):
         with ScriptedMirror({}):
