@@ -13,7 +13,10 @@ Type=simple
 User=villhaze
 WorkingDirectory=/home/villhaze/cybernet/node
 Environment="CYBERNET_NODE_NAME=genesis" "PATH=/home/villhaze/cybernet/node/venv/bin:/usr/bin:/bin"
-ExecStart=/home/villhaze/cybernet/node/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8471
+# --no-proxy-headers: HQ uvicorn (0.54) trusts X-Forwarded-For by default and
+# the Caddyfile sets no trusted_proxies. client_source is the only place
+# forwarded headers are trusted (ART-40 C2).
+ExecStart=/home/villhaze/cybernet/node/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8471 --no-proxy-headers
 Restart=on-failure
 RestartSec=5
 # Hardening: the node is a public-facing web app. Its only writable state is

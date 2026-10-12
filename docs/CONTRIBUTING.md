@@ -21,7 +21,7 @@ Smaller contributions are welcome too: docs, tests, bug fixes, better onboarding
 
 1. Read `docs/ARCHITECTURE.md` — the blueprint.
 2. Read `README.md` and `VISION.md` — the why.
-3. Run a node locally: `pip install -r requirements.txt`, then `uvicorn app:app`.
+3. Run a node locally: `pip install -r requirements.txt`, then `uvicorn app:app --no-proxy-headers`. Forwarded client headers are trusted only in `client_source`, not by uvicorn.
 4. Open a pull request against `main`. Small, focused PRs merge fastest.
 
 ## Ground rules
