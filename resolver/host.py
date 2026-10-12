@@ -46,6 +46,15 @@ Config (environment, bad values degrade to silence, never to a lie):
                            half-filled triple disables the relay and
                            run() says so loudly on stderr at startup
                            (nothing set = direct dial, silent by choice)
+  CYBERNET_RENDEZVOUS / CYBERNET_RENDEZVOUS_EPOCH_LEN
+                           derived-point rendezvous (optional, only
+                           exactly "1" enables it) — the descriptor
+                           entry rides on the relay strategy, so with
+                           no usable relay it is silently omitted by
+                           _reach_build, and a bad epoch_len silently
+                           falls back to the frozen default; run()
+                           warns loudly on stderr at startup for both
+                           (see _rendezvous_warnings)
   CYBERNET_REACH_TTL       descriptor lifetime seconds (default 86400)
   CYBERNET_HOSTD_REFRESH   re-announce cadence seconds (default 600)
 
@@ -64,6 +73,7 @@ import urllib.request
 
 import core
 import hold_open
+import rendezvous
 
 def _env_int(name: str, default: int, floor: int = 1) -> int:
     """Bad env values fall back, never crash the daemon."""
@@ -216,6 +226,62 @@ def _public_url_warnings() -> list[str]:
                 "— direct strategy will not be advertised"]
 
 
+def _relay_strategy_present() -> bool:
+    """Whether core._reach_build will carry a relay strategy — the
+    exact gates it applies (valid public relay URL, 64-hex relay
+    pubkey, non-empty token within the cap). Never raises."""
+    relay_url = os.environ.get("CYBERNET_RELAY_URL", "").strip()
+    relay_pub = os.environ.get("CYBERNET_RELAY_PUBKEY", "").strip().lower()
+    relay_token = os.environ.get("CYBERNET_RELAY_TOKEN", "").strip()
+    try:
+        core._valid_node_url(relay_url)
+        if len(relay_pub) != 64:
+            return False
+        bytes.fromhex(relay_pub)
+        return bool(relay_token) and len(relay_token) <= core._RELAY_TOKEN_CAP
+    except Exception:
+        return False
+
+
+def _rendezvous_warnings() -> list[str]:
+    """Loud rendezvous config mistakes, or []. Rendezvous is enabled
+    only by exactly CYBERNET_RENDEZVOUS=1 (unset and "0" are silent —
+    off by choice). Three set-but-ineffective cases core._reach_build
+    otherwise hides: a value other than "1" (a "true"/"yes" the
+    operator believes enabled it); "1" with no usable relay strategy
+    (the descriptor entry rides on the relay strategy, so it is
+    omitted and no dialer ever probes the derived points); and a set
+    CYBERNET_RENDEZVOUS_EPOCH_LEN that is not an integer in bounds
+    (descriptor and hold-open both fall back to the frozen default, so
+    the operator's custom epoch silently never takes effect). Never
+    prints secret VALUES, only which var and why."""
+    raw = os.environ.get("CYBERNET_RENDEZVOUS", "").strip()
+    if not raw or raw == "0":
+        return []
+    if raw != "1":
+        return ["CYBERNET_RENDEZVOUS is set but is not '1' — rendezvous "
+                "is NOT enabled (only exactly '1' enables it)"]
+    problems: list[str] = []
+    if not _relay_strategy_present():
+        problems.append(
+            "CYBERNET_RENDEZVOUS=1 but no usable relay strategy — "
+            "rendezvous will not be advertised (the descriptor entry "
+            "rides on the relay strategy)")
+    epoch_raw = os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "").strip()
+    if epoch_raw:
+        try:
+            epoch_ok = rendezvous._epoch_len_ok(int(epoch_raw))
+        except (ValueError, TypeError):
+            epoch_ok = False
+        if not epoch_ok:
+            problems.append(
+                "CYBERNET_RENDEZVOUS_EPOCH_LEN is not an integer in "
+                f"{rendezvous.EPOCH_LEN_MIN}..{rendezvous.EPOCH_LEN_MAX} "
+                f"— the frozen default {rendezvous.EPOCH_LEN_DEFAULT} "
+                "will be advertised and held instead")
+    return problems
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
     """Signed POST to the mirror. True on HTTP 200; anything else
     (4xx/5xx/timeout) is silence, never a crash. Never raises."""
@@ -324,6 +390,9 @@ def run() -> int:
             target=hold_open.hold_open_cycle,
             args=(relay_url, relay_token, name_priv, stop),
             daemon=True).start()
+
+    for warn in _rendezvous_warnings():
+        print(f"hostd: rendezvous: {warn}", file=sys.stderr)
 
     last_ok: bool | None = None
     while not stop.is_set():
