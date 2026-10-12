@@ -3,15 +3,18 @@ from fed import ed25519 as _fed_ed25519
 from fed import envelope as _fed_env
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import re
 import hashlib
 import secrets
 import urllib.request
-from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
-                  _NODE_PUB, _NODE_URL_RE, _authed, _broadcast, _check_rate, _db,
-                  _db_lock, _delta_payload, _countersign_payload, _hash_key,
-                  _invite_payload, _leave_payload, _now, _pigeonhole_cutoff,
-                  _post_message, _removed_payload, _valid_name, _valid_node_url)
+from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, RATE_LIMIT,
+                  RATE_WINDOW, _NODE_PRIV, _NODE_PUB, _NODE_URL_RE, _authed,
+                  _broadcast, _check_rate, _db, _db_lock, _delta_payload,
+                  _countersign_payload, _hash_key, _invite_payload, _leave_payload,
+                  _now, _pigeonhole_cutoff, _post_message, _removed_payload,
+                  _valid_name, _valid_node_url, ingest_gossiped_binding,
+                  request_source)
 
 router = APIRouter()
 
@@ -249,6 +252,123 @@ def fed_gossip(env: dict):
             else:
                 ignored += 1
     return {"ok": True, "merged": merged, "ignored": ignored}
+
+
+# Operator peer allowlist (5357b58). Unset or empty: not in force — the
+# known-unretired gate still applies. When set, a known sender absent from
+# the list is refused. Read on each call so an operator can change it
+# without a restart. This route is the only caller; other /fed receivers
+# are unchanged.
+class _PeerAllowlist:
+    ENV = "CYBERNET_PEER_ALLOWLIST"
+
+    def pubs(self):
+        raw = os.environ.get(self.ENV, "").strip()
+        if not raw:
+            return None
+        allowed = {p.strip().lower() for p in raw.replace("\n", ",").split(",")
+                   if p.strip()}
+        return allowed or None
+
+    def require(self, sender_pub: str, route: str) -> None:
+        allowed = self.pubs()
+        if allowed is None:
+            return
+        if str(sender_pub).lower() not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"peer not on operator allowlist for {route}")
+
+
+_pal = _PeerAllowlist()
+
+# Per-source sybil cap (18e77d1): one shared src:fed:<source> bucket,
+# 4× the ordinary rate, charged before signature verification and before
+# any database work. Applied on this restored route only.
+FED_SOURCE_LIMIT = 4 * RATE_LIMIT
+NAMES_GOSSIP_RECV_CAP = 128
+
+
+def _charge_fed_source(request) -> None:
+    source = "direct" if request is None else request_source(request)
+    _check_rate(f"src:fed:{source}", limit=FED_SOURCE_LIMIT, window=RATE_WINDOW)
+
+
+@router.post("/fed/names/gossip")
+def fed_names_gossip(env: dict, request: Request = None):
+    """Name-bindings gossip receive half (docs/FEDERATION.md).
+
+    Check order, fail-closed, no existing gate weakened:
+      1. Per-source sybil cap (`src:fed:<source>`, 4× RATE_LIMIT / 60s)
+         before signature verification or any database read.
+      2. Envelope is a dict and `verify_envelope` accepts it, else 400
+         "invalid envelope".
+      3. Recipient is this node's pubkey, else 400
+         "not addressed to this node".
+      4. Body is a dict, else 400 "invalid envelope".
+      5. `body.from_node_pub` equals the verified sender_pub, else 400
+         "sender_pub mismatch".
+      6. Per-sender rate limit (`fednamesgossip:<sender_pub>`, default
+         RATE_LIMIT / RATE_WINDOW).
+      7. Sender is a known unretired peer, else 404 "unknown peer"
+         (a retired row is the same refusal as a stranger).
+      8. Operator allowlist, if CYBERNET_PEER_ALLOWLIST is set:
+         `_pal.require(sender_pub, "/fed/names/gossip")`.
+      9. `body.bindings` is a list, else 400 "bindings must be a list".
+     10. Fold at most 128 bindings through `ingest_gossiped_binding`
+         only. The route does not pre-verify the claimant signature;
+         ingest re-verifies it fail-closed. Bindings past the cap are
+         not processed and not counted.
+
+    Replay dedupe (`_claim_seen_sig` / `fed_seen_sigs`) is not part of
+    the documented contract and is not implemented on today's other
+    receivers, so this route does not invent it.
+
+    Returns inserted / replaced / kept / dropped / conflict plus the
+    per-binding outcome list. `dropped` counts every ingest result that
+    is not inserted, replaced, kept, or conflict (malformed, unverifiable,
+    expired, stale, over-cap, full, weak).
+    """
+    _charge_fed_source(request)
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    if env.get("recipient") != _NODE_PUB:
+        raise HTTPException(status_code=400, detail="not addressed to this node")
+    body = env.get("body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    sender_pub = env.get("sender_pub")
+    if body.get("from_node_pub") != sender_pub:
+        raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    _check_rate(f"fednamesgossip:{sender_pub}")
+    with _db_lock, _db() as conn:
+        known = conn.execute(
+            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
+            (sender_pub,)).fetchone()
+    if not known:
+        raise HTTPException(status_code=404, detail="unknown peer")
+    _pal.require(sender_pub, "/fed/names/gossip")
+    bindings = body.get("bindings")
+    if not isinstance(bindings, list):
+        raise HTTPException(status_code=400, detail="bindings must be a list")
+    inserted = replaced = kept = conflict = dropped = 0
+    outcomes = []
+    for binding in bindings[:NAMES_GOSSIP_RECV_CAP]:
+        outcome = ingest_gossiped_binding(binding)
+        outcomes.append(outcome)
+        if outcome == "inserted":
+            inserted += 1
+        elif outcome == "replaced":
+            replaced += 1
+        elif outcome == "kept":
+            kept += 1
+        elif outcome == "conflict":
+            conflict += 1
+        else:
+            dropped += 1
+    return {"ok": True, "inserted": inserted, "replaced": replaced,
+            "kept": kept, "dropped": dropped, "conflict": conflict,
+            "outcomes": outcomes}
 
 
 DIR_SYNC_ROSTER_CAP = 128

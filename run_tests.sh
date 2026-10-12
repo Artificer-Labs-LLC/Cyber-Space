@@ -18,6 +18,7 @@ TESTS=(
   "test_window_open_preconditions.py"
   "test_legacy_migrate_stub.py"
   "test_witness_port.py"
+  "test_names_gossip_receive.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
