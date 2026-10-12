@@ -254,17 +254,38 @@ def _config() -> tuple[str, int, str, tuple[str, int], int]:
 
 
 def run() -> None:
-    """Bind (UDP+TCP) and answer until SIGINT/SIGTERM. Returns, never raises."""
+    """Bind (UDP+TCP) and answer until SIGINT/SIGTERM. Returns, never
+    raises — a bind failure (port taken, address not local) refuses
+    loudly on stderr and returns before either face is served."""
     bind_host, port, mirror_url, upstream, ttl_cap = _config()
     for warn in _daemon_config_warnings():
         print(f"resolverd: config: {warn}", file=sys.stderr)
     family, bind_host = _bind_family(bind_host)
-    usock = socket.socket(family, socket.SOCK_DGRAM)
-    usock.bind((bind_host, port))
-    tsock = socket.socket(family, socket.SOCK_STREAM)
-    tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    tsock.bind((bind_host, port))
-    tsock.listen(_TCP_BACKLOG)
+    usock = tsock = None
+    try:
+        usock = socket.socket(family, socket.SOCK_DGRAM)
+        usock.bind((bind_host, port))
+        tsock = socket.socket(family, socket.SOCK_STREAM)
+        tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        tsock.bind((bind_host, port))
+        tsock.listen(_TCP_BACKLOG)
+    except OSError as exc:
+        # The bind is the one step run() cannot degrade past: the port
+        # is taken (a second resolverd — an install re-run beside a
+        # stale daemon is the common case) or the address is not local.
+        # Refuse loudly and return, per the never-raises contract:
+        # a raw traceback under systemd reads as a crash loop, and a
+        # half-bound pair (UDP bound, TCP refused) must not leak.
+        for sock in (usock, tsock):
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        print(f"resolverd: refusing to start: cannot bind "
+              f"{bind_host}:{port} ({exc.strerror or exc}) — is "
+              f"another resolverd already running?", file=sys.stderr)
+        return
     running = True
 
     def _stop(_signum, _frame):

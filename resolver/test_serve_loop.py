@@ -196,6 +196,69 @@ def main():
     check("nxdomain id echoed", _qid(replies[2]) == 0x5003,
           f"qid={_qid(replies[2]):04x}")
 
+    # Phase B: bind failure — run() must refuse loudly and RETURN,
+    # never raise, and must not leak the half-bound UDP socket when
+    # the TCP bind is the one that fails. Real sockets, ephemeral
+    # port (binds only; no UDP sends, so the sandbox permits it).
+    import contextlib
+    import io
+    import socket as _real_socket_mod
+
+    probe = _real_socket_mod.socket(_real_socket_mod.AF_INET,
+                                    _real_socket_mod.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    busy_port = probe.getsockname()[1]
+    probe.close()
+    os.environ["CYBERNET_RESOLVER_PORT"] = str(busy_port)
+
+    # B1: both faces occupied -> refusal, no raise.
+    occ_udp = _real_socket_mod.socket(_real_socket_mod.AF_INET,
+                                      _real_socket_mod.SOCK_DGRAM)
+    occ_udp.bind(("127.0.0.1", busy_port))
+    occ_tcp = _real_socket_mod.socket(_real_socket_mod.AF_INET,
+                                      _real_socket_mod.SOCK_STREAM)
+    occ_tcp.bind(("127.0.0.1", busy_port))
+    occ_tcp.listen(1)
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            daemon.run()
+        check("bind failure: run() returned, never raised", True)
+    except Exception as exc:  # noqa: BLE001 — the contract is the test
+        check("bind failure: run() returned, never raised", False, repr(exc))
+    check("bind failure: refusal names the bind on stderr",
+          "refusing to start" in err.getvalue()
+          and "cannot bind" in err.getvalue(),
+          f"stderr={err.getvalue()!r}")
+    occ_udp.close()
+    occ_tcp.close()
+
+    # B2: only TCP occupied -> refusal AND the UDP socket run() had
+    # already bound is closed (rebinding the port must succeed).
+    occ_tcp = _real_socket_mod.socket(_real_socket_mod.AF_INET,
+                                      _real_socket_mod.SOCK_STREAM)
+    occ_tcp.setsockopt(_real_socket_mod.SOL_SOCKET,
+                       _real_socket_mod.SO_REUSEADDR, 1)
+    occ_tcp.bind(("127.0.0.1", busy_port))
+    occ_tcp.listen(1)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        daemon.run()
+    check("tcp-only bind failure: refusal on stderr",
+          "cannot bind" in err.getvalue(), f"stderr={err.getvalue()!r}")
+    occ_tcp.close()
+    rebind = _real_socket_mod.socket(_real_socket_mod.AF_INET,
+                                     _real_socket_mod.SOCK_DGRAM)
+    try:
+        rebind.bind(("127.0.0.1", busy_port))
+        check("tcp-only bind failure: half-bound UDP socket was closed",
+              True)
+    except OSError as exc:
+        check("tcp-only bind failure: half-bound UDP socket was closed",
+              False, repr(exc))
+    rebind.close()
+    os.environ["CYBERNET_RESOLVER_PORT"] = "5353"
+
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     return 1 if CASES["failed"] else 0
 
