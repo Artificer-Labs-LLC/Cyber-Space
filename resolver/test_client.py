@@ -577,6 +577,52 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client._parse_response(bytes(resp), 0x42, "node.cyberspace", 28)
 
+    def _answer_field_offset(self, resp, field):
+        q_end = 12 + len(b"\x04node\x0acyberspace\x00") + 4
+        return q_end + 2 + {"type": 0, "class": 2}[field]  # after owner ptr
+
+    def test_parse_response_non_in_class_raises_resolve_error(self):
+        """A CHAOS-class answer is not a daemon reply — build_response
+        hard-codes class IN on every answer; until now a non-IN record
+        was skipped silently and the packet still trusted."""
+        resp = bytearray(self._valid_response())
+        off = self._answer_field_offset(resp, "class")
+        resp[off : off + 2] = struct.pack(">H", 3)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_parse_response_non_a_aaaa_type_raises_resolve_error(self):
+        """A TXT answer is not a daemon reply — its handler answers
+        only the asked A/AAAA family and NODATA (empty) for any
+        other qtype; a foreign record was skipped, never refused."""
+        resp = bytearray(self._valid_response())
+        off = self._answer_field_offset(resp, "type")
+        resp[off : off + 2] = struct.pack(">H", 16)  # TXT
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42, "node.cyberspace", 1)
+
+    def test_resolve_non_in_class_raises_resolve_error(self):
+        def tamper(q):
+            resp = bytearray(_a_response(q))
+            off = self._answer_field_offset(resp, "class")
+            resp[off : off + 2] = struct.pack(">H", 3)
+            return bytes(resp)
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
+    def test_resolve_non_a_aaaa_type_raises_resolve_error(self):
+        def tamper(q):
+            resp = bytearray(_a_response(q))
+            off = self._answer_field_offset(resp, "type")
+            resp[off : off + 2] = struct.pack(">H", 5)  # CNAME
+            return bytes(resp)
+
+        server = _tcp_server(tamper)
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
     def test_resolve_a_rdlen_too_long_raises_resolve_error(self):
         def tamper(q):
             resp = bytearray(_a_response(q) + b"\x00")

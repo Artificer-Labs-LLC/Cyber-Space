@@ -136,7 +136,8 @@ def _parse_response(
     """Return (flags, [(rtype, rdata), ...]). Mistransaction -> ResolveError.
 
     Only the records the daemon ever emits are extracted (A/AAAA, class
-    IN); anything else in the section is skipped, never trusted.
+    IN); anything else in the answer section is refused, never skipped
+    (see below).
 
     A matching txid alone never sufficed: a packet with the QR bit
     clear is a query, not an answer, a packet with the AA bit clear
@@ -177,7 +178,14 @@ def _parse_response(
     and an AAAA record exactly 16 in every reply the daemon builds;
     a different length was until now caught only downstream, in
     _textify, and only for the asked family — at parse time it is
-    refused for any collected record), and an echoed
+    refused for any collected record), an answer record of a type
+    or class the daemon never emits (its handler answers only the
+    asked A or AAAA family — every other qtype gets an empty NODATA
+    reply — and build_response hard-codes class IN on every answer
+    it builds; a TXT/CNAME or non-IN record in the section was
+    until now skipped silently, so a packet carrying records the
+    daemon never sends was still trusted for the records beside
+    them), and an echoed
     question naming a DIFFERENT name (or family) than the one asked
     is a mistransaction even with the right txid — its answers belong
     to another question.
@@ -252,6 +260,10 @@ def _parse_response(
                 raise ResolveError("truncated rdata")
             rdata = data[off : off + rdlen]
             off += rdlen
+            if rclass != 1 or rtype not in (QTYPE_A, QTYPE_AAAA):
+                raise ResolveError(
+                    "answer record of a type or class the daemon never sends"
+                )
             if rclass == 1 and rtype in (QTYPE_A, QTYPE_AAAA):
                 if len(rdata) != (4 if rtype == QTYPE_A else 16):
                     raise ResolveError(
