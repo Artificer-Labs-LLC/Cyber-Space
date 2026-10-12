@@ -1549,6 +1549,11 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                 live_unexpired = _parse_claim_time(
                     str(live.get("expires_at", ""))
                 ) > datetime.now(timezone.utc)
+                # Same floor as step 4: the live row's issued_at must
+                # parse too — a signer can sign a garbage issued_at
+                # and pass the signature check above, and step 4 reads
+                # such a row as absent, never live.
+                _parse_claim_time(str(live.get("issued_at", "")))
             except ValueError:
                 return None
             if not live_unexpired:

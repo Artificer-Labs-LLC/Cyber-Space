@@ -178,12 +178,24 @@ def _cross_binding():
             "issued_at": ISSUED, "expires_at": LIVE, "signature": sig}
 
 
+def _garbage_issued_binding():
+    # Same label and key, valid signature and live expiry, but the
+    # signed issued_at is unparseable — step 4 reads such a row as
+    # absent (its floor fix), so step 6 must too.
+    sig = _ed.sign(core._name_claim_payload(RLABEL, _name_pub,
+                                            "not-a-time", LIVE),
+                   _name_seed, bytes.fromhex(_name_pub)).hex()
+    return {"name": RLABEL, "node_pubkey": _name_pub,
+            "issued_at": "not-a-time", "expires_at": LIVE, "signature": sig}
+
+
 def _fake_factory(mode):
     ping = _env.make_envelope(_node_seed.hex(), _node_pub, "tester", {"pong": True})
     hits = {"directory": 0, "reach": 0}
     binding = _rbinding()
     desc = {"descriptor": _rdesc(), "bad-sig": _rdesc(tamper=True),
-            "absent": None, "cross-name-live": _rdesc()}[mode]
+            "absent": None, "cross-name-live": _rdesc(),
+            "garbage-issued-live": _rdesc()}[mode]
 
     def fake(url: str):
         if url == MIRROR + "/api/v1/names/" + RLABEL:
@@ -197,8 +209,11 @@ def _fake_factory(mode):
         if url in (NODE + "/fed/ping", DESC_NODE + "/fed/ping"):
             return ping
         if url in (NODE + "/api/v1/names/" + RLABEL, DESC_NODE + "/api/v1/names/" + RLABEL):
-            return dict(_cross_binding()) if mode == "cross-name-live" \
-                else dict(_rbinding())
+            if mode == "cross-name-live":
+                return dict(_cross_binding())
+            if mode == "garbage-issued-live":
+                return dict(_garbage_issued_binding())
+            return dict(_rbinding())
         return None
     return fake, hits
 
@@ -231,6 +246,17 @@ def part_b():
         core._resolve_memo.clear()
         got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
         check("cross-name-live: step 6 refuses the other name's binding",
+              got is None, got)
+        # Step 6 garbage issued_at: the live row's signature verifies
+        # over the garbage string and its expiry is live, but step 4
+        # reads an unparseable issued_at as absent — step 6 must too,
+        # or the live re-fetch is weaker than the mirror read.
+        fake, hits = _fake_factory("garbage-issued-live")
+        core._resolve_get_json = fake
+        core._resolve_peer_get_json = fake
+        core._resolve_memo.clear()
+        got = core.resolve_cyberspace(RLABEL + ".cyberspace", MIRROR)
+        check("garbage-issued-live: step 6 refuses unparseable issued_at",
               got is None, got)
     finally:
         core._resolve_get_json = real
