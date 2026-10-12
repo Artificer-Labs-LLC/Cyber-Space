@@ -272,6 +272,43 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(client.ResolveError):
             client._parse_response(resp[:-2], 0x42)  # rdata claims 4, holds 2
 
+    def test_parse_response_qr_clear_raises_resolve_error(self):
+        """A query-shaped packet (QR clear) is not an answer, txid or not."""
+        resp = bytearray(self._valid_response())
+        flags = struct.unpack(">H", bytes(resp[2:4]))[0] & ~0x8000
+        resp[2:4] = struct.pack(">H", flags)
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(bytes(resp), 0x42)
+
+    def test_parse_response_different_question_raises_resolve_error(self):
+        """Right txid, answers for ANOTHER name: a mistransaction."""
+        other = dns.parse_query(
+            client._build_query(0x42, "other.cyberspace", 1)
+        )
+        resp = dns.build_response(
+            other, [(1, 120, socket.inet_aton("10.9.8.7"))], rcode=0
+        )
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(resp, 0x42, "node.cyberspace", 1)
+        # and through resolve(): the server answers a different question
+        server = _tcp_server(
+            lambda q: dns.build_response(
+                dns.parse_query(
+                    client._build_query(q["id"], "other.cyberspace", 1)
+                ),
+                [(1, 120, socket.inet_aton("10.9.8.7"))],
+                rcode=0,
+            )
+        )
+        with self.assertRaises(client.ResolveError):
+            client.resolve("node.cyberspace", _tcp_sock=server, tcp_only=True)
+
+    def test_parse_response_different_qtype_raises_resolve_error(self):
+        with self.assertRaises(client.ResolveError):
+            client._parse_response(
+                self._valid_response(), 0x42, "node.cyberspace", 28
+            )
+
     def test_parse_response_valid_still_parses(self):
         flags, answers = client._parse_response(self._valid_response(), 0x42)
         self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])

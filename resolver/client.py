@@ -127,17 +127,34 @@ def _build_query(txid: int, qname: str, qtype: int) -> bytes:
     return header + labels + struct.pack(">HH", qtype, 1)
 
 
-def _parse_response(data: bytes, txid: int) -> tuple[int, list[tuple[int, bytes]]]:
+def _parse_response(
+    data: bytes,
+    txid: int,
+    qname: str | None = None,
+    qtype: int | None = None,
+) -> tuple[int, list[tuple[int, bytes]]]:
     """Return (flags, [(rtype, rdata), ...]). Mistransaction -> ResolveError.
 
     Only the records the daemon ever emits are extracted (A/AAAA, class
     IN); anything else in the section is skipped, never trusted.
+
+    A matching txid alone never sufficed: a packet with the QR bit
+    clear is a query, not an answer, and an echoed question naming a
+    DIFFERENT name (or family) than the one asked is a mistransaction
+    even with the right txid — its answers belong to another question.
+    When qname/qtype are given (resolve() always gives both), the
+    echoed question must match them exactly (name compared in the
+    client's normalized lower-case form).
     """
     if len(data) < 12:
         raise ResolveError("short response")
     resp_id, flags, qdcount, ancount, _, _ = struct.unpack(">HHHHHH", data[:12])
     if resp_id != (txid & 0xFFFF):
         raise ResolveError("transaction id mismatch")
+    if not flags & 0x8000:
+        raise ResolveError("not a response (QR bit clear)")
+    if qname is not None and qdcount != 1:
+        raise ResolveError("response does not echo exactly one question")
     # Everything past the header is peer-controlled: a truncated or
     # garbled question/answer section must surface as ResolveError
     # (this module's documented malformed-response contract), never as
@@ -147,10 +164,17 @@ def _parse_response(data: bytes, txid: int) -> tuple[int, list[tuple[int, bytes]
     try:
         off = 12
         for _ in range(qdcount):
-            _, off = _read_name(data, off)
+            seen_name, off = _read_name(data, off)
             if off + 4 > len(data):
                 raise ResolveError("truncated question")
+            seen_qtype, seen_qclass = struct.unpack_from(">HH", data, off)
             off += 4  # qtype + qclass
+            if qname is not None and (
+                seen_name.lower() != qname
+                or (qtype is not None and seen_qtype != qtype)
+                or seen_qclass != 1
+            ):
+                raise ResolveError("response answers a different question")
         answers: list[tuple[int, bytes]] = []
         for _ in range(ancount):
             _, off = _read_name(data, off)
@@ -187,6 +211,8 @@ def _query_udp(
     port: int,
     timeout: float,
     sock: socket.socket | None = None,
+    qname: str | None = None,
+    qtype: int | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One UDP round trip. Raises ResolveError on failure or truncation."""
     s = sock
@@ -201,7 +227,7 @@ def _query_udp(
     finally:
         if sock is None and s is not None:
             s.close()
-    flags, answers = _parse_response(data, txid)
+    flags, answers = _parse_response(data, txid, qname, qtype)
     if flags & 0x0200:  # TC — answer was truncated; retry on the TCP wire
         raise ResolveError("udp response truncated (TC)")
     return flags, answers
@@ -214,6 +240,8 @@ def _query_tcp(
     port: int,
     timeout: float,
     sock: socket.socket | None = None,
+    qname: str | None = None,
+    qtype: int | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One DNS-over-TCP round trip (RFC 7766): length-prefixed frames."""
     s = sock
@@ -229,7 +257,7 @@ def _query_tcp(
     finally:
         if sock is None and s is not None:
             s.close()
-    return _parse_response(data, txid)
+    return _parse_response(data, txid, qname, qtype)
 
 
 def _textify(qtype: int, rdata: bytes) -> str:
@@ -269,17 +297,21 @@ def resolve(
         port = _default_port()
     txid = random.getrandbits(16)
     packet = _build_query(txid, name, qtype_n)
+    asked = name[:-1] if name.endswith(".") else name
+    asked = asked.lower()
     try:
         if tcp_only:
-            flags, answers = _query_tcp(txid, packet, server, port, timeout, _tcp_sock)
+            flags, answers = _query_tcp(
+                txid, packet, server, port, timeout, _tcp_sock, asked, qtype_n
+            )
         else:
             try:
                 flags, answers = _query_udp(
-                    txid, packet, server, port, timeout, _udp_sock
+                    txid, packet, server, port, timeout, _udp_sock, asked, qtype_n
                 )
             except ResolveError:
                 flags, answers = _query_tcp(
-                    txid, packet, server, port, timeout, _tcp_sock
+                    txid, packet, server, port, timeout, _tcp_sock, asked, qtype_n
                 )
     except ResolveError as exc:
         raise ResolveError(f"could not resolve {name}: {exc}") from exc
