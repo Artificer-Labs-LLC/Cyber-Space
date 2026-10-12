@@ -197,6 +197,29 @@ def verify_rotation(record: dict) -> str | None:
     return None
 
 
+def _refresh_hostd_env_text(text: str, old_hex: str, new_hex: str):
+    """Swap CYBERNET_NAME_PRIVKEY old->new in a hostd env body.
+
+    Returns (new_text, status): "updated" (the active privkey line held
+    the OLD seed and now holds the new one — every other line preserved
+    byte-for-byte), "foreign" (the line holds a different seed — text
+    returned untouched; never clobber a key we cannot account for),
+    "absent" (no active privkey line — text untouched). Pure: the caller
+    decides whether to write.
+    """
+    out, status = [], "absent"
+    for line in text.splitlines(keepends=True):
+        if line.startswith("CYBERNET_NAME_PRIVKEY="):
+            cur = line.split("=", 1)[1].strip().lower()
+            if cur == old_hex.lower():
+                out.append(f"CYBERNET_NAME_PRIVKEY={new_hex}\n")
+                status = "updated"
+                continue
+            status = "foreign"
+        out.append(line)
+    return "".join(out), status
+
+
 def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
     """Promote a minted rotation: .next becomes the name key, atomically.
 
@@ -215,6 +238,10 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
     (the old key stays readable for historical verification — a verifier
     needs old keys to walk the chain), and the .next seed atomically
     replaces <label>-name.key (os.replace: never a half-written key).
+    The hostd env mint wrote (home/hostd/<label>.env) is refreshed to the
+    new seed when it still holds the old one — hostd signs from that env,
+    not from the key file; a foreign/absent privkey line is reported in
+    the summary, never overwritten.
     Returns (True, summary) or (False, reason). Never raises on input.
     """
     label = _normalize(label)
@@ -260,9 +287,42 @@ def promote_rotation(label: str, home: Path) -> tuple[bool, str]:
     _write_secret(prev_path, old_priv.hex() + "\n")
     os.replace(next_path, key_path)
     os.chmod(key_path, 0o600)
+    # hostd signs its reach announces with CYBERNET_NAME_PRIVKEY from the
+    # env mint wrote (home/hostd/<label>.env) — NOT from the key file just
+    # promoted. Left stale, hostd keeps signing with the OLD key after the
+    # mirror moved to the new one and the hosted name goes dark. Refresh
+    # that one line when the env still holds the old seed; a foreign seed
+    # or a missing line is reported, never overwritten.
+    env_note = ""
+    env_path = home / "hostd" / f"{label}.env"
+    if env_path.exists():
+        try:
+            new_text, status = _refresh_hostd_env_text(
+                env_path.read_text(), old_priv.hex(), new_priv.hex())
+        except OSError:
+            status, new_text = "unreadable", None
+        if status == "updated":
+            _write_secret(env_path, new_text, overwrite=True)
+            env_note = (f"; hostd env at {env_path} refreshed to the new "
+                        f"key — restart hostd to pick it up")
+        elif status == "foreign":
+            env_note = (f"; WARNING: hostd env at {env_path} holds a "
+                        f"different key — NOT touched; update its "
+                        f"CYBERNET_NAME_PRIVKEY manually or hostd will "
+                        f"sign with the wrong key")
+        elif status == "unreadable":
+            env_note = (f"; WARNING: hostd env at {env_path} unreadable — "
+                        f"check its CYBERNET_NAME_PRIVKEY manually")
+        else:
+            env_note = (f"; WARNING: hostd env at {env_path} has no active "
+                        f"CYBERNET_NAME_PRIVKEY line — check it manually")
+    else:
+        env_note = ("; no hostd env under ~/.cyberspace/hostd — if hostd "
+                    "runs from an installed env elsewhere, update its "
+                    "CYBERNET_NAME_PRIVKEY to the new key and restart it")
     return True, (f"promoted {label}.cyberspace: "
                   f"{old_pub[:16]}... -> {new_pub[:16]}...; "
-                  f"old key kept at {prev_path}")
+                  f"old key kept at {prev_path}{env_note}")
 
 
 def submit_rotation(label: str, mirror_url: str, home: Path,
