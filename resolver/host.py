@@ -95,6 +95,45 @@ def _config() -> tuple[str, str, str | None, int, bool]:
     return name, name_priv, mirror, _env_int("CYBERNET_HOSTD_REFRESH", 600), ok
 
 
+def _startup_problems() -> list[str]:
+    """Why run() must refuse to start, or []. run() used to speak ONLY
+    when CYBERNET_MIRROR_URL was unset: a malformed mirror, a bad label,
+    or a missing/short/non-hex name key (with a mirror set) exited 2 in
+    total silence — systemd 'failed', zero output, the operator left
+    guessing which of the three required values was wrong. Mirrors the
+    exact gates _config applies; never prints secret VALUES, only
+    which var and why."""
+    problems: list[str] = []
+    name = os.environ.get("CYBERNET_HOSTED_NAME", "").strip().lower()
+    if not name:
+        problems.append("CYBERNET_HOSTED_NAME unset")
+    elif core._valid_name_label(name) is not True:
+        problems.append("CYBERNET_HOSTED_NAME is not a valid "
+                        ".cyberspace label")
+    name_priv = os.environ.get("CYBERNET_NAME_PRIVKEY", "").strip()
+    if not name_priv:
+        problems.append("CYBERNET_NAME_PRIVKEY unset")
+    else:
+        try:
+            if len(bytes.fromhex(name_priv)) != 32:
+                problems.append("CYBERNET_NAME_PRIVKEY must be a "
+                                "64-hex-char (32-byte) seed")
+        except Exception:
+            problems.append("CYBERNET_NAME_PRIVKEY is not hex")
+    mirror_raw = os.environ.get("CYBERNET_MIRROR_URL", "").strip()
+    if not mirror_raw:
+        problems.append("CYBERNET_MIRROR_URL is required (a public "
+                        "mirror URL) — refusing to start with nowhere "
+                        "honest to announce")
+    else:
+        try:
+            core._valid_node_url(mirror_raw)
+        except Exception:
+            problems.append("CYBERNET_MIRROR_URL is not a valid "
+                            "public node URL")
+    return problems
+
+
 def _relay_cfg() -> tuple[str, str, str] | None:
     """The relay hold-open config, or None when the host dials direct
     only. Shape-checked here (shape-proofed again inside _reach_build —
@@ -229,9 +268,8 @@ def run() -> int:
     a mirror refuses to start — fail-closed). Never raises."""
     name, name_priv, mirror_url, refresh, ok = _config()
     if not ok:
-        if not os.environ.get("CYBERNET_MIRROR_URL", "").strip():
-            print("hostd: CYBERNET_MIRROR_URL is required (a public mirror"
-                  " URL) — refusing to start with nowhere honest to announce",
+        for problem in _startup_problems():
+            print(f"hostd: refusing to start: {problem}",
                   file=sys.stderr)
         return 2
     stop = threading.Event()
