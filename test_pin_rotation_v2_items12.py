@@ -137,12 +137,12 @@ with core._db_lock, core._db() as c:
               " expires_at, signature) VALUES (?,?,?,?,?)",
               (nm, hb["node_pubkey"], hb["issued_at"], hb["expires_at"],
                hb["signature"]))
-oh = nf.origin_hash(nm, hb["node_pubkey"], hb["issued_at"], hb["expires_at"],
-                    hb["signature"])
+# KINDS anchor: a chain that starts in v2 anchors on claim_anchor(name, key).
+oh = nf.claim_anchor(nm, hb["node_pubkey"])
 pair = [nf.mint_cert(nm, k1, pub(seed()), 1, oh, issued_at=ISSUED),
         nf.mint_cert(nm, k1, pub(seed()), 1, oh, issued_at=ISSUED)]
 ingest(pair, now=next_round())
-check("E1: held binding for the old key + two certs on its origin -> contested, no pin",
+check("E1: held binding for the old key + two certs on its claim anchor -> contested, no pin",
       contested(nm) and head(nm) is None)
 
 

@@ -21,7 +21,8 @@ check("a rotation can never create a pin (pin_initial refuses source=rotation)",
 first = db("SELECT source, origin_hash FROM name_pin_log WHERE name='abac'"
            " ORDER BY id LIMIT 1")[0]
 check("first pin-log entry records source + hash of the binding",
-      first[0] == "claim_gate" and first[1] == origin)
+      first[0] == "claim_gate" and first[1] == db("SELECT origin_hash FROM"
+      " name_pin_origins WHERE name='abac' ORDER BY rowid LIMIT 1")[0][0])
 with core._db_lock, core._db() as c:
     cnt = nf._pin_count(c)
 with patched(nf, "pin_cap", lambda: cnt):

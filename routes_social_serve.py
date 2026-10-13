@@ -1355,8 +1355,9 @@ async def names_rotate(request: Request):
         why = _rotate_weak_reason(pub)
         if why:
             raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
-    # v2 certificate (cyberspace-name-rotate/v2): seq and prev_hash are
-    # signed. A v1 record (no seq / prev_hash) is refused on a v2 node.
+    # v2 certificate (name-rotate/v2, hop_certs.v2_payload): seq and
+    # prev_hash are signed. New hops must be v2; existing v1 certs are
+    # frozen and anchor the first v2 hop (name_fork._graft_v1).
     import name_fork
     try:
         rotation_seq = int(form.get("rotation_seq") or "")

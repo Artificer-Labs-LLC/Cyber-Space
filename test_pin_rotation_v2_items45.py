@@ -2,6 +2,7 @@
 """Pin-rotation v2 belt, items45 (split from test_pin_rotation_v2.py)."""
 from pinrot_common import *  # noqa: F401,F403
 from pinrot_common import _round_k, _flat_nf, _flat_doc, _ed, _fed_env  # noqa: F401
+import hop_certs  # noqa: E402
 
 # ================================================================ item 4
 print("item 4: v2 payload, chain, forks keyed on (name, prev_hash)", flush=True)
@@ -10,7 +11,8 @@ kA, kB, kC = seed(), seed(), seed()
 claim_gate_pin(nm, kA)
 origin = head(nm)[2]
 c1 = cert_next(nm, kA, pub(kB))
-check("first link's prev_hash is the pinning binding's hash", c1["prev_hash"] == origin)
+check("first link's prev_hash is hop_certs.claim_anchor(name, pin) (KINDS anchor)",
+      c1["prev_hash"] == origin == hop_certs.claim_anchor(nm, pub(kA)))
 ingest([c1], now=next_round())
 c2 = cert_next(nm, kB, pub(kA))
 ingest([c2], now=next_round())
@@ -99,9 +101,20 @@ with patched(nf, "contiguous", lambda rec, pin, seq: True):
     mut = run_noncontig()
 mutant("non-contiguous pin move accepted", "old_pub != pin refused", real, mut)
 
-v1 = {"name": "abac", "old_pubkey": pub(kC), "new_pubkey": pub(seed()),
-      "issued_at": ISSUED, "signature": "ab" * 64}
-check("a v1 certificate is refused on a v2 node", nf._norm_cert(v1) is None)
+_v1_new = pub(seed())
+v1 = {"v": 1, "name": "abac", "old_pubkey": pub(kC), "new_pubkey": _v1_new,
+      "issued_at": ISSUED,
+      "signature": _ed.sign(hop_certs.v1_payload("abac", pub(kC), _v1_new, ISSUED),
+                            kC, bytes.fromhex(pub(kC))).hex()}
+_v1_sig_ok = _ed.checkvalid_sodium(
+    bytes.fromhex(v1["signature"]),
+    hop_certs.v1_payload("abac", pub(kC), _v1_new, ISSUED), bytes.fromhex(pub(kC)))
+_h0 = head("abac")
+_r1 = ingest([v1], now=next_round())
+check("a REAL v1 cert (libsodium-valid signature) is frozen, not refused: never "
+      "a new hop, pin unmoved",
+      _v1_sig_ok and _r1["outcomes"] == ["v1-frozen"] and _r1["refused"] == 0
+      and head("abac") == _h0 and nf._norm_cert(v1) is None, (_v1_sig_ok, _r1["outcomes"]))
 
 # two nodes, different order and time -> same head
 nA, nB = mem_conn(), mem_conn()

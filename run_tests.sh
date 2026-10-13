@@ -67,6 +67,7 @@ TESTS=(
   "test_pin_rotation_v2_items9_10.py"
   "test_pin_rotation_v2_items11_12.py"
   "test_pin_rotation_v2_gate.py"
+  "test_pin_rotation_v2_kinds.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"

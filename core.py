@@ -1710,20 +1710,18 @@ def _gossip_claim_weak(pub: str):
 # NAMES_GOSSIP_VERIFY_PER_CALL bindings; the node may verify at most
 # GOSSIP_VERIFY_GLOBAL_LIMIT bindings per window, across every caller.
 #
-# Re-derived 2026-10-12 (Bulwark/Cipher, BLOCK on 4e8c95d). One charge
-# unit is one rotation cert's admission work: weak_reason on old_pub and
-# new_pub plus one libsodium verify (strict R/A/S/small-order included).
-# Measured on the shared research box, 8 cores, load average 20.5-24:
-#   weak_reason ........................... ~90-110 ms per key
-#   checkvalid_sodium (strict + libsodium)  ~2-3 ms   (raw libsodium 0.05 ms)
-#   unit = 2 x weak_reason + 1 verify ..... ~184 ms
-#   (pure-Python checkvalid, binding path: ~320 ms)
-# All of it runs outside _db_lock. One call at the per-call cap is
-# 32 units = ~5.9 s of one worker's CPU with the lock never held; the
-# global cap (256 units / 60 s) bounds every caller together to ~47 s of
-# CPU per minute, under one of 8 cores. Passing keys are cached per
-# sender, so an honest peer's repeat keys cost less than a unit. The caps
-# are kept at 32 / 256; lowering them is a board call, not this build's.
+# Re-derived 2026-10-12 (Bulwark/Cipher/Examiner, BLOCK on 4e8c95d). One
+# charge unit is one cert's admission work: the libsodium key check on
+# old_pub and new_pub plus one libsodium verify, with the strict decodes.
+# Examiner's measurement (libsodium path):
+#   sodium_key_ok (crypto_core_ed25519_is_valid_point) . 0.087 ms
+#   _decodepoint_strict ................................ 0.33 ms
+#   checkvalid_sodium (strict R/A/S/small-order + verify) 1.9 ms
+#   unit ............................................... ~2.7 ms
+# All of it runs outside _db_lock. One call at the cap is 32 units, about
+# 86 ms of CPU; the global cap (256 units / 60 s) is about 0.7 s of CPU per
+# minute across all callers. A grafted frozen v1 cert is charged as a
+# second unit. The caps stay at 32 / 256 (board ruling).
 NAMES_GOSSIP_VERIFY_PER_CALL = 32
 GOSSIP_VERIFY_GLOBAL_LIMIT = 256
 GOSSIP_VERIFY_GLOBAL_WINDOW = 60.0
@@ -2429,6 +2427,11 @@ def charge_rotation_certs(certs: list, sender_pub: str, verify_box):
     admitted = []
     for raw in certs:
         if not _charge_one_rotation(sender_pub, verify_box):
+            return admitted, True
+        # A grafted frozen v1 cert is a second unit (its own key checks
+        # and libsodium verify), charged before either runs.
+        if isinstance(raw, dict) and raw.get("prev_v1") is not None \
+                and not _charge_one_rotation(sender_pub, verify_box):
             return admitted, True
         admitted.append(raw)
     return admitted, False

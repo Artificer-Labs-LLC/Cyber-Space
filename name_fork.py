@@ -17,15 +17,17 @@ PINS
     kind=unpin   the pin was refused (startup guard); the name is unpinned
   name_pins is a cache of that latest state and is rebuilt from the log.
 
-V2 CERTIFICATES
-  signed bytes = lp(TAG) lp(name) lp(old_pub) lp(new_pub) lp(issued_at)
-                 lp(seq u64be) lp(prev_hash)      TAG = cyberspace-name-rotate/v2
-  cert_hash    = sha256(signed bytes || lp(sig))  (signed content only;
-                 never rowid, local seq, or received time)
-  The first link's prev_hash is the origin_hash of the pinning binding.
+V2 CERTIFICATES (ONE FORMAT with hop_certs.py / KINDS 7b15ca9)
+  signed bytes = hop_certs.v2_payload:
+    name-rotate/v2|<name>|<seq>|<prev_hash>|<old_pub>|<new_pub>|<issued_at>
+  cert_hash    = hop_certs.cert_hash over the FULL cert incl. signature
+                 (JSON [v,name,seq,prev_hash,old,new,issued_at,sig])
+  Chain anchor for a first v2 hop: hop_certs.claim_anchor(name, pin), OR
+  the last FROZEN v1 cert's cert_hash (v1 history under v1_frozen_root;
+  ruling 64157549 item 1 (b) — freeze, never drop).
   R, S (S < L), old_pub and new_pub are strict-decoded and must re-encode
-  to the input bytes before any hash is computed. weak_reason and strict
-  point checks run on BOTH keys before verify.
+  to the input bytes before any hash is computed. libsodium
+  is_valid_point + checkvalid_sodium on BOTH keys; fail closed.
 
 FORKS
   Fork evidence is keyed on (name, prev_hash). Two verified certificates
@@ -56,7 +58,13 @@ from datetime import datetime, timedelta, timezone
 GENESIS_LABEL = "genesis"
 GENESIS_PIN_PREFIX = "46b62b6c"
 
-TAG = b"cyberspace-name-rotate/v2"
+# Canonical v2 format (Villhaze ruling ART-42 64157549, as implemented on
+# the KINDS track): name-rotate/v2|name|seq|prev_hash|old_pub|new_pub|
+# issued_at, serialized ONLY by hop_certs.v2_payload; prev_hash is
+# hop_certs.cert_hash over the full previous cert including its signature.
+# The first v2 cert anchors on hop_certs.claim_anchor(name, pin), or on the
+# name's last FROZEN v1 cert (v1 is frozen, not refused).
+TAG = b"name-rotate/v2"
 KIND = "name-rotate"
 VERSION = 2
 ORIGIN_TAG = b"cyberspace-name-pin-origin/v1"
@@ -185,6 +193,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                       ("reason", "TEXT NOT NULL DEFAULT ''")):
         if col not in cols:
             conn.execute(f"ALTER TABLE name_pin_log ADD COLUMN {col} {decl}")
+    try:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(name_rotations)")}
+        if have:
+            # Same columns as KINDS window_open.init_schema (7b15ca9).
+            for col, ddl in (("cert_v", "INTEGER NOT NULL DEFAULT 1"),
+                             ("cert_seq", "INTEGER"), ("prev_hash", "TEXT")):
+                if col not in have:
+                    conn.execute(f"ALTER TABLE name_rotations ADD COLUMN {col} {ddl}")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """CREATE TRIGGER IF NOT EXISTS name_pin_log_no_update
            BEFORE UPDATE ON name_pin_log
@@ -303,20 +321,45 @@ def genesis_origin_hash(pin: str) -> str:
 
 def cert_payload(name: str, old_pub: str, new_pub: str, issued_at: str,
                  seq: int, prev_hash: str, tag: bytes = TAG) -> bytes:
-    return (_lp(tag) + _lp(name.encode()) + _lp(bytes.fromhex(old_pub))
-            + _lp(bytes.fromhex(new_pub)) + _lp(issued_at.encode())
-            + _lp(int(seq).to_bytes(8, "big")) + _lp(bytes.fromhex(prev_hash)))
+    """The signed bytes: hop_certs.v2_payload (the one serializer). Any other
+    tag (the kind-binding mutant) only swaps the leading field."""
+    import hop_certs
+    if tag == TAG:
+        return hop_certs.v2_payload(name, seq, prev_hash, old_pub, new_pub,
+                                    issued_at)
+    return "|".join([tag.decode(), name, str(int(seq)), prev_hash, old_pub,
+                     new_pub, issued_at]).encode()
+
+
+def hop_row(rec: dict, i: int = 0) -> dict:
+    """A cert as a hop_certs.ROW_FIELDS row (the KINDS leaf encoding)."""
+    v = int(rec.get("v", VERSION))
+    return {"name": rec["name"], "i": i, "old": rec["old_pubkey"],
+            "new": rec["new_pubkey"], "issued_at": rec["issued_at"],
+            "sig": rec["signature"], "v": v,
+            "seq": rec["seq"] if v == 2 else None,
+            "prev_hash": rec["prev_hash"] if v == 2 else None}
 
 
 def cert_hash(rec: dict) -> str:
-    """H(tag || signed fields || sig). Callers pass only certificates that
-    already passed _canonical."""
+    """hop_certs.cert_hash over the full cert, signature included. Callers
+    pass only certificates that already passed _canonical."""
     global _hash_calls
+    import hop_certs
     _hash_calls += 1
-    return hashlib.sha256(
-        cert_payload(rec["name"], rec["old_pubkey"], rec["new_pubkey"],
-                     rec["issued_at"], rec["seq"], rec["prev_hash"])
-        + _lp(bytes.fromhex(rec["signature"]))).hexdigest()
+    return hop_certs.cert_hash(hop_row(rec))
+
+
+def claim_anchor(name: str, pub: str) -> str:
+    import hop_certs
+    return hop_certs.claim_anchor(name, pub)
+
+
+def _v1_cert_hash(v1: dict) -> str:
+    """Hash of a v1 cert as the first v2 hop's prev_hash: hop_certs.cert_hash
+    of the FULL v1 cert (signature included). Patchable (payload-only mutant)."""
+    import hop_certs
+    return hop_certs.cert_hash(hop_row(dict(v1, v=1)))
 
 
 def mint_cert(name: str, old_seed: bytes, new_pub: str, seq: int,
@@ -446,10 +489,12 @@ def _verify(rec: dict, tag: bytes) -> bool:
     payload = cert_payload(rec["name"], rec["old_pubkey"], rec["new_pubkey"],
                            rec["issued_at"], rec["seq"], rec["prev_hash"],
                            tag=tag)
-    if _ed.SODIUM_ERROR is not None:
-        # Fail closed, by name: no fallback to the pure-Python equation.
+    # Runtime libsodium gate (Villhaze b9f64f88): binding present AND
+    # sodium_version_string readable and >= 1.0.18. No inference.
+    if _ed.SODIUM_ERROR is not None or not _ed.sodium_version_ok():
         import logging
-        logging.getLogger("name_fork").error(_ed.SODIUM_ERROR)
+        logging.getLogger("name_fork").error(
+            _ed.SODIUM_ERROR or "libsodium version gate refused")
         return False
     return _ed.checkvalid_sodium(bytes.fromhex(rec["signature"]), payload,
                                  bytes.fromhex(rec["old_pubkey"]))
@@ -513,7 +558,106 @@ def _norm_cert(raw) -> dict | None:
     if not _verify(rec, _signing_tag(raw)):
         return None
     rec["cert_hash"] = cert_hash(rec)
+    if raw.get("prev_v1") is not None:
+        g = _graft_v1(rec, raw.get("prev_v1"))
+        if g is None:
+            return None
+        rec["_v1_hash"] = g
     return rec
+
+
+def _v1_shape(v1, name) -> dict | None:
+    import re as _re
+    if not isinstance(v1, dict):
+        return None
+    try:
+        out = {"name": str(v1["name"]).strip().lower(),
+               "old_pubkey": str(v1["old_pubkey"]).strip().lower(),
+               "new_pubkey": str(v1["new_pubkey"]).strip().lower(),
+               "issued_at": str(v1["issued_at"]),
+               "signature": str(v1["signature"]).strip().lower(), "v": 1}
+    except (KeyError, TypeError, AttributeError):
+        return None
+    if out["name"] != name or len(out["issued_at"]) > 64:
+        return None
+    for k, n in (("old_pubkey", 64), ("new_pubkey", 64), ("signature", 128)):
+        if not _re.fullmatch(r"[0-9a-f]{%d}" % n, out[k]):
+            return None
+    return out
+
+
+def _verify_v1(v1: dict) -> bool:
+    """libsodium only (strict checks + crypto_sign_open), same as v2."""
+    global _verify_calls
+    import hop_certs
+    from fed import ed25519 as _ed
+    _verify_calls += 1
+    if _ed.SODIUM_ERROR is not None or not _ed.sodium_version_ok():
+        return False
+    return _ed.checkvalid_sodium(
+        bytes.fromhex(v1["signature"]),
+        hop_certs.v1_payload(v1["name"], v1["old_pubkey"], v1["new_pubkey"],
+                             v1["issued_at"]),
+        bytes.fromhex(v1["old_pubkey"]))
+
+
+def _graft_v1(rec: dict, raw_v1) -> str | None:
+    """The FROZEN v1 cert a first v2 hop chains onto. Same sequence as v2,
+    inside _norm_cert (so: charged first, outside _db_lock): shape,
+    canonical decode, key check on both keys, libsodium verify. Returns its
+    full-cert hash, which must equal the v2 cert's prev_hash."""
+    v1 = _v1_shape(raw_v1, rec["name"])
+    if v1 is None:
+        return None
+    if not _canonical(v1) or not _keys_ok(v1):
+        return None
+    if v1["new_pubkey"] != rec["old_pubkey"]:
+        return None
+    if not _verify_v1(v1):
+        return None
+    h = _v1_cert_hash(v1)
+    return h if h == rec["prev_hash"] else None
+
+
+def v1_frozen_rows(conn, name) -> list:
+    """This node's frozen v1 certs for a name (name_rotations, cert_v=1), as
+    hop rows in accepted order: the leaves of hop_certs.v1_frozen_root."""
+    try:
+        rows = conn.execute(
+            "SELECT old_pubkey, new_pubkey, issued_at, signature FROM"
+            " name_rotations WHERE name=? AND COALESCE(cert_v,1)=1"
+            " ORDER BY accepted_at ASC, rowid ASC", (name,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [hop_row({"name": name, "old_pubkey": o, "new_pubkey": n,
+                     "issued_at": i, "signature": sg, "v": 1}, j)
+            for j, (o, n, i, sg) in enumerate(rows)]
+
+
+def v1_member(conn, name, h) -> bool:
+    """The grafted v1 cert is the name's LAST frozen v1 cert (a leaf of
+    hop_certs.v1_frozen_root). The skip-membership mutant returns True."""
+    import hop_certs
+    rows = v1_frozen_rows(conn, name)
+    return bool(rows) and hop_certs.cert_hash(rows[-1]) == h
+
+
+def _v1_graft_ok(conn, rec, seq) -> bool:
+    return (seq == 0 and rec.get("_v1_hash") is not None
+            and rec["prev_hash"] == rec["_v1_hash"]
+            and v1_member(conn, rec["name"], rec["_v1_hash"]))
+
+
+def hop_rows(conn, name) -> list:
+    """The name's chain as hop_certs rows (frozen v1, then accepted v2), in
+    order, i = position. hops_root over these must equal KINDS import."""
+    out = list(v1_frozen_rows(conn, name))
+    for (cert,) in conn.execute(
+            "SELECT cert FROM name_pin_log WHERE name=? AND kind='rotate'"
+            " ORDER BY id", (name,)).fetchall():
+        rec = json.loads(cert)
+        out.append(hop_row(rec, len(out)))
+    return out
 
 
 def _wire(rec: dict) -> dict:
@@ -561,7 +705,7 @@ def ensure_genesis_pin(conn: sqlite3.Connection) -> None:
         "INSERT INTO name_pin_log (name, pubkey, seq, prev_pubkey,"
         " cert_signature, recorded_at, kind, source, origin_hash, head_hash)"
         " VALUES (?,?,0,'','',?,'pin','genesis_constant',?,?)",
-        (GENESIS_LABEL, pin, _now(), h, h))
+        (GENESIS_LABEL, pin, _now(), h, claim_anchor(GENESIS_LABEL, pin)))
     _sync_cache(conn, GENESIS_LABEL)
 
 
@@ -649,7 +793,7 @@ def pin_initial(conn: sqlite3.Connection, name: str, pubkey: str,
         "INSERT INTO name_pin_log (name, pubkey, seq, prev_pubkey,"
         " cert_signature, recorded_at, kind, source, origin_hash, head_hash)"
         " VALUES (?,?,0,'','',?,'pin',?,?,?)",
-        (name, pub, _now(), source, h, h))
+        (name, pub, _now(), source, h, claim_anchor(name, pub)))
     conn.execute("DELETE FROM name_pin_stale WHERE name=?", (name,))
     _sync_cache(conn, name)
     return "pinned"
@@ -747,10 +891,11 @@ def _append_rotation(conn, rec) -> None:
     try:
         conn.execute(
             "INSERT OR IGNORE INTO name_rotations (name, old_pubkey,"
-            " new_pubkey, issued_at, signature, accepted_at)"
-            " VALUES (?,?,?,?,?,?)",
+            " new_pubkey, issued_at, signature, accepted_at, cert_v,"
+            " cert_seq, prev_hash) VALUES (?,?,?,?,?,?,2,?,?)",
             (rec["name"], rec["old_pubkey"], rec["new_pubkey"],
-             rec["issued_at"], rec["signature"], _now()))
+             rec["issued_at"], rec["signature"], _now(), rec["seq"],
+             rec["prev_hash"]))
     except sqlite3.OperationalError:
         pass
 
@@ -909,6 +1054,12 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                 for b in (round_bindings or []) if isinstance(b, dict)}
     pre = list(prenormalized) if prenormalized is not None else None
     for i, raw in enumerate(certs or []):
+        # v1 is FROZEN, not refused: a standalone v1 cert is never a new
+        # hop, and is acknowledged without a state change. A v1 cert enters
+        # a chain only as the prev_v1 of a first v2 hop.
+        if isinstance(raw, dict) and raw.get("v") == 1:
+            out["outcomes"].append("v1-frozen")
+            continue
         # Charge-before-write for the evidence store, before any verify: a
         # cert for a name with no pin, no held binding and no binding in
         # this round can only become evidence, so a full store refuses it
@@ -946,7 +1097,7 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
             rb = [b for b in (round_bindings or []) if isinstance(b, dict)]
             origin_ok = any(
                 (o := _binding_origin(b)) is not None and o[0] == old
-                and o[1] == prev
+                and claim_anchor(name, o[0]) == prev
                 for b in ([held] if held else []) + rb
                 if str(b.get("name", "")).lower() == name)
             if birth_contest_allowed(conn, name, old, round_bindings or []) and (
@@ -977,7 +1128,7 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
             out["contested"].add(name)
             continue
         chain = _chain_links(conn, name)
-        if rec["prev_hash"] == head:
+        if rec["prev_hash"] == head or _v1_graft_ok(conn, rec, seq):
             if not contiguous(rec, pin, seq):
                 out["refused"] += 1
                 out["outcomes"].append("refused-noncontiguous")

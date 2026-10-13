@@ -85,8 +85,8 @@ def _rotate_payload(name: str, old_pub: str, new_pub: str,
     """The canonical bytes the OLD key signs. Distinct prefix from
     name-claim| so a claim payload can never verify as a rotation and
     vice versa (payload-prefix confusion is a signature-side attack)."""
-    return (b"name-rotate|" + name.encode() + b"|" + old_pub.encode()
-            + b"|" + new_pub.encode() + b"|" + issued_at.encode())
+    import hop_certs  # the one serializer (KINDS track, 7b15ca9)
+    return hop_certs.v1_payload(name, old_pub, new_pub, issued_at)
 
 
 def _iso_now() -> str:
@@ -340,7 +340,7 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     payload = (b"name-claim|" + label.encode() + b"|" + new_pub.encode()
                + b"|" + issued_at.encode() + b"|" + expires_at.encode())
     sig = sign(payload, new_priv, bytes.fromhex(new_pub)).hex().lower()
-    # pin-rotation v2: the mirror only takes a cyberspace-name-rotate/v2
+    # pin-rotation v2: the mirror only takes a name-rotate/v2 (hop_certs)
     # certificate that signs the mirror's current seq and prev_hash. The
     # old key is held here (submit happens before promote), so sign it now.
     head = _get_json(mirror_url.rstrip("/") + f"/api/v1/names/{label}/head")
