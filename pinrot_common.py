@@ -126,13 +126,19 @@ def cert_next(name, old_seed, new_pub, conn=None, seq=None, prev=None):
                         st[2] if prev is None else prev, issued_at=ISSUED)
 
 
+def norm(certs, sender="aa" * 32):
+    """What every production caller does: normalize OUTSIDE _db_lock."""
+    return core.normalize_rotation_certs(list(certs), sender)
+
+
 def ingest(certs, sender="aa" * 32, now=None, conn=None, rb=None):
+    pre = norm(certs, sender)
     if conn is not None:
         return nf.ingest_rotation_round(conn, certs, sender, round_bindings=rb,
-                                        now=now)
+                                        now=now, prenormalized=pre)
     with core._db_lock, core._db() as c:
         return nf.ingest_rotation_round(c, certs, sender, round_bindings=rb,
-                                        now=now)
+                                        now=now, prenormalized=pre)
 
 
 def db(q, args=()):

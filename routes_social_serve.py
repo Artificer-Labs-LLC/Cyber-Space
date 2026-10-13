@@ -1425,8 +1425,11 @@ async def names_rotate(request: Request):
         # never a tiebreak. The verdict commits before the HTTP refusal
         # so fork evidence is not rolled back with the error.
         accepted_at = _now()
+        # Normalize OUTSIDE _db_lock (no inline _norm_cert under the lock).
+        import core as _core
+        pre = _core.normalize_rotation_certs([cert])
         with _db_lock, _db() as conn:
-            verdict = name_fork.consider_rotation(conn, cert)
+            verdict = name_fork.consider_rotation(conn, cert, prenormalized=pre)
             if verdict == "accepted":
                 conn.execute(
                     "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
@@ -1504,11 +1507,16 @@ def names_rotations(request: Request, name: str):
             "SELECT old_pubkey, new_pubkey, issued_at, signature, accepted_at "
             "FROM name_rotations WHERE name=? ORDER BY accepted_at ASC, rowid ASC", (label,))
         rows = cur.fetchall()
-    if not rows:
+        import name_fork
+        late = name_fork.late_forks(conn, label)
+    if not rows and not late:
         raise HTTPException(status_code=404, detail="No rotations recorded for this name.")
+    # late_fork_evidence: forks that arrived after the pin's settle window
+    # closed. Evidence only; the name stayed live (Bulwark/Loom).
     return {"name": label,
             "rotations": [{"old_pubkey": r[0], "new_pubkey": r[1], "issued_at": r[2],
-                           "signature": r[3], "accepted_at": r[4]} for r in rows]}
+                           "signature": r[3], "accepted_at": r[4]} for r in rows],
+            "late_fork_evidence": late}
 
 
 @router.get("/api/v1/names/{name}")

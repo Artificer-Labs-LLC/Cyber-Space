@@ -2490,9 +2490,53 @@ def _fetch_name_chain(node_url: str, name: str, peer_pub: str):
         return None
 
 
-def pull_name_chain(sender_pub: str, name: str, fetch=None) -> str:
+def ingest_catchup_page(sender_pub: str, name: str, page, now=None) -> str:
+    """One catch-up page (board ruling on the 32-cert cap). Stateless:
+    verified and committed now or refused; nothing is buffered.
+      'over-length'  more than CATCHUP_PAGE certs: split it (not junk)
+      'junk'         first prev_hash links to no committed cert: refused
+                     before any charge or parse, nothing stored
+      tip page       charged (page), normalized OFF the lock, then
+                     accept_catchup under the lock
+      fork page      charged, its first cert normalized OFF the lock, then
+                     the existing fork path (ingest_rotation_round): fork
+                     evidence + contested inside the settle window, late
+                     evidence only after it; the pin never moves
+    """
+    import name_fork
+    if not isinstance(page, list) or len(page) > name_fork.CATCHUP_PAGE:
+        return "over-length"
+    if not page:
+        return "junk"
+    with _db_lock, _db() as conn:
+        kind = name_fork.classify_page(conn, name, page)
+    if kind == "junk":
+        return "junk"
+    n = len(page) if kind == "tip" else 1
+    if charge_catchup(sender_pub, n) is not None:
+        return "rate-limited"
+    now = name_fork._wall() if now is None else now
+    if kind == "tip":
+        normalized = normalize_rotation_certs(page, sender_pub)
+        with _db_lock, _db() as conn:
+            return name_fork.accept_catchup(conn, name, page, sender_pub,
+                                            now=now, prenormalized=normalized)
+    normalized = normalize_rotation_certs(page[:1], sender_pub)
+    with _db_lock, _db() as conn:
+        r = name_fork.ingest_rotation_round(conn, page[:1], sender_pub, now=now,
+                                            prenormalized=normalized)
+    o = r["outcomes"][0] if r["outcomes"] else "refused"
+    return {"contested": "fork-recorded", "refused-replay": "replay",
+            "refused-invalid": "refused"}.get(o, o)
+
+
+def pull_name_chain(sender_pub: str, name: str, fetch=None, now=None) -> str:
     """One catch-up pull, aimed only at the node that sent the unknown
-    prev_hash. The fetched path is accepted or refused whole."""
+    prev_hash. The fetched chain is applied in pages of CATCHUP_PAGE, each
+    charged, verified and committed on its own against the head as it is
+    at that moment. A page the budget or FORK GATE stops ends this pull;
+    the next pull re-fetches and resumes from the committed head (no
+    state is carried between pulls). Returns the last page's verdict."""
     import name_fork
     fetch = fetch or _fetch_name_chain
     with _db_lock, _db() as conn:
@@ -2505,27 +2549,36 @@ def pull_name_chain(sender_pub: str, name: str, fetch=None) -> str:
     chain = fetch(row[0], name, str(sender_pub).lower())
     if not isinstance(chain, dict):
         return "no-chain"
-    path = name_fork.path_after(chain, head)[:NAMES_GOSSIP_ROTATION_CAP]
-    # Bulwark HIGH: charge EVERY cert against the 32/256 budgets before any
-    # parsing; a path is accepted whole, so a path the budget cannot cover
-    # is refused unparsed. Normalization + libsodium verify run outside
-    # _db_lock; the lock is held only for state reads and writes.
-    if charge_catchup(sender_pub, len(path)) is not None:
-        return "rate-limited"
-    normalized = normalize_rotation_certs(path, sender_pub)
-    with _db_lock, _db() as conn:
-        verdict = name_fork.accept_catchup(conn, name, path, sender_pub,
-                                           prenormalized=normalized)
-        pend = name_fork.pending_rows(conn, name) if verdict == "accepted" else []
-    if pend:
+    certs = chain.get("rotations") or []
+    if not isinstance(certs, list):
+        return "no-chain"
+    verdict = "junk"
+    moved = False
+    while True:
+        with _db_lock, _db() as conn:
+            i = name_fork.catchup_start(conn, name, certs)
+        if i < 0:
+            verdict = "junk" if not moved else verdict
+            break
+        page = certs[i:i + name_fork.CATCHUP_PAGE]
+        verdict = ingest_catchup_page(sender_pub, name, page, now=now)
+        if verdict != "accepted":
+            break
+        moved = True
+        if i + len(page) >= len(certs):
+            break
+    if moved:
+        with _db_lock, _db() as conn:
+            pend = name_fork.pending_rows(conn, name)
         raws = [c for _, c, _ in pend]
-        if charge_catchup(sender_pub, len(raws)) is None:
+        if raws and charge_catchup(sender_pub, len(raws)) is None:
             normed = normalize_rotation_certs(raws, sender_pub)
-            if normed is not None:
-                pre = {rid: n for (rid, _, _), n in zip(pend, normed)}
-                with _db_lock, _db() as conn:
-                    name_fork.drain_pending(conn, name, sender_pub,
-                                            prenormalized=pre)
+            pre = {rid: n for (rid, _, _), n in zip(pend, normed)}
+            with _db_lock, _db() as conn:
+                name_fork.drain_pending(conn, name, sender_pub, now=now,
+                                        prenormalized=pre)
+    if moved and verdict in ("rate-limited", "rate-held"):
+        return "partial"     # progress committed; the next pull resumes
     return verdict
 
 
@@ -2537,6 +2590,7 @@ def pull_name_chain(sender_pub: str, name: str, fetch=None) -> str:
 CATCHUP_PER_SENDER = 32
 CATCHUP_GLOBAL_SLICE = 64
 _catchup_times = deque()
+_clock = time.monotonic   # patchable (the paging belt's fake clock)
 
 
 def _catchup_sender_ok(q, n) -> bool:
@@ -2547,7 +2601,7 @@ def _catchup_sender_ok(q, n) -> bool:
 def charge_catchup(sender_pub: str, n: int) -> str | None:
     """None when n units were charged; else which bucket refused
     ('sender', 'slice', 'global'). Nothing is charged on refusal."""
-    now = time.monotonic()
+    now = _clock()
     cutoff = now - GOSSIP_VERIFY_GLOBAL_WINDOW
     with _db_lock:   # O(n) deque bookkeeping only; no parse, no verify
         q = _hits[f"namefork:{str(sender_pub).lower()}"]

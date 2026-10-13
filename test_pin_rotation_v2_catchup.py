@@ -69,9 +69,10 @@ def old_pull_name_chain(sender_pub, name, fetch=None):
         return "no-peer"
     chain = fetch(row[0], name, str(sender_pub).lower())
     path = nf.path_after(chain, head_)
+    path = path[:core.NAMES_GOSSIP_ROTATION_CAP]
     with core._db_lock, core._db() as conn:
-        return nf.accept_catchup(conn, name, path[:core.NAMES_GOSSIP_ROTATION_CAP],
-                                 sender_pub)
+        return nf.accept_catchup(conn, name, path, sender_pub,
+                                 prenormalized=[nf._norm_cert(r) for r in path])
 
 
 # ===================================================== burst
@@ -129,8 +130,10 @@ mut, minfo = run_burst(old_pull_name_chain)
 print("   normalize-inside-lock mutant:", minfo, flush=True)
 mutant("catch-up normalizes back inside the lock (old pull)",
        "burst: lock < 1 s, write wait <= 250 ms, 0 verifies in lock", real, mut)
-check("burst refused before any cert is parsed (0 _norm_cert calls)",
-      info["norm"] == 0 and info["verdicts"] == ["rate-limited"], info)
+check("burst: only the first 32-cert page is ever parsed (<= 32 _norm_cert "
+      "calls); every later pull is refused before any parse",
+      info["norm"] <= 32 and set(info["verdicts"]) <= {"refused", "rate-limited"}
+      and info["verdicts"].count("refused") <= 1, info)
 
 # ===================================================== per-sender first
 print("Bulwark: catch-up charges the sender's bucket, then a reserved slice",
@@ -162,14 +165,17 @@ def run_buckets():
     claim_gate_pin(nh, kh)
     ch = cert_next(nh, kh, pub(seed()))
     out = core.ingest_rotation_certs([ch], honest_peer, [0])
-    return (set(reasons) == {"sender"} and shared == (0, 0)
+    # One 32-cert page fits the junk peer's own bucket; every later page is
+    # refused at that bucket, so the shared counters never pass 32.
+    return (reasons.count(None) == 1 and set(reasons) == {None, "sender"}
+            and shared[0] <= 32 and shared[1] <= 32
             and out["outcomes"] == ["accepted"]), (sorted(set(map(str, reasons))),
                                                     shared, out["outcomes"])
 
 
 real, info = run_buckets()
-check("junk peer 32 x 128: every pull refused at ITS OWN bucket (shared "
-      "counters untouched); honest peer's 1-cert rotation accepted", real, info)
+check("junk peer 32 x 128: one page charged, every later pull refused at ITS "
+      "OWN bucket (shared counters <= 32); honest peer's 1-cert rotation accepted", real, info)
 with patched(core, "_catchup_sender_ok", lambda q, n: True):
     mut, minfo = run_buckets()
 print("   per-sender-dropped mutant:", minfo, flush=True)

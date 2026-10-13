@@ -133,7 +133,8 @@ ingest([x1], conn=nA, now=rnd(1000))
 ingest([x2], conn=nA, now=rnd(1002))
 ingest([x2], conn=nB, now=rnd(5000))          # pending on B
 ingest([x1], conn=nB, now=rnd(5001))
-nf.drain_pending(nB, "conv", now=rnd(5002))
+nf.drain_pending(nB, "conv", now=rnd(5002),
+                 prenormalized={rid: nf._norm_cert(c) for rid, c, _ in nf.pending_rows(nB, "conv")})
 check("two nodes, different order and time -> same head hash",
       nf.current_state(nA, "conv") == nf.current_state(nB, "conv")
       and nf.current_state(nA, "conv")[1] == 2,

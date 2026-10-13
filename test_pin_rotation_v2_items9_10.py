@@ -91,7 +91,8 @@ def run_stale_path():
     ingest([bc2], conn=other, now=rnd(202))
     ch = nf.chain_for(other, n2)
     with core._db_lock, core._db() as c:
-        verdict = nf.accept_catchup(c, n2, ch["rotations"], now=next_round())
+        verdict = nf.accept_catchup(c, n2, ch["rotations"], now=next_round(),
+                                   prenormalized=norm(ch["rotations"]))
     return verdict == "refused" and head(n2)[0] == pub(kA) and not contested(n2)
 
 
@@ -122,7 +123,8 @@ with core._db_lock, core._db() as c:
     nf._store_fork(c, nf._norm_cert(held))
 alt = cert_next(nbr, kA, pub(kX))
 with core._db_lock, core._db() as c:
-    vb = nf.accept_catchup(c, nbr, [alt], now=next_round())
+    vb = nf.accept_catchup(c, nbr, [alt], now=next_round(),
+                           prenormalized=norm([alt]))
 check("catch-up path from the real head with a competing verified branch -> CONTESTED",
       vb == "contested" and contested(nbr))
 parity_src = open(os.path.join(HERE, "test_fed_route_parity.py")).read()

@@ -73,6 +73,7 @@ TESTS=(
   "test_pin_rotation_v2_gate.py"
   "test_pin_rotation_v2_kinds.py"
   "test_pin_rotation_v2_catchup.py"
+  "test_pin_rotation_v2_paging.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"

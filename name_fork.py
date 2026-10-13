@@ -233,6 +233,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             recorded_at TEXT NOT NULL
         )""")
     conn.execute(
+        """CREATE TABLE IF NOT EXISTS name_fork_late (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            prev_hash TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            new_pubkey TEXT NOT NULL,
+            cert_hash TEXT NOT NULL UNIQUE,
+            cert TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        )""")
+    conn.execute(
         """CREATE UNIQUE INDEX IF NOT EXISTS idx_name_fork_evidence
            ON name_fork_evidence(name, prev_hash, new_pubkey)""")
     conn.execute(
@@ -289,8 +301,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )""")
 
 
+_wall = time.time   # patchable wall clock (the paging belt's fake clock)
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return datetime.fromtimestamp(_wall(), timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _lp(b: bytes) -> bytes:
@@ -1081,7 +1097,9 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
         # The caller normalizes OUTSIDE _db_lock (core.normalize_rotation_
         # certs) and passes the results in; only direct callers (tests,
         # drain) normalize here.
-        rec = pre[i] if pre is not None else _norm_cert(raw)
+        # No inline fallback: a caller that did not normalize (outside the
+        # lock) gets a refusal, never a _norm_cert under _db_lock.
+        rec = pre[i] if pre is not None and i < len(pre) else None
         if rec is None:
             out["refused"] += 1
             out["outcomes"].append("refused-invalid")
@@ -1170,6 +1188,11 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                 out["refused"] += 1
                 out["outcomes"].append("refused-replay")
                 continue
+            if not fork_window_open(conn, name, rec, now):
+                # Late fork (Bulwark/Loom): evidence only, capped per name
+                # and per sender; the name stays live.
+                out["outcomes"].append(_keep_late_fork(conn, rec, sender, now))
+                continue
             if second_cert_contests(name, rec["prev_hash"], rec["new_pubkey"]):
                 _store_fork(conn, rec)
                 _mark_contested(conn, name, "fork: two certs on one prev_hash")
@@ -1203,8 +1226,11 @@ def contiguous(rec, pin, seq) -> bool:
 
 
 def consider_rotation(conn: sqlite3.Connection, rec: dict,
-                      sender_pub: str | None = None) -> str:
-    result = ingest_rotation_round(conn, [rec], sender_pub)
+                      sender_pub: str | None = None, prenormalized=None) -> str:
+    """prenormalized: [_norm_cert(rec)] computed by the caller OUTSIDE
+    _db_lock. Without it the cert is refused."""
+    result = ingest_rotation_round(conn, [rec], sender_pub,
+                                   prenormalized=prenormalized)
     name = str((rec or {}).get("name", "")).strip().lower()
     if name in result["contested"] or is_contested(conn, name):
         return "contested"
@@ -1233,11 +1259,12 @@ def path_accept_rule(conn, name, path, prenormalized=None) -> list | None:
     for i, raw in enumerate(path):
         # The caller (core.pull_name_chain) charges and normalizes OUTSIDE
         # _db_lock and passes the results in.
-        rec = prenormalized[i] if prenormalized is not None else _norm_cert(raw)
+        # No inline fallback (never _norm_cert under _db_lock).
+        rec = prenormalized[i] if prenormalized is not None else None
         if rec is None or rec["name"] != name:
             return None
         recs.append(rec)
-    if recs[0]["prev_hash"] != head or recs[0]["old_pubkey"] != pin:
+    if not _links_tip(recs[0], pin, head) or recs[0]["old_pubkey"] != pin:
         return None
     if recs[0]["seq"] != seq + 1:
         return None
@@ -1312,12 +1339,11 @@ def drain_pending(conn, name, sender_pub=None, now=None,
         h = head_hash(conn, name)
         if c.get("prev_hash") != h:
             continue
-        if prenormalized is not None and rid not in prenormalized:
-            continue
+        if prenormalized is None or rid not in prenormalized:
+            continue   # never normalized under the lock
         conn.execute("DELETE FROM name_pending WHERE id=?", (rid,))
-        r = ingest_rotation_round(
-            conn, [c], sender, now=now,
-            prenormalized=None if prenormalized is None else [prenormalized[rid]])
+        r = ingest_rotation_round(conn, [c], sender, now=now,
+                                  prenormalized=[prenormalized[rid]])
         res["accepted"].update(r["accepted"])
         res["contested"] |= r["contested"]
         res["outcomes"] += r["outcomes"]
@@ -1529,3 +1555,122 @@ def gossip_rotations(conn, names: list) -> list:
             seen.add(key)
             out.append(c)
     return out
+
+
+# ------------------------------------------------- catch-up paging (board)
+
+PIN_SETTLE_DEFAULT = 7 * 24 * 3600   # = core.SETTLE_DAYS
+CATCHUP_PAGE = 32           # certs per catch-up page, charged on its own
+LATE_FORK_PER_NAME = 8      # late fork evidence rows per name
+LATE_FORK_PER_SENDER = 32   # late fork evidence rows per sending peer
+
+
+def _links_tip(c, pin, head) -> bool:
+    """A page links to the committed pin only when its first prev_hash IS
+    the cert_hash at the tip. Comparing the key is not enough (A->B->A).
+    The belt's key-compare mutant returns old_pubkey == pin."""
+    return isinstance(c, dict) and str(c.get("prev_hash", "")) == head
+
+
+def _committed_seq(conn, name, h):
+    """seq of a committed cert (or the pin anchor) of the current
+    generation with head_hash h; None if h is not committed. One indexed
+    point lookup: constant cost."""
+    gen = conn.execute(
+        "SELECT MAX(id) FROM name_pin_log WHERE name=? AND kind IN ('pin','unpin')",
+        (name,)).fetchone()[0]
+    row = conn.execute(
+        "SELECT seq FROM name_pin_log WHERE name=? AND id>=? AND head_hash=?"
+        " AND kind IN ('pin','rotate') LIMIT 1", (name, gen or 0, h)).fetchone()
+    return None if row is None else int(row[0])
+
+
+def classify_page(conn, name, page) -> str:
+    """Before any parse: 'tip' (first prev_hash == tip cert_hash), 'fork'
+    (first prev_hash == a committed cert other than the tip), else 'junk'.
+    Reads only; stores nothing."""
+    st = current_state(conn, name)
+    if st is None or not page or not isinstance(page[0], dict):
+        return "junk"
+    pin, seq, head = st
+    if _links_tip(page[0], pin, head):
+        return "tip"
+    if _committed_seq(conn, name, str(page[0].get("prev_hash", ""))) is not None:
+        return "fork"
+    return "junk"
+
+
+def catchup_start(conn, name, certs) -> int:
+    """Where a served chain leaves this node's committed chain: the cert
+    whose prev_hash is the tip, else the last cert whose prev_hash is a
+    committed cert (a fork point). -1 when none links."""
+    st = current_state(conn, name)
+    if st is None:
+        return -1
+    best = -1
+    for i, c in enumerate(certs):
+        if not isinstance(c, dict):
+            break
+        if _links_tip(c, st[0], st[2]):
+            return i
+        if _committed_seq(conn, name, str(c.get("prev_hash", ""))) is None:
+            break
+        best = i
+    return best
+
+
+def settle_seconds() -> int:
+    """The pin's cosign/settle window: a fork may contest the name only
+    while the current pin is younger than this. Default SETTLE_DAYS (7),
+    the node's existing settle period (core.SETTLE_DAYS)."""
+    raw = os.environ.get("CYBERNET_NAME_PIN_SETTLE_SEC")
+    try:
+        return max(1, int(raw)) if raw else PIN_SETTLE_DEFAULT
+    except ValueError:
+        return PIN_SETTLE_DEFAULT
+
+
+def _tip_recorded_ts(conn, name):
+    row = conn.execute(
+        "SELECT recorded_at FROM name_pin_log WHERE name=? AND kind IN"
+        " ('pin','rotate','unpin') ORDER BY id DESC LIMIT 1", (name,)).fetchone()
+    try:
+        return datetime.fromisoformat(row[0]).timestamp() if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def fork_window_open(conn, name, rec, now) -> bool:
+    """True while the current pin's settle window is open. The belt's
+    mutant drops this and keeps only a key-current-at-fork-seq check."""
+    t = _tip_recorded_ts(conn, name)
+    return t is not None and now < t + settle_seconds()
+
+
+def _keep_late_fork(conn, rec, sender, now=None) -> str:
+    """Late fork: evidence only, once per cert, capped per name and per
+    sender. Owner-readable on GET /api/v1/names/{name}/rotations."""
+    if conn.execute("SELECT 1 FROM name_fork_late WHERE cert_hash=?",
+                    (rec["cert_hash"],)).fetchone():
+        return "late-fork-duplicate"
+    n_name = conn.execute("SELECT COUNT(*) FROM name_fork_late WHERE name=?",
+                          (rec["name"],)).fetchone()[0]
+    n_send = conn.execute("SELECT COUNT(*) FROM name_fork_late WHERE sender=?",
+                          (sender,)).fetchone()[0]
+    if n_name >= LATE_FORK_PER_NAME or n_send >= LATE_FORK_PER_SENDER:
+        return "late-fork-full"
+    conn.execute(
+        "INSERT INTO name_fork_late (name, sender, prev_hash, seq, new_pubkey,"
+        " cert_hash, cert, recorded_at) VALUES (?,?,?,?,?,?,?,?)",
+        (rec["name"], sender, rec["prev_hash"], rec["seq"], rec["new_pubkey"],
+         rec["cert_hash"], json.dumps(_wire(rec), sort_keys=True), _now()))
+    return "late-fork"
+
+
+def late_forks(conn, name) -> list:
+    ensure_schema(conn)
+    return [{"seq": r[0], "prev_hash": r[1], "new_pubkey": r[2],
+             "cert_hash": r[3], "sender": r[4], "recorded_at": r[5],
+             "cert": json.loads(r[6])} for r in conn.execute(
+        "SELECT seq, prev_hash, new_pubkey, cert_hash, sender, recorded_at, cert"
+        " FROM name_fork_late WHERE name=? ORDER BY id", (name,)).fetchall()]
