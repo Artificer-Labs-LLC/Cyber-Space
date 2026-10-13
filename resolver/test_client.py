@@ -440,6 +440,30 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client._build_query(0x1, name, 1)
 
+    def test_query_bad_txid_raises_valueerror_not_aliased(self):
+        """The txid was masked & 0xFFFF: 65536 silently built txid 0
+        and -1 built 65535 — a query under a different transaction id
+        than the caller chose — while a float/str txid escaped as
+        TypeError. All must raise ValueError at the source."""
+        for bad in (65536, -1, 1.5, "1", None, True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._build_query(bad, "node.cyberspace", 1)
+
+    def test_query_bad_qtype_raises_valueerror_not_aliased(self):
+        """A bool qtype silently built as A (bool is an int subclass)
+        and an out-of-range/non-int qtype escaped as struct.error /
+        TypeError. All must raise ValueError at the source."""
+        for bad in (70000, -1, 1.0, "A", None, True, False):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._build_query(0x1, "node.cyberspace", bad)
+
+    def test_query_txid_and_qtype_wire_boundaries_ok(self):
+        for txid in (0, 65535):
+            pkt = client._build_query(txid, "node.cyberspace", 65535)
+            parsed = dns.parse_query(pkt)
+            self.assertEqual(parsed["id"], txid)
+            self.assertEqual(parsed["qtype"], 65535)
+
     def _valid_response(self, txid=0x42):
         q = dns.parse_query(client._build_query(txid, "node.cyberspace", 1))
         return dns.build_response(

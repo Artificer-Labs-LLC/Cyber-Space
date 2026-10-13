@@ -155,7 +155,24 @@ def _build_query(txid: int, qname: str, qtype: int) -> bytes:
     and forwards upstream. One trailing dot (the FQDN root marker) is
     still accepted; any other empty label is a malformed name, refused
     here rather than canonicalized into a neighbour's name.
+
+    The two header fields are caller-supplied too (resolve() passes a
+    random 16-bit txid and a dict-validated qtype, but a direct caller
+    could pass anything): the txid was masked with & 0xFFFF, so 65536
+    silently ALIASED to txid 0 and -1 to 65535 — a query built under a
+    different transaction id than the caller chose, whose reply this
+    client would then refuse as a mistransaction — and a bool qtype
+    built as A (bool is an int subclass), while an out-of-range or
+    non-int qtype/txid escaped as struct.error/TypeError instead of
+    the ValueError this function's callers guard. Both fields must be
+    real ints (never bool) in the uint16 wire range; anything else
+    raises ValueError here, at the source — the same fail-closed gate
+    dns.build_response applies to its caller-supplied fields.
     """
+    for _field, _value in (("txid", txid), ("qtype", qtype)):
+        if not isinstance(_value, int) or isinstance(_value, bool) \
+                or not 0 <= _value <= 65535:
+            raise ValueError(f"bad {_field} {_value!r}")
     if qname.endswith("."):
         qname = qname[:-1]  # a single FQDN root dot; a second leaves an empty label
     qname = qname.lower()
