@@ -181,7 +181,12 @@ def _relay_cfg() -> tuple[str, str, str] | None:
     try:
         if len(relay_pub) != 64:
             raise ValueError("relay pubkey must be 64 hex chars")
-        bytes.fromhex(relay_pub)  # same gate core._reach_build applies
+        # Decoded-length gate, same as core._reach_build: bytes.fromhex
+        # ignores embedded spaces, so a spaced 64-char pubkey decodes
+        # to 31 bytes and core would refuse the relay strategy this
+        # cfg claims is configured.
+        if len(bytes.fromhex(relay_pub)) != 32:
+            raise ValueError("relay pubkey must decode to 32 bytes")
         if len(relay_token) > core._RELAY_TOKEN_CAP:
             raise ValueError("relay token too long")
         return (core._valid_node_url(relay_url), relay_pub, relay_token)
@@ -216,7 +221,11 @@ def _relay_warnings() -> list[str]:
         problems.append("CYBERNET_RELAY_PUBKEY must be 64 hex chars")
     else:
         try:
-            bytes.fromhex(pub)
+            # Decoded-length gate (twin of _relay_cfg / core._reach_build):
+            # a spaced 64-char pubkey parses but decodes to 31 bytes and
+            # core refuses it — warn instead of staying silent.
+            if len(bytes.fromhex(pub)) != 32:
+                problems.append("CYBERNET_RELAY_PUBKEY must be 64 hex chars")
         except Exception:
             problems.append("CYBERNET_RELAY_PUBKEY not hex")
     if not tok:
@@ -257,7 +266,8 @@ def _relay_strategy_present() -> bool:
         core._valid_node_url(relay_url)
         if len(relay_pub) != 64:
             return False
-        bytes.fromhex(relay_pub)
+        if len(bytes.fromhex(relay_pub)) != 32:
+            return False
         return bool(relay_token) and len(relay_token) <= core._RELAY_TOKEN_CAP
     except Exception:
         return False
