@@ -141,6 +141,15 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_MIRROR_URL", warns[0])
 
+    def test_mirror_undialable_ports_warn(self):
+        for bad in ("http://mirror.example:99999", "http://mirror.example:0",
+                    "http://mirror.example:abc"):
+            warns = self._warns(CYBERNET_MIRROR_URL=bad)
+            self.assertEqual(len(warns), 1, bad)
+            self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="http://mirror.example:65535"), [])
+
     def test_mirror_scheme_without_host_warns(self):
         warns = self._warns(CYBERNET_MIRROR_URL="http://")
         self.assertEqual(len(warns), 1)

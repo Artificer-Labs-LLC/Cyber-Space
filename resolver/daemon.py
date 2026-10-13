@@ -145,8 +145,9 @@ def _daemon_config_warnings() -> list[str]:
     (300) or below 0 (clamped to 0); CYBERNET_UPSTREAM_DNS set but
     malformed (_parse_upstream substitutes 1.1.1.1:53, so every
     non-.cyberspace query is forwarded somewhere unchosen); and
-    CYBERNET_MIRROR_URL set but not an http(s) URL with a host
-    (_env_str passes it through verbatim and _resolve_get_json can
+    CYBERNET_MIRROR_URL set but not an http(s) URL with a host and
+    a dialable port (_env_str passes it through verbatim and
+    _resolve_get_json can
     never fetch it, so every .cyberspace query answers NXDOMAIN
     while the daemon looks healthy — a loopback mirror is honest
     here, so unlike a node_url this gate is shape only, no
@@ -205,7 +206,15 @@ def _daemon_config_warnings() -> list[str]:
     if raw:
         try:
             parts = urllib.parse.urlsplit(raw)
-            mirror_ok = parts.scheme in ("http", "https") and bool(parts.hostname)
+            # Port is part of the shape (dial.plan precedent): urlsplit
+            # does not validate it, so parts.port must be read — it
+            # raises for non-numeric/out-of-range — and 0 refused.
+            port = parts.port
+            mirror_ok = (
+                parts.scheme in ("http", "https")
+                and bool(parts.hostname)
+                and (port is None or 1 <= port <= 65535)
+            )
         except ValueError:
             mirror_ok = False
         if not mirror_ok:
