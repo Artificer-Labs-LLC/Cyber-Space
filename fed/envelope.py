@@ -76,6 +76,26 @@ def verify_envelope(env: dict, now: float = None) -> bool:
         payload = json.dumps(env["body"], sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() != env["body_hash"]:
             return False
+        # String-length + decoded-length gates, twin of
+        # verify_rotation (3fbb38b) and _reach_descriptor_verify
+        # (93c1a79): bytes.fromhex ignores embedded spaces, so a
+        # 129-char sig (or 65-char sender_pub) with an inserted space
+        # decoded to the TRUE bytes and VERIFIED — neither string is
+        # part of the signed canonical form, yet receivers use
+        # env["sender_pub"] as the identity string (rate-limit keys,
+        # row-owner comparisons, writes), so a spaced spelling was a
+        # second identity for the same key, in a spelling every
+        # binding seat refuses on sight (len(signature) != 128).
+        # Only the exact 128/64-char spellings verify; case is left
+        # alone (uppercase verified before and still does).
+        if not isinstance(env["sender_pub"], str) \
+                or len(env["sender_pub"]) != 64 \
+                or len(bytes.fromhex(env["sender_pub"])) != 32:
+            return False
+        if not isinstance(env["sig"], str) \
+                or len(env["sig"]) != 128 \
+                or len(bytes.fromhex(env["sig"])) != 64:
+            return False
         msg = _canonical(env["ts"], env["recipient"],
                          bytes.fromhex(env["body_hash"]))
         return ed25519.checkvalid(bytes.fromhex(env["sig"]), msg,
