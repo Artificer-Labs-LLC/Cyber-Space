@@ -118,14 +118,28 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     """
     if not isinstance(rcode, int) or rcode not in _RCODE_NAMES:
         raise ValueError(f"unsupported rcode {rcode}")
+    # The query dict itself is caller-supplied (a hand-built dict, not
+    # only parse_query's output): a non-dict, a missing id/rd/question,
+    # or a non-bytes question escaped as TypeError/KeyError, and an int
+    # question silently BUILT — bytearray(4) is four zero bytes, a
+    # garbage question echoed as if it were the asked name. Extract and
+    # type-check the three fields this function reads, once.
+    try:
+        qid = query["id"]
+        rd = query["rd"]
+        question = query["question"]
+    except (TypeError, KeyError):
+        raise ValueError("bad query") from None
+    if not isinstance(question, (bytes, bytearray)):
+        raise ValueError("bad question")
     # The header packs two caller-supplied fields the answer loop below
     # never sees: the query id and the answer count. Both are uint16 on
     # the wire; an out-of-range id (a hand-built query dict — parse_query
     # only yields 0..65535) or more than 65535 answers escaped as
     # struct.error from the header pack, the same ValueError-contract
     # break the answer fields had. Range-check them here too.
-    if not isinstance(query["id"], int) \
-            or not 0 <= query["id"] <= 65535:
+    if not isinstance(qid, int) \
+            or not 0 <= qid <= 65535:
         raise ValueError("bad query id")
     try:
         n_answers = len(answers)
@@ -154,13 +168,13 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
                 or len(rdata) > 65535:
             raise ValueError("bad answer")
     flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode
-    if query["rd"]:
+    if rd:
         flags |= 0x0100  # echo RD
     header = struct.pack(
         ">HHHHHH",
-        query["id"], flags, 1, len(answers), 0, 0,
+        qid, flags, 1, n_answers, 0, 0,
     )
-    body = bytearray(query["question"])
+    body = bytearray(question)
     for qtype, ttl, rdata in answers:
         body += struct.pack(">HHHIH", 0xC00C, qtype, 1, ttl, len(rdata)) + rdata
     return header + bytes(body)

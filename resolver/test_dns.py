@@ -243,6 +243,33 @@ check("build: bytearray rdata still builds",
       dns.build_response(q, [(1, 300, bytearray(b"\x7f\x00\x00\x01"))])[-4:]
       == b"\x7f\x00\x00\x01")
 
+# The query dict itself is caller-supplied too: a non-dict, a dict
+# missing a field this function reads, or a non-bytes question must
+# read as ValueError — not TypeError/KeyError — and an int question
+# must not silently build (bytearray(4) is four zero bytes).
+check("build: None query raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, None, []))
+check("build: list query raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, [], []))
+check("build: query missing id raises ValueError, not KeyError",
+      raises_valueerror(dns.build_response,
+                        {k: v for k, v in q.items() if k != "id"}, []))
+check("build: query missing rd raises ValueError, not KeyError",
+      raises_valueerror(dns.build_response,
+                        {k: v for k, v in q.items() if k != "rd"}, []))
+check("build: query missing question raises ValueError, not KeyError",
+      raises_valueerror(dns.build_response,
+                        {k: v for k, v in q.items() if k != "question"}, []))
+check("build: string question raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, dict(q, question="alice"), []))
+check("build: None question raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, dict(q, question=None), []))
+check("build: int question raises ValueError, does not silently build",
+      raises_valueerror(dns.build_response, dict(q, question=4), []))
+check("build: bytearray question still builds",
+      dns.build_response(dict(q, question=bytearray(q["question"])), [])[12:]
+      == q["question"])
+
 # --- error_response ---------------------------------------------------------
 
 er = dns.error_response(b"")
