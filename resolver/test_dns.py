@@ -307,6 +307,24 @@ check("build: bytearray question still builds",
       dns.build_response(dict(q, question=bytearray(q["question"])), [])[12:]
       == q["question"])
 
+# The rd field is caller-supplied too: it was read by truthiness
+# alone, so 1/"false"/2.5 aliased to RD set and 0/""/None to RD
+# clear — a response whose RD echo matched no flag anyone set.
+# Only a real bool is an RD flag; valid True/False are covered by
+# the RD-echo checks above.
+check("build: int rd 1 raises ValueError, not RD alias",
+      raises_valueerror(dns.build_response, dict(q, rd=1), []))
+check("build: int rd 0 raises ValueError, not RD-clear alias",
+      raises_valueerror(dns.build_response, dict(q, rd=0), []))
+check("build: string rd raises ValueError, not RD alias",
+      raises_valueerror(dns.build_response, dict(q, rd="false"), []))
+check("build: None rd raises ValueError, not RD-clear alias",
+      raises_valueerror(dns.build_response, dict(q, rd=None), []))
+check("build: float rd raises ValueError, not RD alias",
+      raises_valueerror(dns.build_response, dict(q, rd=2.5), []))
+check("build: list rd raises ValueError, not RD alias",
+      raises_valueerror(dns.build_response, dict(q, rd=[1]), []))
+
 # --- error_response ---------------------------------------------------------
 
 er = dns.error_response(b"")

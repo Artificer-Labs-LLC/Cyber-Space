@@ -164,6 +164,14 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
         raise ValueError("bad query") from None
     if not isinstance(question, (bytes, bytearray)):
         raise ValueError("bad question")
+    # The rd field is caller-supplied too (parse_query yields a real
+    # bool, but a hand-built dict can pass anything): it was read by
+    # truthiness alone below, so 1/2.5/"false"/[1] silently ALIASED
+    # to RD set and 0/""/None/[] to RD clear — a response whose RD
+    # echo matched no flag anyone set. Only a real bool is an RD
+    # flag; anything else is a bad query, ValueError at the source.
+    if not isinstance(rd, bool):
+        raise ValueError("bad query rd")
     # The header packs two caller-supplied fields the answer loop below
     # never sees: the query id and the answer count. Both are uint16 on
     # the wire; an out-of-range id (a hand-built query dict — parse_query
