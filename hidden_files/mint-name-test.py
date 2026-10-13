@@ -165,6 +165,28 @@ for label, days in (("zeromint", "0"), ("negmint", "-5")):
     check(f"below-floor --expiry-days={days} wrote no key",
           not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
 
+# --- option spelling: space form works, unknown/surplus refused -----
+# The usage line documents [--expiry-days N] / [--env-dir DIR] in space
+# form, but the old hand-rolled parser read the value as a positional
+# and the option as "" (space expiry falsely refused as non-integer,
+# space env-dir silently became the cwd), silently ignored unknown
+# options (a typo proceeded at the default), and dropped extra
+# positionals. Space form must now mint for real; the rest refuse
+# locally with no key written.
+custom_env = os.path.join(HOME, "custom-env")
+rc = mint_name.main(["spacemint", MIRROR, "--expiry-days", "5",
+                     "--env-dir", custom_env])
+check("space-form --expiry-days/--env-dir mint exits 0", rc == 0, f"rc={rc}")
+check("space-form --env-dir received the env file",
+      os.path.exists(os.path.join(custom_env, "spacemint.env")))
+for label, argv in (("unknownmint", ["--expiry-day=5"]),
+                    ("surplusmint", ["extra-positional"]),
+                    ("novaluemint", ["--expiry-days"])):
+    rc = mint_name.main([label, MIRROR, *argv])
+    check(f"{argv} exits 2 locally", rc == 2, f"rc={rc}")
+    check(f"{argv} wrote no key",
+          not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
+
 # --- undialable / malformed mirror refused locally, before any key ----
 # Twin of dial.plan's mirror gate: a port no dial can attempt (99999,
 # non-numeric, 0) or a scheme-less value read as a claim refusal (exit 1,

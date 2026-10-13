@@ -179,10 +179,38 @@ def main(argv: list[str]) -> int:
     if "-h" in argv or "--help" in argv:
         print(__doc__.strip())
         return 0
-    args = [a for a in argv if not a.startswith("--")]
-    opts = {a.split("=", 1)[0]: (a.split("=", 1)[1] if "=" in a else "")
-            for a in argv if a.startswith("--")}
-    if len(args) < 1:
+    # Parse options in BOTH spellings (--opt value and --opt=value):
+    # the old hand-rolled split read a space-form value as a positional
+    # and the option as "", so the documented [--expiry-days N] form
+    # was refused as "must be an integer", a space-form --env-dir
+    # silently became Path("") (the cwd), an unknown option (a typo
+    # like --expiry-day) was silently ignored and the mint proceeded
+    # at the default the operator never asked for, and extra
+    # positionals vanished. Unknown/malformed options and surplus
+    # positionals are bad arguments, refused before any key/network.
+    _KNOWN_OPTS = ("--env-dir", "--expiry-days")
+    args: list[str] = []
+    opts: dict[str, str] = {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if name not in _KNOWN_OPTS:
+                print(f"refused: unknown option {name!r} — supported: "
+                      f"--env-dir DIR, --expiry-days N", file=sys.stderr)
+                return 2
+            if not eq:
+                i += 1
+                if i >= len(argv) or argv[i].startswith("--"):
+                    print(f"refused: {name} needs a value", file=sys.stderr)
+                    return 2
+                val = argv[i]
+            opts[name] = val
+        else:
+            args.append(a)
+        i += 1
+    if len(args) < 1 or len(args) > 2:
         print("usage: mint_name.py <label> [mirror_url] [--env-dir DIR] [--expiry-days N]",
               file=sys.stderr)
         return 2
