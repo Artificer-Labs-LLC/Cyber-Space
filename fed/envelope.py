@@ -39,8 +39,17 @@ def make_envelope(privkey_hex: str, sender_pub_hex: str, recipient: str,
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     body_hash = hashlib.sha256(payload).digest()
     msg = _canonical(ts, recipient, body_hash)
-    sig = ed25519.sign(msg, bytes.fromhex(privkey_hex),
-                       bytes.fromhex(sender_pub_hex))
+    priv_b = bytes.fromhex(privkey_hex)
+    pub_b = bytes.fromhex(sender_pub_hex)
+    # Decoded-length gates, twin of core._reach_mint: bytes.fromhex
+    # ignores embedded spaces, so a spaced 64-char seed or pubkey
+    # decodes to 31 bytes and sign() silently minted an envelope
+    # verify_envelope itself refuses (checkvalid length-gates the
+    # pubkey decode) — an envelope no seat accepts, contradicting
+    # the mint contract. Only 32-byte decodes mint.
+    if len(priv_b) != 32 or len(pub_b) != 32:
+        raise ValueError("sender seed and pubkey must decode to 32 bytes")
+    sig = ed25519.sign(msg, priv_b, pub_b)
     return {
         "v": VERSION,
         "sender_pub": sender_pub_hex,
