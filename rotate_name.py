@@ -312,9 +312,15 @@ def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
     if len(new_pub_hex) != 64:
         raise ValueError("new_pubkey is not 64 hex chars")
     try:
-        bytes.fromhex(new_pub_hex)
+        raw_new_pub = bytes.fromhex(new_pub_hex)
     except ValueError:
         raise ValueError("new_pubkey is not hex")
+    # Decoded-length gate, twin of verify_rotation's len(raw)*2 check:
+    # bytes.fromhex ignores embedded spaces, so a 64-char string with
+    # two spaces decoded to a 31-byte key and minted a record
+    # verify_rotation itself refuses — a rotation no seat accepts.
+    if len(raw_new_pub) != 32:
+        raise ValueError("new_pubkey is not 64 hex chars")
     old_pub_hex = publickey(old_priv).hex().lower()
     if new_pub_hex == old_pub_hex:
         raise ValueError("rotation to the same key is a no-op — renew the "
