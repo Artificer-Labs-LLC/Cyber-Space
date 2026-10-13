@@ -123,8 +123,18 @@ def _valid_rendezvous(point_id, name_pub, epoch_len=None):
                 status_code=400,
                 detail="rendezvous_point and name_pub must be 64 hex.")
         try:
-            bytes.fromhex(v)
+            raw = bytes.fromhex(v)
         except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="rendezvous_point and name_pub must be 64 hex.")
+        # Decoded-length gate, twin of rendezvous._name_pub_bytes:
+        # bytes.fromhex ignores embedded spaces, so a spaced 64-char
+        # point/pub decoded to 31 bytes, passed this shape gate, and
+        # point_is_current read it as merely "not in a willing epoch"
+        # — malformed misreported as stale. Only a 32-byte decode is
+        # a point or a name key.
+        if len(raw) != 32:
             raise HTTPException(
                 status_code=400,
                 detail="rendezvous_point and name_pub must be 64 hex.")
