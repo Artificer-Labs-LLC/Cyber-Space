@@ -215,31 +215,72 @@ def row_op_x_names_y():
 def _refused_typed(cls, fn):
     try: fn(); return False
     except Exception as e: return isinstance(e, cls)
-def _fc(b, **kw):
-    out = {}
-    lvl = hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None, out=out, **kw)
-    return lvl, out
-def row_first_contact_default():
-    # PENDING Villhaze (ART-29 2a078f21). Default is FAIL-CLOSED: with no mark
-    # stored, nonzero prev_size is refused before any verify; prev_* is never
-    # skipped silently. prev_size == 0 is accepted and labelled first_contact.
-    bad, ok = head(0, mark=(5, PROOT)), head(0, mark=(0, hl.ZERO32))
-    lvl, out = _fc(ok)
-    return (hl.FIRST_CONTACT == "refuse_nonzero_prev"
-            and refused_as(hl.FirstContactRefused, lambda: _fc(bad))
-            and lvl[0] == "unwitnessed" and out["first_contact"] is True
-            and out["first_contact_policy"] == "refuse_nonzero_prev")
-def row_first_contact_tofu():
-    # the labelled TOFU alternative is one switch; its result is LABELLED
-    b = head(0, mark=(5, PROOT))
-    with mock.patch.object(hl, "FIRST_CONTACT", "tofu"):
-        lvl, out = _fc(b)
-    with mock.patch.object(hl, "FIRST_CONTACT", "bogus"):
-        unk = refused_as(hl.FirstContactRefused, lambda: _fc(b))
-    _, o2 = (None, {})
-    hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=MARK, out=o2)  # mark stored: not first contact
-    return (lvl[0] == "unwitnessed" and out == {"first_contact": True, "first_contact_policy": "tofu"}
-            and unk and o2["first_contact"] is False)
+def _fc(b):
+    return hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None)
+# ---- first contact: ROOT ONLY (Villhaze ART-29 4b2e3f59) ----
+def row_fc_nonzero_root():
+    # (1) prev_size 0 but prev_root nonzero: FirstContactRefused, 0 verifies
+    return refused_as(hl.FirstContactRefused, lambda: _fc(head(0, mark=(0, PROOT))))
+def row_fc_nonzero_size():
+    # (2) nonzero prev_size (with zero AND nonzero prev_root): refused, 0 verifies
+    return (refused_as(hl.FirstContactRefused, lambda: _fc(head(0, mark=(5, hl.ZERO32))))
+            and refused_as(hl.FirstContactRefused, lambda: _fc(head(0, mark=(5, PROOT)))))
+def row_fc_root():
+    # (3) true root (0, 00*32) accepted; no TOFU switch or label exists
+    try: lvl = _fc(head(0, mark=(0, hl.ZERO32)))
+    except Exception: return False
+    return (lvl[0] == "unwitnessed" and not hasattr(hl, "FIRST_CONTACT")
+            and "out" not in hl.verify_head.__code__.co_varnames[:hl.verify_head.__code__.co_argcount])
+# ---- F-B1: non-dict cosigns ----
+def row_cosign_malformed():
+    b = head(2)
+    cases = [["x"] * 3, [{"pub": 1, "sig": "00"}], [{"pub": F1}], "xyz"]
+    return all(refused_as(hl.MalformedCosign, lambda c=c: ver(b, c)) for c in cases)
+# ---- F-B2: one cosign per signer ----
+LOG_APPENDS = []                 # observed log appends / contested marks (mutant spies write here)
+def _dup_pair(b):
+    good = cos([f1], b)[0]; junk = {"pub": good["pub"], "sig": "00" * 64}
+    return [junk, good], [good, junk], [good]
+def row_dup_cosign():
+    b = head(1)
+    jv, vj, _ = _dup_pair(b)
+    return (refused_as(hl.DuplicateCosign, lambda: ver(b, jv))
+            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj)))
+def row_dup_then_clean():
+    b = head(1)
+    jv, vj, clean = _dup_pair(b)
+    del LOG_APPENDS[:]
+    if not (refused_as(hl.DuplicateCosign, lambda: ver(b, jv)) and refused_as(hl.DuplicateCosign, lambda: ver(b, vj))):
+        return False
+    try: lvl = ver(b, clean)[0]
+    except Exception: return False
+    return lvl == "single-operator" and LOG_APPENDS == []
+# ---- F-B3: oversized pin file ----
+def row_pin_oversize():
+    import builtins, contextlib
+    big = os.path.join(D, "big.pins")
+    with open(big, "wb") as f: f.write(pinfile(OPS) + b"\x00" * (hl.MAX_PIN_BYTES + 1000))
+    real_open, opens, reads = builtins.open, [0], []
+    class Rd:
+        def __init__(s, f): s.f = f
+        def __enter__(s): return s
+        def __exit__(s, *a): s.f.close()
+        def read(s, n=-1): reads.append(n); return s.f.read(n)
+    def spy(path, *a, **k):
+        f = real_open(path, *a, **k)
+        if os.path.abspath(str(path)) != os.path.abspath(big): return f
+        opens[0] += 1; return Rd(f)
+    st = os.path.join(D, "s-big")
+    with mock.patch("builtins.open", spy):
+        pre = refused_as(hl.PinFileTooLarge, lambda: hl.load_pins(big, GEN, sig_ok, st, SIGNERS, THR))
+        pre = pre and opens[0] == 0                         # refused before it is opened/read
+        with mock.patch("os.path.getsize", return_value=10):   # file grew after stat
+            grew = refused_as(hl.PinFileTooLarge, lambda: hl.load_pins(big, GEN, sig_ok, st, SIGNERS, THR))
+    bounded = bool(reads) and all(isinstance(n, int) and 0 <= n <= hl.MAX_PIN_BYTES + 1 for n in reads)
+    ok = os.path.join(D, "ok.pins")
+    with open(ok, "wb") as f: f.write(pinfile(OPS))
+    control = hl.load_pins(ok, GEN, sig_ok, os.path.join(D, "s-ok"), SIGNERS, THR)["version"] == 3
+    return pre and grew and bounded and control
 import ast
 def override_calls(src, fname="<src>"):
     """Calls to parse_pins/load_pins that pass signers/threshold (keyword or
@@ -324,8 +365,13 @@ ROWS = [
     ("(L5) tag/mode mismatch both ways: typed TagModeMismatch, 0 verifies", row_tag_mode),
     ("(L5) single-operator with a second fleet operator cosigning: OperatorMismatch", row_single_two_fleet),
     ("(L4) single-operator head: valid cosigns from operator X, body names Y -> OperatorMismatch (Y fleet/outside/unpinned)", row_op_x_names_y),
-    ("(FC) first contact, default fail-closed: nonzero prev_size refused, 0 verifies; prev_size 0 labelled (PENDING Villhaze)", row_first_contact_default),
-    ("(FC) first contact, labelled TOFU switch: accepted + labelled; unknown switch refused", row_first_contact_tofu),
+    ("(FC1) first contact prev_size 0, nonzero prev_root: FirstContactRefused, 0 verifies", row_fc_nonzero_root),
+    ("(FC2) first contact nonzero prev_size: FirstContactRefused, 0 verifies", row_fc_nonzero_size),
+    ("(FC3) first contact true root (0, 00*32) accepted; no TOFU switch/label", row_fc_root),
+    ("(F-B1) cosigns ['x']*3 etc: typed MalformedCosign, 0 verifies, never AttributeError", row_cosign_malformed),
+    ("(F-B2) two cosigns on one signer, junk/valid both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
+    ("(F-B2) after that refusal the clean head is accepted; no negative cache, no contested mark, 0 log appends", row_dup_then_clean),
+    ("(F-B3) oversized pin file: PinFileTooLarge before open; bounded read if it grew", row_pin_oversize),
     ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
 ]
 # sha256 of tag||body for head(m): Genesis seed sha256("wok-level-0"), size 7,
@@ -355,7 +401,7 @@ def _mut_src(old, new, fn):
     helpers are redefined for mutants."""
     src = open(hl.__file__).read(); assert src.count(old) == 1, old
     ns = {"__name__": "head_level_mut"}; exec(compile(src.replace(old, new), "mut", "exec"), ns)
-    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused"):
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge"):
         ns[n] = getattr(hl, n)
     return ns[fn]
 def mut_parse(old, new):
@@ -364,11 +410,22 @@ def mut_parse(old, new):
 def mut_verify(old, new):
     f = _mut_src(old, new, "verify_head")
     return lambda *a, **k: f(*a, **k)
-def label_dropped(*a, out=None, **k):
-    """Mutant: the first-contact label is not propagated to the caller."""
-    r = ORIG(*a, out={}, **k)
-    if out is not None: out.update({"first_contact": False, "first_contact_policy": None})
-    return r
+NEG = set()
+def neg_cache(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
+    """Mutant: a refusal is cached as negative under the head hash."""
+    k = hashlib.sha256(blob).hexdigest()
+    if k in NEG: raise hl.Refused("cached negative")
+    try: return ORIG(blob, gs, gp, cs, pins, so, mark, ruling)
+    except hl.Refused: NEG.add(k); raise
+def _mark_contested(blob): LOG_APPENDS.append(("contested", hashlib.sha256(blob).hexdigest()))
+def to_contested(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
+    """Mutant: the parse refusal is routed into _mark_contested (log append)."""
+    try: return ORIG(blob, gs, gp, cs, pins, so, mark, ruling)
+    except hl.DuplicateCosign: _mark_contested(blob); raise
+def mut_cheap(old, new): return _mut_src(old, new, "cheap_head")
+def mut_load(old, new):
+    f = _mut_src(old, new, "load_pins")
+    return lambda path, gp, so, state, signers=None, threshold=None: f(path, gp, so, state, signers, threshold)
 def _thr_after():
     """Mutant: the count check moved after the verify loop (verifies first)."""
     src = open(hl.__file__).read()
@@ -377,7 +434,7 @@ def _thr_after():
     assert src.count(chk) == 1 and src.count(tail) == 1
     src = src.replace(chk, "").replace(tail, chk + tail)
     ns = {"__name__": "head_level_mut"}; exec(compile(src, "mut", "exec"), ns)
-    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused"):
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge"):
         ns[n] = getattr(hl, n)
     f = ns["parse_pins"]
     return lambda data, gp, so, signers=None, threshold=None: f(data, gp, so, signers, threshold)
@@ -418,9 +475,16 @@ MUT = [
     ("operator_id checked by membership, not equality", row_single_two_fleet, [mock.patch.object(hl, "verify_head", mut_verify('fleet_ops != {h["operator_id"]}', 'h["operator_id"] not in fleet_ops'))]),
     ("operator_id check removed (X cosigns, body names Y)", row_op_x_names_y, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
     ("threshold count checked only after verifying", row_thr_one, [mock.patch.object(hl, "parse_pins", _thr_after())]),
-    ("first contact skips prev_* silently", row_first_contact_default, [mock.patch.object(hl, "cheap_head", _mut_src('        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:', '        if False:', "cheap_head"))]),
-    ("first-contact default flipped to TOFU without a ruling", row_first_contact_default, [mock.patch.object(hl, "FIRST_CONTACT", "tofu")]),
-    ("first-contact label dropped", row_first_contact_tofu, [mock.patch.object(hl, "verify_head", label_dropped)]),
+    ("first contact skips prev_* silently (TOFU)", row_fc_nonzero_size, [mock.patch.object(hl, "cheap_head", mut_cheap('    if mark is None:\n        if psize', '    if False:\n        if psize'))]),
+    ("(1) first-contact prev_root check removed", row_fc_nonzero_root, [mock.patch.object(hl, "cheap_head", mut_cheap('        if proot != ZERO32:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused'))]),
+    ("(2) first-contact prev_size check removed", row_fc_nonzero_size, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused'))]),
+    ("(3) first contact refuses even the true root", row_fc_root, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if True:\n            raise FirstContactRefused'))]),
+    ("(5) F-B1 cosign shape check removed", row_cosign_malformed, [mock.patch.object(hl, "verify_head", mut_verify('    if not isinstance(cosigns, list) or not all(', '    if False and not all('))]),
+    ("(F-B2a) duplicate-signer check removed", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):', '    if False:'))]),
+    ("(F-B2b1) refusal cached by head hash", row_dup_then_clean, [mock.patch.object(hl, "verify_head", neg_cache)]),
+    ("(F-B2b2) parse refusal routed into _mark_contested", row_dup_then_clean, [mock.patch.object(hl, "verify_head", to_contested)]),
+    ("(4a) F-B3 size check before read removed", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('    if os.path.getsize(path) > MAX_PIN_BYTES:', '    if False:'))]),
+    ("(4b) F-B3 unbounded read", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('f.read(MAX_PIN_BYTES + 1)', 'f.read()'))]),
     ("operator_id check removed", row_single_wrong_op, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
 ]
 table = []

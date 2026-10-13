@@ -20,6 +20,11 @@ BODY = struct.Struct(">B32sQ32sQ32s32sQ")      # 153 bytes
 ZERO32 = b"\x00" * 32
 CLASS_FLEET, CLASS_OUTSIDE = 1, 2
 MAX_OPS, MAX_KEYS = 16, 4
+# Largest well-formed pin file: magic + log_id + version/issued + n_ops,
+# MAX_OPS * (op + class + n_keys + MAX_KEYS * (pub + from/to)), n_sigs,
+# 255 * (index + sig).
+MAX_PIN_BYTES = (len(b"cyberspace-witness-pins/v1\n") + 32 + 16 + 1
+                 + MAX_OPS * (32 + 1 + 1 + MAX_KEYS * (32 + 16)) + 1 + 255 * (1 + 64))
 
 RULING = {"min_outside_operators": 1}
 # Pin-signer public keys: compile-time PLACEHOLDER until Villhaze rules.
@@ -52,20 +57,24 @@ class FirstContactRefused(Refused):
     pass
 
 
-# ---- FIRST-CONTACT SWITCH (PENDING VILLHAZE RULING, ART-29 2a078f21) -----
-# What cheap_head does with prev_size/prev_root when NO continuity mark is
-# stored yet. prev_* is never skipped silently (Lodestar 2bdecf9c, Examiner).
-#   "refuse_nonzero_prev" - DEFAULT, fail-closed: a first-contact head must
-#                           carry prev_size == 0; anything else is refused
-#                           (FirstContactRefused) before any verify.
-#   "tofu"                - labelled trust-on-first-use: a first-contact head
-#                           with any prev_* is accepted as the first mark and
-#                           labelled first_contact=True (cheap_head result and
-#                           verify_head(out=...)).
-# TODO(Villhaze ART-29 2a078f21): flip only on her written ruling. This is
-# the single switch; nothing else reads first-contact policy.
-FIRST_CONTACT = "refuse_nonzero_prev"
-FIRST_CONTACT_CHOICES = ("refuse_nonzero_prev", "tofu")
+class MalformedCosign(Refused):
+    """F-B1: a cosign entry that is not {"pub": str, "sig": str}."""
+
+
+class DuplicateCosign(MalformedCosign):
+    """F-B2: more than one cosign for one signer (pub). Parse-time refusal:
+    never cached, never recorded as equivocation/contested, no log append."""
+
+
+class PinFileTooLarge(Refused):
+    """F-B3: pin file over MAX_PIN_BYTES; refused before/while bounded read."""
+
+
+# ---- FIRST CONTACT: ROOT ONLY (Villhaze ruling, ART-29 4b2e3f59) --------
+# With no continuity mark stored, a head is accepted only if it is the log
+# root: prev_size == 0 AND prev_root == 32 zero bytes. Anything else raises
+# FirstContactRefused before any verify. There is no TOFU option and no
+# first-contact policy switch or label.
 
 
 def log_id_of(genesis_pub_hex: str) -> bytes:
@@ -102,15 +111,14 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
     if mark is not None and (psize, proot) != (mark[0], mark[1]):
         raise Refused("prev_* does not match the stored mark")
     if mark is None:
-        if FIRST_CONTACT not in FIRST_CONTACT_CHOICES:
-            raise FirstContactRefused("FIRST_CONTACT switch has an unknown value")
-        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:
+        if psize != 0:
             raise FirstContactRefused("first contact with nonzero prev_size")
+        if proot != ZERO32:
+            raise FirstContactRefused("first contact with nonzero prev_root")
     if psize > size:
         raise Refused("prev_size > tree_size")
     return {"mode": mode, "level": m, "body": body, "tree_size": size, "root": root,
-            "operator_id": op, "issued_at": issued, "first_contact": mark is None,
-            "first_contact_policy": FIRST_CONTACT if mark is None else None}
+            "operator_id": op, "issued_at": issued}
 
 
 def select_cosigns(cosigns, keys):
@@ -127,16 +135,19 @@ def select_cosigns(cosigns, keys):
     return kept
 
 
-def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING, out=None):
+def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING):
     """pins comes from load_pins() (the shipped file), never a response.
     pins=None (fail closed: placeholder signers / threshold 0) rates every
     head at most unwitnessed. Returns (level, cosign_verify_calls)."""
     if pins is None:
         pins = {"keys": {}}
     h = cheap_head(blob, log_id_of(genesis_pub), mark)            # (2) before any verify
-    if out is not None:                     # first-contact label (TOFU path)
-        out["first_contact"] = h["first_contact"]
-        out["first_contact_policy"] = h["first_contact_policy"]
+    if not isinstance(cosigns, list) or not all(
+            isinstance(c, dict) and isinstance(c.get("pub"), str) and isinstance(c.get("sig"), str)
+            for c in cosigns):
+        raise MalformedCosign("cosign entries must be {pub: str, sig: str}")
+    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):
+        raise DuplicateCosign("at most one cosign per signer")
     keys = {k: v for k, v in pins["keys"].items()
             if v["from"] <= h["tree_size"] <= v["to"]}
     if not sig_ok(genesis_pub, blob, genesis_sig):
@@ -263,8 +274,13 @@ def load_pins(path: str, genesis_pub: str, sig_ok, state_path: str, signers=None
         return None                         # fail closed: load no pin file
     if "://" in str(path):
         raise Refused("pin file loads from a local path only")
+    if os.path.getsize(path) > MAX_PIN_BYTES:
+        raise PinFileTooLarge("pin file too large")     # before any read
     with open(path, "rb") as f:
-        pins = parse_pins(f.read(), genesis_pub, sig_ok, signers, threshold)
+        data = f.read(MAX_PIN_BYTES + 1)                 # bounded even if it grew
+    if len(data) > MAX_PIN_BYTES:
+        raise PinFileTooLarge("pin file too large")
+    pins = parse_pins(data, genesis_pub, sig_ok, signers, threshold)
     seen = 0
     if os.path.exists(state_path):
         with open(state_path) as f:
