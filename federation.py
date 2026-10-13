@@ -244,13 +244,22 @@ def fed_gossip(env: dict):
             if not isinstance(entry, dict):
                 ignored += 1
                 continue
-            ep = str(entry.get("node_pub", ""))
+            # Only real strings are roster fields: str() here aliased a
+            # gossip-carried JSON number into a peer row — a digit-only
+            # pubkey served as a number stringified to its own hex and
+            # merged, and a numeric name merged as its digit string
+            # (twin of the binding seats' gate in core).
+            if (not isinstance(entry.get("node_pub"), str)
+                    or not isinstance(entry.get("name"), str)):
+                ignored += 1
+                continue
+            ep = entry["node_pub"]
             if (not re.fullmatch(r"[0-9a-fA-F]{64}", ep)
                     or ep.lower() == _NODE_PUB.lower()
                     or ep.lower() == sender_pub.lower()):
                 ignored += 1
                 continue
-            name = str(entry.get("name", ""))
+            name = entry["name"]
             if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
                 ignored += 1
                 continue
