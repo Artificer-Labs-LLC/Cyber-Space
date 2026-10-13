@@ -292,6 +292,19 @@ def _parse_response(
     if isinstance(txid, bool) or not isinstance(txid, int) \
             or not 0 <= txid <= 65535:
         raise ResolveError(f"bad expected transaction id {txid!r}")
+    # The expected qtype is caller-supplied too, and it was compared
+    # with plain !=: True and 1.0 compare equal to 1 in Python, so
+    # both silently ALIASED to A — a packet was trusted as answering
+    # the family the caller asked for when the caller never named a
+    # real family at all (bool is an int subclass; float equality
+    # crosses types). An expected qtype that is given must be a real
+    # int (never bool) in the uint16 wire range, else ResolveError —
+    # the same fail-closed gate _build_query applies at build time.
+    # None stays valid: it means no family was asked to be checked.
+    if qtype is not None and (isinstance(qtype, bool)
+                              or not isinstance(qtype, int)
+                              or not 0 <= qtype <= 65535):
+        raise ResolveError(f"bad expected qtype {qtype!r}")
     if len(data) < 12:
         raise ResolveError("short response")
     resp_id, flags, qdcount, ancount, nscount, arcount = struct.unpack(

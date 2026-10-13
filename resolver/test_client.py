@@ -482,6 +482,25 @@ class ClientTests(unittest.TestCase):
                 resp, txid, "node.cyberspace", 1)
             self.assertEqual(len(answers), 1)
 
+    def test_parse_response_bad_qtype_raises_resolve_error_not_aliased(self):
+        """The expected qtype was compared with plain !=: True and
+        1.0 compare equal to 1, so both silently aliased to A — a
+        packet was trusted as answering the asked family when no
+        real family was ever named. Every malformed expected qtype
+        must raise ResolveError, this parser's contract."""
+        resp = self._valid_response()
+        for bad in (True, False, 1.0, "1", 65536, -1):
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._parse_response(resp, 0x42, "node.cyberspace", bad)
+
+    def test_parse_response_qtype_none_and_boundaries_ok(self):
+        resp = self._valid_response()
+        _flags, answers = client._parse_response(resp, 0x42)
+        self.assertEqual(len(answers), 1)
+        _flags, answers = client._parse_response(
+            resp, 0x42, "node.cyberspace", 1)
+        self.assertEqual(len(answers), 1)
+
     def _valid_response(self, txid=0x42):
         q = dns.parse_query(client._build_query(txid, "node.cyberspace", 1))
         return dns.build_response(
