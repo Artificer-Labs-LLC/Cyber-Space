@@ -408,6 +408,15 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=f"qtype={bad!r}"):
                 client.resolve("node.cyberspace", qtype=bad)
 
+    def test_nonstring_name_raises_value_error_not_attribute_error(self):
+        """A non-string name escaped as a raw AttributeError/TypeError
+        from .endswith() inside _build_query — not the ValueError a
+        malformed string name raises there. Every malformed name must
+        read as ValueError."""
+        for bad in (None, 1, True, 1.0, b"node.cyberspace"):
+            with self.assertRaises(ValueError, msg=f"name={bad!r}"):
+                client.resolve(bad)
+
     def test_query_wire_encoding(self):
         pkt = client._build_query(0x1234, "Node.Cyberspace.", 1)
         parsed = dns.parse_query(pkt)

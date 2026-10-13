@@ -539,6 +539,13 @@ def resolve(
     first; any UDP failure falls back to the TCP wire (unless tcp_only).
     ``_udp_sock`` / ``_tcp_sock`` are test hooks, not public API.
     """
+    # name is caller-supplied text: a non-string (None, an int, True,
+    # bytes) escaped as a raw AttributeError/TypeError from .endswith()
+    # inside _build_query — neither the ValueError a malformed string
+    # name raises there nor anything main() maps to exit 2. Gate the
+    # type first, the same fail-closed shape the qtype gate applies.
+    if not isinstance(name, str):
+        raise ValueError(f"bad name {name!r}")
     # qtype is caller-supplied text: a non-string (None, an int family
     # code, True) escaped as a raw AttributeError from .upper() before
     # this lookup — neither the ValueError an unsupported string raises
