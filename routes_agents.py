@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
-from core import AGENT_ROSTER_CAP, CAP_RE, IS_GENESIS, MAX_DESC, NODE_NAME, PRESENCE_FUTURE_SLOP, RETURN_PER_AGENT_CAP, SAVED_AGENT_MAX, SAVED_BODY_MAX, SAVED_NAME_MAX, SETTLE_DAYS, VIGIL_GAP, VIGIL_HOURS, _announce_cutoff, _authed, _check_rate, _db, _db_lock, _gather_cutoff, _hash_key, _key_lookup_token, _need_cutoff, _now, _presence_window, _silence_cutoff, _valid_name, read_bounded_form
+from core import AGENT_ROSTER_CAP, CAP_RE, IS_GENESIS, MAX_DESC, NODE_NAME, PRESENCE_FUTURE_SLOP, RETURN_PER_AGENT_CAP, SAVED_AGENT_MAX, SAVED_BODY_MAX, SAVED_NAME_MAX, SETTLE_DAYS, VIGIL_GAP, VIGIL_HOURS, _announce_cutoff, _authed, _check_rate, _db, _db_lock, _gather_cutoff, _hash_key, _key_lookup_token, _need_cutoff, _now, _presence_window, _silence_cutoff, _stored_caps, _valid_name, read_bounded_form
 from models import RegisterIn
 
 router = APIRouter()
@@ -383,10 +383,10 @@ def list_agents(q: str | None = Query(default=None, max_length=64),
     agents = []
     for r in rows:
         d = dict(r)
-        try:
-            d["capabilities"] = json.loads(d.get("capabilities") or "[]")
-        except Exception:
-            d["capabilities"] = []
+        # Loaded-shape gate (_stored_caps): a stored JSON string/int/dict
+        # is not a tag set and must not be served in that shape; only a
+        # real list of strings is (twin of node_directory's serve gate).
+        d["capabilities"] = _stored_caps(d.get("capabilities"))
         agents.append(d)
     return {"agents": agents, "query": q or "", "limit": limit, "returned": len(agents)}
 
@@ -428,10 +428,9 @@ def _presence_summary(limit: int | None = None, since: str | None = None):
     here = 0
     for r in rows:
         d = dict(r)
-        try:
-            d["capabilities"] = json.loads(d.get("capabilities") or "[]")
-        except Exception:
-            d["capabilities"] = []
+        # Loaded-shape gate (_stored_caps): same serve contract as
+        # list_agents above — only a real list of strings is a tag set.
+        d["capabilities"] = _stored_caps(d.get("capabilities"))
         d["status"] = "away"
         raw = (d.get("last_seen") or "").strip()
         if raw:
