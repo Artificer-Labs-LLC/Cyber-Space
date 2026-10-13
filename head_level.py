@@ -52,20 +52,16 @@ class FirstContactRefused(Refused):
     pass
 
 
-# ---- FIRST-CONTACT SWITCH (PENDING VILLHAZE RULING, ART-29 2a078f21) -----
-# What cheap_head does with prev_size/prev_root when NO continuity mark is
-# stored yet. prev_* is never skipped silently (Lodestar 2bdecf9c, Examiner).
-#   "refuse_nonzero_prev" - DEFAULT, fail-closed: a first-contact head must
-#                           carry prev_size == 0; anything else is refused
-#                           (FirstContactRefused) before any verify.
-#   "tofu"                - labelled trust-on-first-use: a first-contact head
-#                           with any prev_* is accepted as the first mark and
-#                           labelled first_contact=True (cheap_head result and
-#                           verify_head(out=...)).
-# TODO(Villhaze ART-29 2a078f21): flip only on her written ruling. This is
-# the single switch; nothing else reads first-contact policy.
-FIRST_CONTACT = "refuse_nonzero_prev"
-FIRST_CONTACT_CHOICES = ("refuse_nonzero_prev", "tofu")
+# ---- FIRST CONTACT (Villhaze ruling, ART-29 4b2e3f59) --------------------
+# With NO continuity mark stored, a head is accepted only at the root:
+# prev_size == 0 AND prev_root empty (all-zero). Anything else is a history
+# claim and is refused (FirstContactRefused) before any verify; this
+# includes Lodestar's rider (ART-42 e802b3a5): prev_size 0 beside a non-empty
+# prev_root. Trust-on-first-use is rejected for heads and marks, and no
+# policy switch exists here. The only bootstrap for a mark-less box is the
+# lost-mark rule (re-establish from a threshold-signed head it verifies
+# itself). Any change to this rule goes through the written-ruling path
+# (ART-29 1e762099); test_wok_level.py has a row asserting no switch.
 
 
 def log_id_of(genesis_pub_hex: str) -> bytes:
@@ -101,16 +97,15 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
         raise Refused("log_id")
     if mark is not None and (psize, proot) != (mark[0], mark[1]):
         raise Refused("prev_* does not match the stored mark")
-    if mark is None:
-        if FIRST_CONTACT not in FIRST_CONTACT_CHOICES:
-            raise FirstContactRefused("FIRST_CONTACT switch has an unknown value")
-        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:
+    if mark is None:                        # ART-29 4b2e3f59: root only
+        if psize != 0:
             raise FirstContactRefused("first contact with nonzero prev_size")
+        if proot != ZERO32:
+            raise FirstContactRefused("first contact with prev_size 0 but non-empty prev_root")
     if psize > size:
         raise Refused("prev_size > tree_size")
     return {"mode": mode, "level": m, "body": body, "tree_size": size, "root": root,
-            "operator_id": op, "issued_at": issued, "first_contact": mark is None,
-            "first_contact_policy": FIRST_CONTACT if mark is None else None}
+            "operator_id": op, "issued_at": issued}
 
 
 def select_cosigns(cosigns, keys):
@@ -127,16 +122,13 @@ def select_cosigns(cosigns, keys):
     return kept
 
 
-def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING, out=None):
+def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING):
     """pins comes from load_pins() (the shipped file), never a response.
     pins=None (fail closed: placeholder signers / threshold 0) rates every
     head at most unwitnessed. Returns (level, cosign_verify_calls)."""
     if pins is None:
         pins = {"keys": {}}
     h = cheap_head(blob, log_id_of(genesis_pub), mark)            # (2) before any verify
-    if out is not None:                     # first-contact label (TOFU path)
-        out["first_contact"] = h["first_contact"]
-        out["first_contact_policy"] = h["first_contact_policy"]
     keys = {k: v for k, v in pins["keys"].items()
             if v["from"] <= h["tree_size"] <= v["to"]}
     if not sig_ok(genesis_pub, blob, genesis_sig):

@@ -3,6 +3,7 @@
 ruling; head_level.py is parameterized."""
 import hashlib, json, os, struct, tempfile, time
 from unittest import mock
+import ast
 from nacl.signing import SigningKey, VerifyKey
 import head_level as hl
 
@@ -216,31 +217,66 @@ def _refused_typed(cls, fn):
     try: fn(); return False
     except Exception as e: return isinstance(e, cls)
 def _fc(b, **kw):
-    out = {}
-    lvl = hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None, out=out, **kw)
-    return lvl, out
+    return hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None, **kw)
 def row_first_contact_default():
-    # PENDING Villhaze (ART-29 2a078f21). Default is FAIL-CLOSED: with no mark
-    # stored, nonzero prev_size is refused before any verify; prev_* is never
-    # skipped silently. prev_size == 0 is accepted and labelled first_contact.
+    # Villhaze ART-29 4b2e3f59: with no mark stored, a first contact is
+    # accepted ONLY at the root. Nonzero prev_size -> FirstContactRefused,
+    # 0 verifies; prev_* is never skipped silently. Control: the root head
+    # (prev_size 0, prev_root empty) is accepted.
     bad, ok = head(0, mark=(5, PROOT)), head(0, mark=(0, hl.ZERO32))
-    lvl, out = _fc(ok)
-    return (hl.FIRST_CONTACT == "refuse_nonzero_prev"
-            and refused_as(hl.FirstContactRefused, lambda: _fc(bad))
-            and lvl[0] == "unwitnessed" and out["first_contact"] is True
-            and out["first_contact_policy"] == "refuse_nonzero_prev")
-def row_first_contact_tofu():
-    # the labelled TOFU alternative is one switch; its result is LABELLED
-    b = head(0, mark=(5, PROOT))
-    with mock.patch.object(hl, "FIRST_CONTACT", "tofu"):
-        lvl, out = _fc(b)
-    with mock.patch.object(hl, "FIRST_CONTACT", "bogus"):
-        unk = refused_as(hl.FirstContactRefused, lambda: _fc(b))
-    _, o2 = (None, {})
-    hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=MARK, out=o2)  # mark stored: not first contact
-    return (lvl[0] == "unwitnessed" and out == {"first_contact": True, "first_contact_policy": "tofu"}
-            and unk and o2["first_contact"] is False)
-import ast
+    bad1 = head(0, mark=(1, hl.ZERO32))
+    return (refused_as(hl.FirstContactRefused, lambda: _fc(bad))
+            and refused_as(hl.FirstContactRefused, lambda: _fc(bad1))
+            and _fc(ok)[0] == "unwitnessed")
+def row_first_contact_prev_root():
+    # Lodestar rider (ART-42 e802b3a5), adopted by Villhaze ART-29 4b2e3f59:
+    # prev_size 0 beside a non-empty prev_root is a history claim by another
+    # name -> FirstContactRefused, 0 verifies. Control: the same head with
+    # prev_root empty is accepted, so the refusal is the prev_root.
+    probes = [head(m, mark=(0, r)) for m in (0, 1, 2)
+              for r in (PROOT, b"\x00" * 31 + b"\x01", b"\x01" + b"\x00" * 31)]
+    ok = head(0, mark=(0, hl.ZERO32))
+    return (all(refused_as(hl.FirstContactRefused, lambda b=b: _fc(b)) for b in probes)
+            and _fc(ok)[0] == "unwitnessed")
+TOFU_TOKENS = ("tofu", "first_contact", "trust_on_first_use")
+def tofu_switch_hits(src, fname="<src>"):
+    """Any trust-on-first-use switch/branch/label in head_level source:
+    grep (case-insensitive 'tofu' anywhere, comments included) plus AST
+    (identifiers, attributes, args, keywords, string constants carrying a
+    TOFU/first-contact-policy token)."""
+    hits = [f"{fname}:{i}:grep" for i, line in enumerate(src.splitlines(), 1) if "tofu" in line.lower()]
+    for n in ast.walk(ast.parse(src, fname)):
+        names = []
+        if isinstance(n, ast.Name): names.append(n.id)
+        elif isinstance(n, ast.Attribute): names.append(n.attr)
+        elif isinstance(n, ast.arg): names.append(n.arg)
+        elif isinstance(n, ast.keyword) and n.arg: names.append(n.arg)
+        elif isinstance(n, (ast.FunctionDef, ast.ClassDef)): names.append(n.name)
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str): names.append(n.value)
+        for v in names:
+            if any(t in v.lower() for t in TOFU_TOKENS):
+                hits.append(f"{fname}:{getattr(n, 'lineno', 0)}:{v[:40]}")
+    return hits
+def _hl_src():
+    return open(hl.__file__).read()
+OLD_SWITCH_SHAPES = (
+    'FIRST_CONTACT = "refuse_nonzero_prev"\nFIRST_CONTACT_CHOICES = ("refuse_nonzero_prev", "tofu")\n',
+    'def f(mark, psize):\n    if mark is None and POLICY == "tofu":\n        return 1\n',
+    'def f(h):\n    return {"first_contact_policy": h}\n',
+    'def verify_head(blob, out=None, trust_on_first_use=False):\n    pass\n',
+)
+def row_no_tofu_switch():
+    # Villhaze ART-29 4b2e3f59 item 3: the dormant TOFU switch does not ship.
+    # Production head_level.py carries no TOFU switch, branch, or label; any
+    # future change goes through the written-ruling path (ART-29 1e762099).
+    # Self-probe: the scanner flags each historical switch shape and is
+    # clean on a plain root-only check.
+    src = _hl_src()
+    probe = all(tofu_switch_hits(s_) for s_ in OLD_SWITCH_SHAPES)
+    clean = not tofu_switch_hits("def f(mark, psize):\n    if mark is None and psize != 0:\n        raise E\n")
+    sig = (list(hl.cheap_head.__code__.co_varnames[:hl.cheap_head.__code__.co_argcount]) == ["blob", "log_id", "mark"]
+           and "out" not in hl.verify_head.__code__.co_varnames[:hl.verify_head.__code__.co_argcount])
+    return probe and clean and sig and tofu_switch_hits(src, "head_level.py") == []
 def override_calls(src, fname="<src>"):
     """Calls to parse_pins/load_pins that pass signers/threshold (keyword or
     extra positional). Production code must have none (Cipher 5157a264)."""
@@ -324,8 +360,9 @@ ROWS = [
     ("(L5) tag/mode mismatch both ways: typed TagModeMismatch, 0 verifies", row_tag_mode),
     ("(L5) single-operator with a second fleet operator cosigning: OperatorMismatch", row_single_two_fleet),
     ("(L4) single-operator head: valid cosigns from operator X, body names Y -> OperatorMismatch (Y fleet/outside/unpinned)", row_op_x_names_y),
-    ("(FC) first contact, default fail-closed: nonzero prev_size refused, 0 verifies; prev_size 0 labelled (PENDING Villhaze)", row_first_contact_default),
-    ("(FC) first contact, labelled TOFU switch: accepted + labelled; unknown switch refused", row_first_contact_tofu),
+    ("(FC) first contact root-only (ART-29 4b2e3f59): nonzero prev_size refused (FirstContactRefused), 0 verifies; root head accepted", row_first_contact_default),
+    ("(FC-R) first contact prev_size 0 + non-empty prev_root refused (FirstContactRefused), 0 verifies (Lodestar e802b3a5 rider)", row_first_contact_prev_root),
+    ("(FC-S) no TOFU switch/branch/label in production head_level.py (grep + AST; changes via ART-29 1e762099)", row_no_tofu_switch),
     ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
 ]
 # sha256 of tag||body for head(m): Genesis seed sha256("wok-level-0"), size 7,
@@ -364,11 +401,12 @@ def mut_parse(old, new):
 def mut_verify(old, new):
     f = _mut_src(old, new, "verify_head")
     return lambda *a, **k: f(*a, **k)
-def label_dropped(*a, out=None, **k):
-    """Mutant: the first-contact label is not propagated to the caller."""
-    r = ORIG(*a, out={}, **k)
-    if out is not None: out.update({"first_contact": False, "first_contact_policy": None})
-    return r
+def src_mutant(old, new):
+    """Production-source mutant written to a temp file; hl.__file__ points
+    at it for the duration of the mutant run (rows that read source see it)."""
+    src = open(hl.__file__).read(); assert src.count(old) == 1, old
+    p = os.path.join(D, "head_level_mut_%d.py" % time.time_ns()); open(p, "w").write(src.replace(old, new))
+    return mock.patch.object(hl, "__file__", p)
 def _thr_after():
     """Mutant: the count check moved after the verify loop (verifies first)."""
     src = open(hl.__file__).read()
@@ -418,9 +456,12 @@ MUT = [
     ("operator_id checked by membership, not equality", row_single_two_fleet, [mock.patch.object(hl, "verify_head", mut_verify('fleet_ops != {h["operator_id"]}', 'h["operator_id"] not in fleet_ops'))]),
     ("operator_id check removed (X cosigns, body names Y)", row_op_x_names_y, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
     ("threshold count checked only after verifying", row_thr_one, [mock.patch.object(hl, "parse_pins", _thr_after())]),
-    ("first contact skips prev_* silently", row_first_contact_default, [mock.patch.object(hl, "cheap_head", _mut_src('        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:', '        if False:', "cheap_head"))]),
-    ("first-contact default flipped to TOFU without a ruling", row_first_contact_default, [mock.patch.object(hl, "FIRST_CONTACT", "tofu")]),
-    ("first-contact label dropped", row_first_contact_tofu, [mock.patch.object(hl, "verify_head", label_dropped)]),
+    ("first contact skips prev_size silently", row_first_contact_default, [mock.patch.object(hl, "cheap_head", _mut_src('        if psize != 0:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused', "cheap_head"))]),
+    ("first contact without prev_root check (Lodestar rider dropped)", row_first_contact_prev_root, [mock.patch.object(hl, "cheap_head", _mut_src('        if proot != ZERO32:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused', "cheap_head"))]),
+    ("first-contact branch removed (any prev_* accepted with no mark)", row_first_contact_default, [mock.patch.object(hl, "cheap_head", _mut_src('    if mark is None:                        # ART-29 4b2e3f59: root only', '    if False:', "cheap_head"))]),
+    ("dormant TOFU switch reintroduced (default refuse)", row_no_tofu_switch, [src_mutant('class FirstContactRefused(Refused):', 'FIRST_CONTACT = "refuse_nonzero_prev"\nFIRST_CONTACT_CHOICES = ("refuse_nonzero_prev", "tofu")\n\n\nclass FirstContactRefused(Refused):')]),
+    ("TOFU branch reintroduced in cheap_head", row_no_tofu_switch, [src_mutant('    if mark is None:                        # ART-29 4b2e3f59: root only', '    if mark is None and globals().get("POLICY") == "tofu":\n        pass\n    elif mark is None:')]),
+    ("first-contact policy label reintroduced", row_no_tofu_switch, [src_mutant('            "operator_id": op, "issued_at": issued}', '            "operator_id": op, "issued_at": issued, "first_contact_policy": None}')]),
     ("operator_id check removed", row_single_wrong_op, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
 ]
 table = []
