@@ -589,6 +589,21 @@ def fed_directory_delta(env: dict):
                 continue
             retire = delta.get("retire", False)
             sig_hex = str(delta.get("sig", ""))
+            # String-length gate, twin of _recv_attestation (136c464):
+            # bytes.fromhex ignores embedded spaces, so a 129-char sig
+            # with an inserted space (or an outer-padded spelling)
+            # decoded to the TRUE 64 bytes and checkvalid VERIFIED it
+            # -- and this seat stores sig_hex verbatim into
+            # peers.delta_sig, which _delta_out later forwards as this
+            # node's own delta: a non-canonical spelling every binding
+            # seat refuses on sight (len(signature) != 128)
+            # propagating through the directory. Only the exact
+            # 128-char spelling attests; case is left alone (uppercase
+            # verified before and still does). The decoded-length half
+            # is checkvalid's own gate (a 63-byte decode reads False).
+            if len(sig_hex) != 128:
+                rejected += 1
+                continue
             try:
                 sig_b = bytes.fromhex(sig_hex)
                 sig_ok = _fed_ed25519.checkvalid(
