@@ -97,11 +97,15 @@ def _with_socket_factory(factory, fn):
         answer.socket.socket = real
 
 
+def _a_record(addr=(93, 184, 216, 34)):
+    return struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + bytes(addr)
+
+
 def test_forward_passthrough():
     """The query leaves byte-for-byte and the reply returns byte-for-byte."""
     raw = _query_packet("example.com")
-    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
-              + raw[12:] + b"upstream says hi")
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 1, 0, 0)
+              + raw[12:] + _a_record())
     resp = _with_socket_factory(
         lambda: _CannedSocket(canned),
         lambda: answer.handle_query(
@@ -114,8 +118,8 @@ def test_forward_v6_upstream_uses_inet6():
     """An IPv6-literal upstream is dialed on an AF_INET6 socket (an
     AF_INET sendto to it would raise and SERVFAIL every forward)."""
     raw = _query_packet("example.com")
-    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
-              + raw[12:] + b"v6 upstream says hi")
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 1, 0, 0)
+              + raw[12:] + _a_record())
     seen = {}
 
     def factory(family, *a, **k):
@@ -141,8 +145,8 @@ def test_forward_hostname_upstream_resolves_family():
     was never reached and SERVFAILed. Now dials _upstream_target via
     getaddrinfo AF_UNSPEC: AF_INET6 socket to the resolved sockaddr."""
     raw = _query_packet("example.com")
-    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
-              + raw[12:] + b"v6-host upstream says hi")
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 1, 0, 0)
+              + raw[12:] + _a_record())
     seen = {}
     sock_inst = _CannedSocket(canned, source=("::1", 53))
 
@@ -282,8 +286,8 @@ def test_forward_wrong_opcode_servfail():
           f"got resp={resp!r}")
     raw1 = bytearray(_query_packet("example.com"))
     raw1[2:4] = struct.pack(">H", 0x0900)  # opcode 1 + RD
-    canned1 = (struct.pack(">HHHHHH", 0x4321, 0x8880, 1, 0, 0, 0)
-               + bytes(raw1)[12:] + b"opcode-1 answer")
+    canned1 = (struct.pack(">HHHHHH", 0x4321, 0x8880, 1, 1, 0, 0)
+               + bytes(raw1)[12:] + _a_record())
     resp1 = _with_socket_factory(
         lambda: _CannedSocket(canned1),
         lambda: answer.handle_query(
@@ -330,6 +334,50 @@ def test_forward_wrong_question_servfail():
             upstream=("8.8.8.8", 53)))
     check("forward: uppercase-echoed question passes through untouched",
           resp == upper, f"got {resp!r}")
+
+
+def test_forward_malformed_sections_servfail():
+    """A reply whose counted sections are not actually there — or
+    which carries bytes no count owns — is structurally impossible:
+    before, _forward checked source, txid, QR, header length, opcode
+    and the echoed question, but never walked the sections its header
+    counted, so a reply claiming an answer it never contained (no
+    answer bytes, a truncated record header, an rdlen running past
+    the end) or appending uncounted trailing bytes was relayed
+    byte-for-byte. All SERVFAIL now. The walk is generic, not the
+    daemon's shape: a reply carrying a counted authority record (a
+    recursive upstream's ordinary shape) still passes untouched."""
+    raw = _query_packet("example.com")
+    q = raw[12:]
+    hdr1 = struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 1, 0, 0)
+    cases = [
+        ("answer claimed, none present", hdr1 + q),
+        ("answer header truncated", hdr1 + q + b"\xc0\x0c\x00\x01"),
+        ("rdlen overruns packet",
+         hdr1 + q + struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + b"\x01\x02"),
+        ("trailing bytes after counted sections",
+         struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0) + q + b"junkjunk"),
+    ]
+    for label, canned in cases:
+        resp = _with_socket_factory(
+            lambda c=canned: _CannedSocket(c),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("8.8.8.8", 53)))
+        check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
+              resp != canned and len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
+    ns_rec = (struct.pack(">HHHIH", 0xC00C, 2, 1, 60, 17)
+              + b"\x03ns1\x07example\x03com\x00")
+    with_ns = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 1, 0)
+               + q + ns_rec)
+    resp = _with_socket_factory(
+        lambda: _CannedSocket(with_ns),
+        lambda: answer.handle_query(
+            raw, mirror_url="http://mirror.invalid",
+            upstream=("8.8.8.8", 53)))
+    check("forward: counted authority record passes through untouched",
+          resp == with_ns, f"got {resp!r}")
 
 
 def test_forward_unresolvable_hostname_servfail():
@@ -445,6 +493,7 @@ def main():
     test_forward_short_header_servfail()
     test_forward_wrong_opcode_servfail()
     test_forward_wrong_question_servfail()
+    test_forward_malformed_sections_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()

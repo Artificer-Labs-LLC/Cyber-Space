@@ -215,6 +215,39 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
                     or seen_qtype != asked["qtype"]
                     or seen_qclass != asked["qclass"]):
                 return error_response(raw, 2)
+            # The reply's counted sections must actually BE there, and
+            # the packet must end exactly where they end: before, a
+            # right-source, right-txid, QR-set, right-opcode reply
+            # echoing the right question but claiming records its body
+            # never contained (an answer count with no answer bytes, a
+            # truncated record header, an rdlen running past the end)
+            # — or carrying uncounted bytes after its last record —
+            # was relayed byte-for-byte, while client._parse_response
+            # has always refused truncated sections and trailing bytes
+            # alike. The walk is generic (answer + authority +
+            # additional, any type/class): a recursive upstream
+            # legitimately carries all three sections, but no
+            # legitimate reply claims bytes it does not hold or
+            # appends bytes no count owns. A structurally impossible
+            # reply is a failed forward: SERVFAIL, never a borrowed
+            # answer.
+            try:
+                off = seen_off + 4
+                records = sum(
+                    int.from_bytes(reply[i:i + 2], "big") for i in (6, 8, 10)
+                )
+                for _ in range(records):
+                    _owner, off = _read_name(reply, off)
+                    if off + 10 > len(reply):
+                        return error_response(raw, 2)
+                    rdlen = int.from_bytes(reply[off + 8:off + 10], "big")
+                    off += 10 + rdlen
+                    if off > len(reply):
+                        return error_response(raw, 2)
+            except ValueError:
+                return error_response(raw, 2)
+            if off != len(reply):
+                return error_response(raw, 2)
             return bytes(reply)
         finally:
             sock.close()
