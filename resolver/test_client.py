@@ -1119,6 +1119,28 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client._read_exact(_Sock(b"hello"), 5), b"hello")
         self.assertEqual(client._read_exact(_Sock(b"hello"), 3), b"hel")
 
+    def test_textify_malformed_inputs_raise_resolve_error(self):
+        """_textify's contract is ResolveError on a mismatch: a
+        non-bytes rdata must not escape as TypeError from len()/
+        inet_ntoa, and True must not alias to QTYPE_A."""
+        for qtype, rdata in ((client.QTYPE_A, "abcd"),
+                             (client.QTYPE_A, 12345),
+                             (client.QTYPE_A, None),
+                             (client.QTYPE_AAAA, "x" * 16),
+                             (True, b"\x01\x02\x03\x04"),
+                             ("1", b"\x01\x02\x03\x04")):
+            with self.assertRaises(client.ResolveError):
+                client._textify(qtype, rdata)
+
+    def test_textify_valid_still_textifies(self):
+        """Boundaries untouched: A/AAAA bytes and bytearray parse."""
+        self.assertEqual(client._textify(client.QTYPE_A,
+                                         b"\x01\x02\x03\x04"), "1.2.3.4")
+        self.assertEqual(client._textify(client.QTYPE_A,
+                                         bytearray(b"\x01\x02\x03\x04")),
+                         "1.2.3.4")
+        self.assertEqual(client._textify(client.QTYPE_AAAA, bytes(16)), "::")
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)

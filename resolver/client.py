@@ -561,6 +561,17 @@ def _query_tcp(
 
 def _textify(qtype: int, rdata: bytes) -> str:
     """rdata bytes -> printable IP, strictly per the asked family."""
+    # Both fields are caller-supplied at this library seat (resolve()
+    # passes a parsed qtype and wire rdata, but a direct caller can
+    # pass anything): a non-bytes rdata escaped as a raw TypeError
+    # from len()/inet_ntoa, and True ALIASED to QTYPE_A (bool is an
+    # int subclass, True == 1) — neither the ResolveError this
+    # function raises for every other mismatch. Only a real int
+    # qtype (bool excluded) and real bytes/bytearray rdata can match
+    # a family; anything else is that same mismatch, refused here.
+    if isinstance(qtype, bool) or not isinstance(qtype, int) \
+            or not isinstance(rdata, (bytes, bytearray)):
+        raise ResolveError("answer rdata does not match the asked family")
     if qtype == QTYPE_A and len(rdata) == 4:
         return socket.inet_ntoa(rdata)
     if qtype == QTYPE_AAAA and len(rdata) == 16:
