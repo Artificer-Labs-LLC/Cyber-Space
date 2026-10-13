@@ -1249,7 +1249,17 @@ async def names_rotate(request: Request):
             raw = bytes.fromhex(val)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"{field} is not hex.")
-        if len(raw) * 2 != want:
+        # String length AND decoded length: the decoded gate alone
+        # (len(raw)*2 == want) admits a LONGER string whose extra
+        # characters are spaces — bytes.fromhex ignores them, so a
+        # 65-char pubkey / 129-char signature decodes to exactly the
+        # wanted 32/64 bytes. The binding_signature seat was the live
+        # wound: the spaced sig decoded to the TRUE signature bytes,
+        # verified, and was stored verbatim — a binding every client
+        # seat reads as absent (len(signature) != 128), so the mirror
+        # answered "rotated" while the name went dark. Twin of the
+        # claim route above, which gates the string length first.
+        if len(val) != want or len(raw) * 2 != want:
             raise HTTPException(status_code=400, detail=f"{field} must be {want} hex chars.")
     # 1: the rotation record must verify on its own — the old key vouching
     # for the new one, not yet in force if future-dated. The payload uses
