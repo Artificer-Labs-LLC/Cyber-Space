@@ -340,6 +340,25 @@ def fed_gossip(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself): claim the envelope's
+    # sig after verify+recipient, before the sender_pub gate, the
+    # rate check, the known-peer gate, and the roster merge, so a
+    # replay can never redo that work or burn fedgossip: quota.
+    # verify_envelope already established a valid sig, so the claim's
+    # ValueError is unreachable in production; it is converted to 400
+    # anyway so the seat fails closed (never a 500) if verify is ever
+    # bypassed (twin of fed_retire 97c8246). Named post-claim edges:
+    # sender_pub mismatch and unknown-peer 404 both claim; genuine
+    # roster updates re-sign with a fresh ts (new sig) and stay
+    # deliverable (already-known entries merge as ignored).
+    with _db_lock, _db() as conn:
+        try:
+            replayed = _claim_seen_sig(conn, env.get("sig"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid envelope")
+        if replayed:
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
