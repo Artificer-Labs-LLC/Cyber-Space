@@ -418,7 +418,22 @@ def fed_directory_delta(env: dict):
             if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
                 rejected += 1
                 continue
-            retire = bool(delta.get("retire", False))
+            # Only a real bool is a retire flag, and only a real
+            # string is a sig: bool()/str() here coerced them before
+            # _delta_payload could refuse — retire "false"/1 became
+            # a retire the payload builder's own gate rejects as a
+            # non-bool (delta-payload-shape-type belt), verified
+            # against the retire payload and applied as a tombstone
+            # for a flag nobody served as a bool. Twin of
+            # _recv_attestation's sig gate. Absent fields keep their
+            # defaults; present ones must be the canonical shape.
+            if "retire" in delta and not isinstance(delta["retire"], bool):
+                rejected += 1
+                continue
+            if "sig" in delta and not isinstance(delta["sig"], str):
+                rejected += 1
+                continue
+            retire = delta.get("retire", False)
             sig_hex = str(delta.get("sig", ""))
             try:
                 sig_b = bytes.fromhex(sig_hex)
