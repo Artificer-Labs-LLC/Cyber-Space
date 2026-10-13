@@ -125,9 +125,17 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     if name != label or len(node_pubkey) != 64 or len(signature) != 128:
         return 1, ["name-side: malformed binding"]
     try:
-        bytes.fromhex(node_pubkey)
-        bytes.fromhex(signature)
+        pub_b = bytes.fromhex(node_pubkey)
+        sig_b = bytes.fromhex(signature)
     except ValueError:
+        return 1, ["name-side: malformed binding"]
+    # Decoded-length gate, twin of verify_name 69ba6b5: bytes.fromhex
+    # ignores embedded spaces, so a spaced 64-char pubkey decoded to
+    # 31 bytes (a spaced signature to 63), passed the shape gate above,
+    # and _name_binding_verify read it as "signature does not verify"
+    # when the key/sig itself was malformed — the planner's verdicts
+    # must stay precise, malformed is not unverifiable.
+    if len(pub_b) != 32 or len(sig_b) != 64:
         return 1, ["name-side: malformed binding"]
     if not core._name_binding_verify(name, node_pubkey, issued_at,
                                      expires_at, signature):
