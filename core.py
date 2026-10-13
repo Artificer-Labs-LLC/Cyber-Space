@@ -1328,7 +1328,11 @@ def _rendezvous_strategy(desc):
         for strat in reach:
             if not isinstance(strat, dict):
                 continue
-            if str(strat.get("kind", "")) != "rendezvous":
+            # Only a real string is a strategy kind: str() here aliased
+            # a non-string kind whose string form is "rendezvous" into
+            # the rendezvous strategy — the SAME alias _relay_route's
+            # seat (its twin extractor) refuses on sight.
+            if strat.get("kind") != "rendezvous":
                 continue
             epoch_len = strat.get("epoch_len")
             if not rendezvous._epoch_len_ok(epoch_len):
