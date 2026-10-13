@@ -170,6 +170,24 @@ def _server_family(host: str) -> int:
     return socket.AF_INET
 
 
+def _check_port(port: int) -> int:
+    """Gate a caller-supplied port before any socket sees it.
+
+    Twin of client.resolve's port gate: only a real int (bool
+    excluded) in 1..65535 is a port. Before, _server_target returned
+    True/False/0/-1/65536/a string/a float/None verbatim in the
+    sockaddr, so True aliased to port 1, a string was handed to the
+    transport as a service name, and an out-of-range port escaped
+    later as OverflowError/OSError — or, on the TCP wire, was dialed
+    as a different port than the caller wrote. main() gates its
+    --port, but a direct caller bypassed it. Anything else raises
+    ValueError at the source."""
+    if isinstance(port, bool) or not isinstance(port, int) \
+            or not 1 <= port <= 65535:
+        raise ValueError(f"bad port {port!r}")
+    return port
+
+
 def _server_target(host: str, port: int):
     """(family, sockaddr, expected source IP) the UDP wire dials.
 
@@ -193,6 +211,7 @@ def _server_target(host: str, port: int):
     # a daemon nobody named was dialed and source-checked as expected.
     if not isinstance(host, str):
         raise ValueError(f"bad server host {host!r}")
+    _check_port(port)
     try:
         ip = ipaddress.ip_address(host)
         return _server_family(host), (host, port), str(ip)
@@ -541,6 +560,7 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     txid_echoed). Raises on transport failure.
     """
     _check_timeout(timeout)
+    _check_port(port)
     packet, txid = _build_query(name, qtype)
     frame = struct.pack(">H", len(packet)) + packet
     with socket.create_connection((_server_host(server), port),

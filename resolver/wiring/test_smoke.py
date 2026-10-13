@@ -1904,6 +1904,35 @@ def _test_read_exact_malformed():
           and smoke._read_exact(_FakeSock(), 0, 3.0) == b"")
 
 
+# 10. _query/_query_tcp/_server_target refuse a malformed port
+#     instead of aliasing or leaking it (twin of client.resolve's
+#     port gate): True aliased to port 1, a string reached the
+#     transport as a service name, and out-of-range ports escaped
+#     as OverflowError/OSError or were dialed as a different port.
+#     main() gates --port, but a direct caller bypassed it.
+def _test_query_port_malformed():
+    bad = [True, False, 0, -1, 65536, "5353", 53.5, None]
+    for port in bad:
+        for fn in (smoke._query, smoke._query_tcp):
+            try:
+                fn("genesis.cyberspace", 1, "127.0.0.1", port)
+                err = None
+            except Exception as exc:  # noqa: BLE001 - refusal is the check
+                err = exc
+            check(f"{fn.__name__}(port={port!r}) -> ValueError",
+                  isinstance(err, ValueError), f"err={err}")
+        try:
+            smoke._server_target("127.0.0.1", port)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"_server_target(port={port!r}) -> ValueError",
+              isinstance(err, ValueError), f"err={err}")
+    check("_check_port valid ports pass through",
+          smoke._check_port(1) == 1 and smoke._check_port(5353) == 5353
+          and smoke._check_port(65535) == 65535)
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1938,6 +1967,7 @@ if __name__ == "__main__":
     _test_build_query_malformed()
     _test_query_timeout_malformed()
     _test_read_exact_malformed()
+    _test_query_port_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)
