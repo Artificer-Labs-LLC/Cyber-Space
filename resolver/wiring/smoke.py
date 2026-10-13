@@ -240,7 +240,7 @@ def _refuse_stranger_answer(resp: bytes, qd: int, an: int,
     for this question — trusting it would let a correct question
     carry a stranger's address. Name compared case-insensitively.
     Walks question + answer headers only; type/class/rdlen parity
-    is a separate check, trailing is _refuse_trailing's."""
+    is _refuse_wrong_type_answer's, trailing is _refuse_trailing's."""
     off = 12
     for _ in range(qd):
         off = _skip_name(resp, off)
@@ -260,6 +260,42 @@ def _refuse_stranger_answer(resp: bytes, qd: int, an: int,
         if off + rdlen > len(resp):
             raise ValueError("truncated DNS response — response is not ours")
         off += rdlen
+
+
+def _refuse_wrong_type_answer(resp: bytes, qd: int, an: int) -> None:
+    """Refuse an answer record the daemon never sends, twin of
+    client._parse_response: the daemon's handler answers only the
+    asked A or AAAA family (every other qtype gets an empty NODATA
+    reply) and build_response hard-codes class IN on every answer
+    it builds, with rdata exactly 4 bytes for A and 16 for AAAA —
+    so a TXT/CNAME record, a non-IN record, or a record whose rdata
+    length does not match its type never came from the daemon,
+    however clean its owner. Walks question + answer headers only;
+    owner is _refuse_stranger_answer's, trailing is
+    _refuse_trailing's."""
+    off = 12
+    for _ in range(qd):
+        off = _skip_name(resp, off)
+        if off + 4 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += 4  # qtype + qclass
+    for _ in range(an):
+        off = _skip_name(resp, off)
+        if off + 10 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        rtype, rclass, _ttl, rdlen = struct.unpack_from(">HHIH", resp, off)
+        off += 10
+        if off + rdlen > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += rdlen
+        if rclass != _QCLASS_IN or rtype not in (_QTYPE_A, _QTYPE_AAAA):
+            raise ValueError(
+                "response answer record of a type or class the daemon "
+                "never sends — response is not ours")
+        if rdlen != (4 if rtype == _QTYPE_A else 16):
+            raise ValueError(
+                "response answer rdata length does not match its type — "
+                "response is not ours")
 
 
 def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
@@ -395,6 +431,10 @@ def _query(name: str, qtype: int, server: str, port: int,
     # Answer owner, twin of client._parse_response: every answer
     # must be owned by the asked name — see _refuse_stranger_answer.
     _refuse_stranger_answer(resp, qd, an, name)
+    # Answer type/class/rdlen, twin of client._parse_response:
+    # every answer must be a record the daemon ever sends — see
+    # _refuse_wrong_type_answer.
+    _refuse_wrong_type_answer(resp, qd, an)
     # Trailing bytes, twin of client._parse_response: the packet
     # must end exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)
@@ -484,6 +524,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # Answer owner, twin of _query above: every answer must be
     # owned by the asked name — see _refuse_stranger_answer.
     _refuse_stranger_answer(resp, qd, an, name)
+    # Answer type/class/rdlen, twin of _query above: every answer
+    # must be a record the daemon ever sends — see
+    # _refuse_wrong_type_answer.
+    _refuse_wrong_type_answer(resp, qd, an)
     # Trailing bytes, twin of _query above: the packet must end
     # exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)

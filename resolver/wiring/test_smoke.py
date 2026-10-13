@@ -1691,6 +1691,105 @@ def _test_answer_owner():
           and "owned by a different name" in str(err), f"err={err}")
 
 
+# 5z. An answer must be a record the daemon ever sends:
+#     client._parse_response refuses any answer whose type is not
+#     A/AAAA, whose class is not IN, or whose rdata length does not
+#     match its type (A is exactly 4, AAAA exactly 16 — the daemon's
+#     handler answers only the asked family, build_response hard-
+#     codes class IN), but both smoke wires walked the answer section
+#     for owner/trailing only and never read type/class/rdlen, so a
+#     QR|AA|RD-set packet answering alice.cyberspace with a TXT record
+#     (or an A record under class CH, or a short rdata) earned a PASS
+#     for a record the daemon never sends. Both wires refuse all.
+def _test_answer_type_class():
+    import socket as _socket
+    import threading
+
+    variants = (
+        ("TXT", 16, 1, b"\x03foo", "type or class"),
+        ("non-IN", 1, 3, _socket.inet_aton("10.9.8.7"), "type or class"),
+        ("A-rdlen5", 1, 1, b"\x0a\x09\x08\x07\x06", "rdata length"),
+        ("AAAA-rdlen4", 28, 1, _socket.inet_aton("10.9.8.7"),
+         "rdata length"),
+    )
+    for label, rtype, rclass, rdata, frag in variants:
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                    + packet[12:]
+                    + struct.pack(">HHHIH", 0xC00C, rtype, rclass, 120,
+                                  len(rdata))
+                    + rdata)
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399,
+                         timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP {label} answer -> _query refuses",
+              isinstance(err, ValueError) and frag in str(err),
+              f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, rtype=rtype, rclass=rclass, rdata=rdata):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                resp = (struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                        + q[12:]
+                        + struct.pack(">HHHIH", 0xC00C, rtype, rclass,
+                                      120, len(rdata))
+                        + rdata)
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"TCP {label} answer -> _query_tcp refuses",
+              isinstance(err, ValueError) and frag in str(err),
+              f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1735,6 +1834,7 @@ if __name__ == "__main__":
     _test_trailing_bytes()
     _test_echoed_question()
     _test_answer_owner()
+    _test_answer_type_class()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
