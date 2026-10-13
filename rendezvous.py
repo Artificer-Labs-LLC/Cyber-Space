@@ -46,6 +46,15 @@ def _name_pub_bytes(name_pub_hex) -> bytes | None:
         raw = bytes.fromhex(name_pub_hex)
     except ValueError:
         return None
+    # The string-length gate alone is not the byte-length gate:
+    # bytes.fromhex ignores embedded spaces, so a 64-char string with
+    # two spaces decoded to a 31-byte key and still derived a point —
+    # a meeting point for a key that is not the 32-byte name key.
+    # Only a decode that is exactly 32 bytes is a name key (twin of
+    # the pin gates in verify_name/resolve_chain, which check
+    # len(bytes.fromhex(exp)) == 32 alongside the string length).
+    if len(raw) != 32:
+        return None
     return raw
 
 
