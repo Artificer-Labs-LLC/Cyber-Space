@@ -357,6 +357,18 @@ def verify_rotation(record: dict) -> str | None:
     for field, val, want in (("old_pubkey", old_pub, 64),
                              ("new_pubkey", new_pub, 64),
                              ("signature", sig, 128)):
+        # String-length gate alongside the decoded gate below, twin of
+        # the names/rotate route (c128594): bytes.fromhex ignores
+        # embedded spaces, so INSERTING a space (a 65-char pubkey, a
+        # 129-char signature) decodes to exactly the wanted bytes and
+        # passed the decoded gate alone — a spaced signature was a
+        # false accept (the sig is not part of the payload, so it
+        # verified), and a spaced pubkey misreported as a signature
+        # failure (the payload is built from the spaced string).
+        # _normalize has already stripped outer padding, so only
+        # embedded-space forms grow the string past want here.
+        if len(val) != want:
+            return f"{field} is not {want} hex chars"
         try:
             raw = bytes.fromhex(val)
         except ValueError:
