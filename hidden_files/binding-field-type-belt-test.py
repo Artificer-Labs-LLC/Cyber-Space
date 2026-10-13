@@ -276,5 +276,69 @@ _dcode, _dlines = _dial_descriptor_result(_digit_pub)
 check("dial descriptor valid string fields plan direct",
       _dcode == 0 and any("reach descriptor" in _l for _l in _dlines))
 
+print("resolve descriptor seat:")
+
+
+def _resolve_descriptor_result(desc_pub, desc_name, label):
+    saved_get = core._resolve_get_json
+    saved_peer = core._resolve_peer_get_json
+    saved_verify = core._fed_env.verify_envelope
+    saved_bv = core._name_binding_verify
+    saved_dv = core._reach_descriptor_verify
+    now = datetime.now(timezone.utc)
+    binding = {"name": label, "node_pubkey": _digit_pub,
+               "issued_at": _iso(now - timedelta(hours=1)),
+               "expires_at": _iso(now + timedelta(days=364)),
+               "signature": "ab" * 64}
+    desc = {"name": desc_name, "node_pubkey": desc_pub,
+            "reach": [{"kind": "direct", "url": "http://8.8.8.8:8471"}],
+            "issued_at": _iso(now - timedelta(hours=1)),
+            "expires_at": _iso(now + timedelta(days=30)),
+            "signature": "cd" * 64}
+
+    def fake_get(url):
+        if url.endswith("/reach"):
+            return desc
+        if url.endswith("/names/" + label):
+            return binding
+        if url.endswith("/directory?limit=200"):
+            return {"entries": []}
+        return None
+
+    def fake_peer(url):
+        if url.endswith("/fed/ping"):
+            return {"ok": True}
+        if url.endswith("/names/" + label):
+            return binding
+        return None
+
+    core._resolve_get_json = fake_get
+    core._resolve_peer_get_json = fake_peer
+    core._fed_env.verify_envelope = lambda env: True
+    core._name_binding_verify = lambda *a, **k: True
+    # Verify is stubbed True so the SEAT's own comparison is what is
+    # under test: it must not str()-alias even if verify's gates move.
+    core._reach_descriptor_verify = lambda d: True
+    try:
+        return core.resolve_cyberspace(label + ".cyberspace",
+                                       "http://127.0.0.1:8471")
+    finally:
+        core._resolve_get_json = saved_get
+        core._resolve_peer_get_json = saved_peer
+        core._fed_env.verify_envelope = saved_verify
+        core._name_binding_verify = saved_bv
+        core._reach_descriptor_verify = saved_dv
+
+
+check("descriptor int node_pubkey refused",
+      _resolve_descriptor_result(int(_digit_pub), "coredescint",
+                                 "coredescint") is None)
+check("descriptor bool name refused",
+      _resolve_descriptor_result(_digit_pub, True, "true") is None)
+_cres = _resolve_descriptor_result(_digit_pub, "coredescok", "coredescok")
+check("descriptor valid string fields resolve",
+      isinstance(_cres, dict)
+      and _cres.get("node_url") == "http://8.8.8.8:8471")
+
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

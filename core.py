@@ -1567,8 +1567,20 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         via_rendezvous = None
         desc = _resolve_get_json(mirror + "/api/v1/names/" + label + "/reach")
         if isinstance(desc, dict) and _reach_descriptor_verify(desc):
-            if (str(desc.get("node_pubkey", "")).lower() == node_pubkey
-                    and str(desc.get("name", "")).lower() == label):
+            # Only real strings are descriptor fields (twin of
+            # dial.plan's step-4 descriptor gate): _reach_descriptor_
+            # verify gates name/pub today, but this seat must not
+            # str()-alias on its own — a digit-only pubkey served as
+            # a number stringified to its own hex and the seat read
+            # the descriptor as this name's. A non-string field reads
+            # as a different-key/different-name descriptor and the
+            # directory scan below runs instead.
+            _desc_pub = desc.get("node_pubkey")
+            _desc_name = desc.get("name")
+            if (isinstance(_desc_pub, str)
+                    and _desc_pub.lower() == node_pubkey
+                    and isinstance(_desc_name, str)
+                    and _desc_name.lower() == label):
                 for strat in desc.get("reach", []) or []:
                     if not isinstance(strat, dict):
                         continue
