@@ -821,6 +821,22 @@ def _name_binding_verify(name: str, node_pubkey: str, issued_at: str,
     """Fail-closed binding verification: any exception (bad hex, bad key,
     bad signature) reads as refusal. The registry never stores what it
     cannot prove, and a resolver never trusts what it cannot re-verify."""
+    # String-length gate at the helper itself, twin of every caller
+    # seat (resolve step 2, the merge, the claim/rotate routes,
+    # dial.plan): bytes.fromhex ignores embedded spaces, so a 129-char
+    # signature with an inserted space (or an outer-padded spelling)
+    # decoded to the TRUE 64 bytes and checkvalid VERIFIED it -- and a
+    # binding signed over a payload built from a spaced 65-char
+    # pubkey string verified too. Every caller gates today, but this
+    # is the one seat all binding verdicts funnel through; any direct
+    # caller inherited the false accept. Only the exact 128/64-char
+    # spellings verify; case is left alone (uppercase verified before
+    # and still does). The decoded-length half remains checkvalid's
+    # own gate.
+    if not isinstance(signature, str) or len(signature) != 128:
+        return False
+    if not isinstance(node_pubkey, str) or len(node_pubkey) != 64:
+        return False
     try:
         return _fed_ed25519.checkvalid(
             bytes.fromhex(signature),
