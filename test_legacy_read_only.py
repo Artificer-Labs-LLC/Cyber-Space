@@ -254,6 +254,144 @@ finally:
 mutant("move the proof walk inside the DB lock", "(burst) lock hold < 1 s / write wait <= 250 ms",
        real_lk, not (MB["held"] < 1.0 and MB["max_wait"] <= 0.25))
 
+# ---------------------------------------------------------------- (3b) Bulwark single-flight row
+# Cold cache, 64 concurrent GETs split across /head and /proof: exactly 1
+# build and 1 sign call, readers hold core._db_lock ~0 s, a concurrent
+# write waits <= 250 ms. /__loop_probe above stays as an extra check.
+class ReaderTimedLock(TimedLock):
+    """Times holds by every thread except the writer thread."""
+    def __init__(self, real, writer_ident):
+        super().__init__(real)
+        self.writer, self.reader_held, self.reader_acq, self._mine = writer_ident, 0.0, 0, False
+
+    def acquire(self, *a, **k):
+        ok = self.real.acquire(*a, **k)
+        if ok:
+            self.t = time.perf_counter()
+            self._mine = threading.get_ident() != self.writer[0]
+            if self._mine:
+                self.reader_acq += 1
+        return ok
+
+    def release(self):
+        if self._mine:
+            self.reader_held += time.perf_counter() - self.t
+        self.real.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def sf_burst(n=64):
+    rlw._view_cache.clear()
+    cnt = {"build": 0, "sign": 0}
+    real_build, real_sign = rlw._build, rlw._ed.sign
+
+    def counting_build(top):
+        cnt["build"] += 1
+        return real_build(top)
+
+    def counting_sign(*a, **k):
+        cnt["sign"] += 1
+        return real_sign(*a, **k)
+    rlw._build, rlw._ed.sign = counting_build, counting_sign
+    real_lock = core._db_lock
+    wid = [None]
+    tl = ReaderTimedLock(real_lock, wid)
+    core._db_lock = tl
+    waits, stop, codes, started = [], threading.Event(), [], threading.Event()
+
+    def writer():
+        wid[0] = threading.get_ident()
+        started.set()
+        while not stop.is_set():
+            t = time.perf_counter()
+            with core._db_lock:
+                pass
+            waits.append(time.perf_counter() - t)
+            time.sleep(0.01)
+
+    def one(i):
+        if i % 2:
+            r = httpx.get(f"{BASE}/api/v1/legacy-log/proof", params={"name": f"n{i % 4}"}, timeout=120)
+        else:
+            r = httpx.get(f"{BASE}/api/v1/legacy-log/head", timeout=120)
+        codes.append(r.status_code)
+    try:
+        w = threading.Thread(target=writer)
+        w.start()
+        started.wait(5)
+        go = threading.Barrier(n)
+        ts = [threading.Thread(target=lambda i=i: (go.wait(), one(i))) for i in range(n)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        stop.set()
+        w.join()
+    finally:
+        core._db_lock = real_lock
+        rlw._build, rlw._ed.sign = real_build, real_sign
+    return {"build": cnt["build"], "sign": cnt["sign"], "codes": sorted(set(codes)), "n": len(codes),
+            "reader_held": tl.reader_held, "reader_acq": tl.reader_acq,
+            "max_wait": max(waits) if waits else 0.0}
+
+
+def sf_ok(r):
+    return (r["build"] == 1 and r["sign"] == 1 and r["codes"] == [200] and r["n"] == 64
+            and r["reader_held"] < 0.01 and r["max_wait"] <= 0.25)
+
+
+SF = sf_burst()
+real_sf = sf_ok(SF)
+check("(burst-sf) cold cache, 64 concurrent GET /head + /proof: exactly 1 build, 1 sign, "
+      "readers hold core._db_lock ~0 s (<10 ms), a write waits <= 250 ms", real_sf, SF)
+
+
+async def _view_no_single_flight(name):
+    """MUTANT: every cache miss starts its own build (no asyncio lock, no _view_lock)."""
+    from starlette.concurrency import run_in_threadpool
+    top = await run_in_threadpool(rlw._top_seq)
+    built = rlw._view_cache.get(top)
+    if built is None:
+        built = await run_in_threadpool(rlw._build, top)
+        if built is None:
+            return None
+        rlw._view_cache[top] = built
+    holds, body = built
+    return None if (name is not None and name not in holds) else body
+
+
+real_v = rlw._view
+rlw._view = _view_no_single_flight
+try:
+    SFM1 = sf_burst()
+finally:
+    rlw._view = real_v
+mutant("drop single-flight (build count > 1)", "(burst-sf) 1 build / 1 sign",
+       real_sf, SFM1["build"] > 1 and not sf_ok(SFM1))
+
+real_b = rlw._build
+
+
+def build_inside_lock(top):
+    with core._db_lock:
+        return real_b(top)
+
+
+rlw._build = build_inside_lock
+try:
+    SFM2 = sf_burst()
+finally:
+    rlw._build = real_b
+mutant("build inside core._db_lock", "(burst-sf) readers hold lock ~0 s / write waits <= 250 ms",
+       real_sf, not sf_ok(SFM2))
+print("  burst-sf real:", SF)
+print("  burst-sf mutant no-single-flight:", SFM1)
+print("  burst-sf mutant build-in-lock:", SFM2)
+
 # ---------------------------------------------------------------- (4) unwitnessed head
 r = client.get("/api/v1/legacy-log/head").json()
 real_uw = (set(r) == {"head", "signatures", "witnessed", "status"} and r["witnessed"] is False
