@@ -106,7 +106,14 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
         try:
             sock.settimeout(UPSTREAM_TIMEOUT)
             sock.sendto(raw, upstream)
-            reply, _ = sock.recvfrom(512)
+            # Read a whole datagram (65535, the UDP maximum — twin of
+            # daemon._serve_udp's read buffer): the query is forwarded
+            # untouched, so a query carrying EDNS legitimately draws a
+            # reply far past the classic 512, and recvfrom(512) silently
+            # amputated it mid-record — the header counts still claimed
+            # the bytes that were never delivered, breaking this
+            # function's byte-for-byte contract.
+            reply, _ = sock.recvfrom(65535)
             return bytes(reply)
         finally:
             sock.close()
