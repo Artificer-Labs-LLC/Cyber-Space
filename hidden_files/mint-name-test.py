@@ -156,6 +156,14 @@ rc = mint_name.main(["overcapmint", MIRROR, "--expiry-days=730"])
 check("over-cap --expiry-days exits 2 locally", rc == 2, f"rc={rc}")
 check("over-cap mint wrote no key",
       not os.path.exists(os.path.join(HOME, ".cyberspace", "overcapmint-name.key")))
+# Below-floor expiry: 0/negative used to be silently clamped to a 1-day
+# binding (max(1, ...)) — key written, then a claim refusal — instead of
+# the bad argument it is, twin of the over-cap refusal above.
+for label, days in (("zeromint", "0"), ("negmint", "-5")):
+    rc = mint_name.main([label, MIRROR, f"--expiry-days={days}"])
+    check(f"below-floor --expiry-days={days} exits 2 locally", rc == 2, f"rc={rc}")
+    check(f"below-floor --expiry-days={days} wrote no key",
+          not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
 
 # --- undialable / malformed mirror refused locally, before any key ----
 # Twin of dial.plan's mirror gate: a port no dial can attempt (99999,

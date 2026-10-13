@@ -228,6 +228,17 @@ with tempfile.TemporaryDirectory() as td:
                                           expiry_days=365)
     check("at-cap expiry passes the local gate (mirror refusal only)",
           not ok and "did not answer" in msg, msg)
+    # Below-floor twin: 0/negative used to be silently clamped to a
+    # 1-day binding by max(1, ...) at the binding mint.
+    for days in (0, -5):
+        ok, msg = rotate_name.submit_rotation(
+            LABEL, "http://127.0.0.1:1", home, expiry_days=days)
+        check(f"refuses below-floor expiry_days={days} before sending",
+              not ok and "1-day floor" in msg, msg)
+    ok, msg = rotate_name.submit_rotation(LABEL, "http://127.0.0.1:1", home,
+                                          expiry_days=1)
+    check("at-floor expiry passes the local gate (mirror refusal only)",
+          not ok and "did not answer" in msg, msg)
 
 # 12c. refusal: undialable/malformed mirror is a bad argument, refused
 # before any record read or network use (twin of mint 0e2d983)

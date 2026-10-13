@@ -194,9 +194,18 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 2
     try:
-        expiry_days = max(1, int(opts.get("--expiry-days", _DEFAULT_EXPIRY_DAYS)))
+        expiry_days = int(opts.get("--expiry-days", _DEFAULT_EXPIRY_DAYS))
     except ValueError:
         print("refused: --expiry-days must be an integer", file=sys.stderr)
+        return 2
+    if expiry_days < 1:
+        # No silent clamp: max(1, ...) turned 0/negative into a 1-day
+        # binding the operator never asked for, wrote the key, and read
+        # as a claim refusal — a set-but-ineffective value, refused as
+        # a bad argument exactly like the over-cap case below.
+        print(f"refused: --expiry-days={expiry_days} is below the 1-day "
+              f"floor — a binding must live at least a day, so nothing "
+              f"was minted", file=sys.stderr)
         return 2
     if expiry_days > _EXPIRY_DAYS_CAP:
         print(f"refused: --expiry-days={expiry_days} exceeds the namespace's "

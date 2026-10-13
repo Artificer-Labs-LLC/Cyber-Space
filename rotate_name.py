@@ -471,6 +471,13 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
         return False, ("mirror is not a dialable http(s) URL with a host "
                        "and a port in 1-65535 — bad argument, nothing "
                        "was sent")
+    if expiry_days < 1:
+        # No silent clamp: the binding mint below used max(1, ...) —
+        # twin of mint_name's floor — turning 0/negative into a 1-day
+        # binding the operator never asked for.
+        return False, (f"--expiry-days={expiry_days} is below the 1-day "
+                       f"floor — a binding must live at least a day, "
+                       f"so nothing was sent")
     if expiry_days > _EXPIRY_DAYS_CAP:
         return False, (f"--expiry-days={expiry_days} exceeds the namespace's "
                        f"{_EXPIRY_DAYS_CAP}-day binding-lifetime cap — the "
@@ -520,7 +527,7 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     # future), and the mirror demands the chain move forward in time.
     now = datetime.now(timezone.utc)
     issued_at = _iso(now)
-    expires_at = _iso(now + timedelta(days=max(1, expiry_days)))
+    expires_at = _iso(now + timedelta(days=expiry_days))
     payload = (b"name-claim|" + label.encode() + b"|" + new_pub.encode()
                + b"|" + issued_at.encode() + b"|" + expires_at.encode())
     sig = sign(payload, new_priv, bytes.fromhex(new_pub)).hex().lower()
