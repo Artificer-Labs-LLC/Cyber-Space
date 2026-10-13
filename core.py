@@ -964,6 +964,20 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
     so the rejected claim can be re-verified.
     """
     try:
+        # Only real strings are challenger fields: str() below aliased a
+        # JSON int pubkey (12345) into the stored text "12345", an int
+        # issued_at into "20261013", and an int signature into "999" —
+        # an audit row for a claim nobody ever made in that form (twin
+        # of the binding seats' field gates). Refuse to log it; the
+        # never-raises contract stands (a silent skip, not an error).
+        if not isinstance(name, str) or not isinstance(challenger, dict):
+            return
+        if any(not isinstance(challenger.get(_f), str) for _f in
+               ("node_pubkey", "issued_at", "expires_at")):
+            return
+        signature = challenger.get("signature") or ""
+        if not isinstance(signature, str):
+            return
         ch_pub = challenger["node_pubkey"]
         existing = conn.execute(
             "SELECT id FROM name_conflicts WHERE name=? AND challenger_pubkey=?",
@@ -981,10 +995,9 @@ def _log_name_conflict(conn, name, incumbent, challenger, reason):
                 (name,))
             conn.commit()
             return
-        signature = str(challenger.get("signature") or "")
         payload = _name_claim_payload(
-            str(name), str(ch_pub), str(challenger["issued_at"]),
-            str(challenger["expires_at"]))
+            name, ch_pub, challenger["issued_at"],
+            challenger["expires_at"])
         conn.execute(
             "INSERT INTO name_conflicts (name, incumbent_pubkey,"
             " incumbent_issued_at, challenger_pubkey, challenger_issued_at,"
