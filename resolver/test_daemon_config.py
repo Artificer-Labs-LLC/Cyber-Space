@@ -157,6 +157,12 @@ check("bind_target: bare v6 literal -> AF_INET6 + literal target",
 check("bind_target: bracketed v6 literal -> AF_INET6 unbracketed",
       daemon._bind_target("[::1]", 5353)
       == (_socket.AF_INET6, ("::1", 5353)))
+for _bad_port in (True, False, "5353", 5353.0, None, 0, -1, 65536, b"5353"):
+    try:
+        daemon._bind_target("127.0.0.1", _bad_port)
+        check(f"bind_target: bad port {_bad_port!r} -> ValueError", False)
+    except ValueError:
+        check(f"bind_target: bad port {_bad_port!r} -> ValueError", True)
 
 
 def _fake_gai_v6(host, port, family=0, type=0, *a, **k):

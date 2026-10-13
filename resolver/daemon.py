@@ -156,6 +156,22 @@ def _bind_target(bind_host: str, port: int):
     result wins, as in client._server_target. An unresolvable
     hostname raises gaierror here; run() calls this inside its bind
     try, so it reads as the existing loud refusal, never a crash."""
+    # The port is caller-supplied at this library seat too (run()
+    # derives a real int from env, but a direct caller can pass
+    # anything): True aliased to port 1 and False/0 to an ephemeral
+    # bind the operator never chose, a string/float/None port escaped
+    # later as a raw TypeError from bind() — past run()'s
+    # OSError/OverflowError/ValueError refusal — and an out-of-range
+    # port escaped as OverflowError/OSError instead of the ValueError
+    # the host gate beside it raises. Only a real int (bool excluded)
+    # in 1..65535 is a port (twin of answer._upstream_target's and
+    # client.resolve's port gates); anything else raises ValueError
+    # here, which run() already reads as its loud refusal. An env
+    # port above 65535 still refuses exactly as before, one type
+    # earlier (ValueError, also caught) than OverflowError.
+    if isinstance(port, bool) or not isinstance(port, int) \
+            or not 1 <= port <= 65535:
+        raise ValueError(f"bad bind port {port!r}")
     family, host = _bind_family(bind_host)
     try:
         ipaddress.ip_address(host)
