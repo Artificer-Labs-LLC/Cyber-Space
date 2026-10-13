@@ -125,12 +125,33 @@ def _upstream_target(upstream: tuple[str, int]):
     SERVFAILed. First getaddrinfo result wins. An unresolvable
     hostname raises gaierror here, which _forward already reads as
     SERVFAIL, honestly."""
+    # The upstream is caller-supplied (the daemon derives a real
+    # (str, int) pair, but hand-built callers can pass anything):
+    # unpacking a non-pair escaped as TypeError/ValueError past
+    # _forward's OSError-only guard, ip_address() ALIASED a non-string
+    # host (123 -> 0.0.0.123, a 4-byte bytes host -> its dotted quad),
+    # and a bool/string/float or out-of-range port aliased to port 1,
+    # escaped as TypeError at sendto, or escaped as OverflowError —
+    # none of them the SERVFAIL a failed forward promises. A malformed
+    # upstream is a failed forward: only a real (str host, real int
+    # port in 1..65535, bool excluded — twin of client.resolve()'s
+    # port gate) pair has a target; anything else raises ValueError
+    # here, which _forward now reads as SERVFAIL like gaierror.
+    if not isinstance(upstream, tuple) or len(upstream) != 2:
+        raise ValueError("upstream must be a (host, port) pair")
     host, port = upstream
+    if not isinstance(host, str):
+        raise ValueError("upstream host is not a string")
+    if isinstance(port, bool) or not isinstance(port, int) \
+            or not 1 <= port <= 65535:
+        raise ValueError("upstream port is not a real port")
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
                                    socket.SOCK_DGRAM)
+        if not infos:
+            raise socket.gaierror("upstream hostname resolved to nothing")
         family, _kind, _proto, _canon, sockaddr = infos[0]
         return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
     family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
@@ -278,7 +299,11 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             return bytes(reply)
         finally:
             sock.close()
-    except OSError:
+    except (OSError, ValueError, TypeError, OverflowError):
+        # ValueError/TypeError/OverflowError are _upstream_target's
+        # malformed-upstream refusals (and any residual bad-argument
+        # shape from the dial): a malformed upstream is a failed
+        # forward, SERVFAIL — never a raise out of handle_query.
         return error_response(raw, 2)
 
 

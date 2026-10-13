@@ -402,6 +402,41 @@ def test_forward_unresolvable_hostname_servfail():
           _rcode(resp) == 2, f"got {_rcode(resp)}")
 
 
+def test_forward_malformed_upstream_servfail():
+    """A malformed upstream tuple is a failed forward, not a raise:
+    before, _upstream_target unpacked it raw behind _forward's
+    OSError-only guard, so None/short/long/string upstreams escaped
+    as TypeError/ValueError, a string/float port as TypeError and an
+    oversize port as OverflowError, while ip_address() silently
+    aliased an int host to 0.0.0.123 (and a 4-byte host to its quad)
+    and True aliased to port 1. All SERVFAIL now, and _upstream_target
+    itself refuses the aliasing shapes with ValueError; the valid
+    passthrough tests above are the control."""
+    raw = _query_packet("example.com")
+    bad = [
+        None, (), ("8.8.8.8",), ("8.8.8.8", 53, "x"), "8.8.8.8:53", 53,
+        (123, 53), (b"\x08\x08\x08\x08", 53), (None, 53),
+        ("8.8.8.8", "53"), ("8.8.8.8", True), ("8.8.8.8", False),
+        ("8.8.8.8", 0), ("8.8.8.8", 65536), ("8.8.8.8", -1),
+        ("8.8.8.8", 53.0),
+    ]
+    for upstream in bad:
+        resp = answer.handle_query(
+            raw, mirror_url="http://mirror.invalid", upstream=upstream)
+        check(f"forward: malformed upstream {upstream!r} -> SERVFAIL (rcode 2)",
+              len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
+    for upstream in [(123, 53), (b"\x08\x08\x08\x08", 53),
+                     ("8.8.8.8", True), ("8.8.8.8", 0),
+                     ("8.8.8.8", 65536), None, ("8.8.8.8",)]:
+        try:
+            answer._upstream_target(upstream)
+            refused = False
+        except ValueError:
+            refused = True
+        check(f"forward: _upstream_target refuses {upstream!r}", refused)
+
+
 def test_forward_failure_servfail():
     """A dead upstream is a SERVFAIL, never an invented answer."""
     raw = _query_packet("example.com")
@@ -495,6 +530,7 @@ def main():
     test_forward_wrong_question_servfail()
     test_forward_malformed_sections_servfail()
     test_forward_unresolvable_hostname_servfail()
+    test_forward_malformed_upstream_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()
     test_ttl_remaining()
