@@ -237,6 +237,13 @@ check("CLI stdin mode walks offline", rc == 0 and PK_C.lower() in out,
 rc, out, err = _cli("norotations-ever", "--mirror", MIRROR)
 check("never-rotated name fails cleanly (exit 1)", rc == 1, f"rc={rc} err={err}")
 
+# undialable/malformed mirror: bad argument (exit 2), never a broken verdict
+for bad in ("http://127.0.0.1:99999", "http://127.0.0.1:abc",
+            "http://127.0.0.1:0", "notaurl"):
+    rc, out, err = _cli(LABEL, "--mirror", bad)
+    check(f"bad mirror {bad!r} refused as bad argument (exit 2)",
+          rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
+
 # --- dead name: binding expired, chain intact ------------------------------
 SK_D, PK_D = _keypair()
 SK_E, PK_E = _keypair()

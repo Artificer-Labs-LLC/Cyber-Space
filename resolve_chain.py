@@ -51,6 +51,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mint_name import _valid_mirror  # noqa: E402
 from rotate_name import verify_rotation  # noqa: E402
 from verify_name import verify as verify_binding, _normalize_expected  # noqa: E402
 
@@ -186,6 +187,11 @@ def main(argv: list[str]) -> int:
             return 2
         if not args.mirror:
             print("refused: fetching a chain needs --mirror (or - for stdin)",
+                  file=sys.stderr)
+            return 2
+        if not _valid_mirror(args.mirror):
+            print("refused: --mirror is not a dialable http(s) URL with a host "
+                  "and a port in 1-65535 — bad argument, no verdict",
                   file=sys.stderr)
             return 2
         try:
