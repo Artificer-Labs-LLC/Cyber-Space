@@ -144,6 +144,13 @@ def fed_announce(env: dict):
     version = body.get("version", "0.1.0")
     if not isinstance(version, str):
         raise HTTPException(status_code=400, detail="bad version")
+    # Only a real bool is a genesis flag: bool() here coerced the
+    # string "false" (and 1) to genesis=1 in storage — a claim
+    # nobody served in that form, the alias _delta_payload's own
+    # shape gate refuses on sight. Absent keeps False.
+    genesis = body.get("genesis", False)
+    if not isinstance(genesis, bool):
+        raise HTTPException(status_code=400, detail="bad genesis")
     caps = body.get("capabilities", [])
     if not isinstance(caps, list):
         caps = []
@@ -176,7 +183,7 @@ def fed_announce(env: dict):
             """,
             (
                 sender_pub, name, network,
-                version, int(bool(body.get("genesis", False))),
+                version, int(genesis),
                 json.dumps(caps), node_url, now, now,
                 att_sig or "", att_seq or 0,
             ),
@@ -306,6 +313,15 @@ def fed_gossip(env: dict):
             if not isinstance(version, str):
                 ignored += 1
                 continue
+            # Only a real bool is a genesis flag: bool() at the
+            # insert coerced the string "false" (and 1) to
+            # genesis=1 in storage — a claim nobody served in that
+            # form, the alias _delta_payload's own shape gate
+            # refuses on sight. Absent keeps False.
+            genesis = entry.get("genesis", False)
+            if not isinstance(genesis, bool):
+                ignored += 1
+                continue
             try:
                 node_url = _valid_node_url(entry.get("node_url", ""))
             except HTTPException:
@@ -323,7 +339,7 @@ def fed_gossip(env: dict):
                    ON CONFLICT(node_pub) DO NOTHING""",
                 (ep.lower(), name, "cybernet",
                  version,
-                 int(bool(entry.get("genesis", False))),
+                 int(genesis),
                  json.dumps(caps), node_url, "", now),
             )
             if cur.rowcount:

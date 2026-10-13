@@ -2713,6 +2713,14 @@ def _seed_bootstrap() -> int:
             version = body.get("version", "0.1.0")
             if not isinstance(version, str):
                 continue
+            # Only a real bool is a genesis flag (twin of the
+            # /fed/announce gate in federation.py): bool() at the
+            # insert coerced the string "false" (and 1) to
+            # genesis=1 in storage — a claim nobody served in that
+            # form. Absent keeps False.
+            genesis = body.get("genesis", False)
+            if not isinstance(genesis, bool):
+                continue
             now = datetime.now(timezone.utc).isoformat()
             with _db_lock, _db() as conn:
                 conn.execute(
@@ -2729,7 +2737,7 @@ def _seed_bootstrap() -> int:
                     (
                         sender_pub, name, network,
                         version,
-                        int(bool(body.get("genesis", False))),
+                        int(genesis),
                         "[]", node_url, "", now,
                     ),
                 )
