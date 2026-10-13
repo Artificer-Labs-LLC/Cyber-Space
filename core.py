@@ -1449,8 +1449,19 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
             data = _read_peer_json(resp)
         if not isinstance(data, dict):
             return False
-        challenge = str(data.get("challenge", ""))
-        sig = str(data.get("name_key_sig", "")).lower()
+        # Only real strings are live-proof fields: str() here aliased
+        # a digit-only challenge served as a JSON number into its own
+        # 64-char hex, and the name-key signature over that challenge
+        # verified — live-proof accepted for a challenge nobody ever
+        # served in that form, the SAME alias the binding/descriptor
+        # seats refuse on sight.
+        _challenge_raw = data.get("challenge", "")
+        _sig_raw = data.get("name_key_sig", "")
+        if not isinstance(_challenge_raw, str) \
+                or not isinstance(_sig_raw, str):
+            return False
+        challenge = _challenge_raw
+        sig = _sig_raw.lower()
         if len(challenge) != 64 or len(sig) != 128:
             return False
         return _fed_ed25519.checkvalid(
