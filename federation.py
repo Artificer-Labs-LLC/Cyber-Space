@@ -353,6 +353,18 @@ def fed_directory_delta(env: dict):
             if not isinstance(row, dict):
                 rejected += 1
                 continue
+            # Only real strings are row fields: str() at the owner pick,
+            # in _delta_payload, and at the insert aliased a delta-carried
+            # JSON number into the row — a numeric name stringified to the
+            # valid label its signature genuinely covered (the payload
+            # builder coerces the same way) and an int network stored as
+            # its digit string (twin of fed_gossip's roster gate).
+            # Absent fields keep their payload defaults; present ones
+            # must be strings.
+            if any(k in row and not isinstance(row[k], str) for k in
+                   ("node_pub", "name", "node_url", "network", "version")):
+                rejected += 1
+                continue
             owner = str(row.get("node_pub", "")).lower()
             if (not re.fullmatch(r"[0-9a-f]{64}", owner)
                     or owner == _NODE_PUB.lower()
