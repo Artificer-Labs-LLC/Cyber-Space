@@ -437,9 +437,17 @@ def _test_udp_whole_datagram():
 
         def sendto(self, packet, target):
             txid = struct.unpack(">H", packet[:2])[0]
+            # one A answer whose owner is a long UNCOMPRESSED name
+            # (577 bytes of labels): a genuine >512 reply the daemon's
+            # shape allows — zero padding would be trailing bytes,
+            # which smoke now refuses (see 5w)
+            long_name = (b"\x3f" + b"a" * 63) * 9 + b"\x00"
             canned["resp"] = (
                 struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
-                + packet[12:] + b"\x00" * 600)
+                + packet[12:]
+                + long_name
+                + struct.pack(">HHIH", 1, 1, 120, 4)
+                + _socket.inet_aton("10.9.8.7"))
             return len(packet)
 
         def recvfrom(self, n):
@@ -1399,6 +1407,101 @@ def _test_qd_count():
               f"err={err}")
 
 
+# 5w. A reply must end exactly at its counted sections:
+#     client._parse_response refuses bytes left over after the
+#     counted sections are consumed (neither daemon response
+#     builder ever emits any — build_response ends exactly at its
+#     last answer's rdata and error_response is a bare header plus
+#     the echoed question), but both smoke wires never read the
+#     body at all, so a QR|AA|RD-set packet with junk appended
+#     after its question/answers earned a PASS for bytes the
+#     daemon never sent. Both wires refuse trailing bytes, after
+#     an answer and after an empty (NXDOMAIN-shaped) reply alike.
+def _test_trailing_bytes():
+    import socket as _socket
+    import threading
+
+    for label, counts, tail in (
+            ("ANSWER", (1, 1, 0, 0), b"\xde\xad\xbe\xef"),
+            ("EMPTY", (1, 0, 0, 0), b"\xde\xad")):
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                body = packet[12:]
+                if counts[1]:
+                    body += (struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                             + _socket.inet_aton("10.9.8.7"))
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, *counts)
+                    + body + tail)
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399, timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP trailing-bytes ({label}) packet -> _query refuses",
+              isinstance(err, ValueError) and "trailing bytes" in str(err),
+              f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, counts=counts, tail=tail):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                body = q[12:]
+                if counts[1]:
+                    body += (struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                             + _socket.inet_aton("10.9.8.7"))
+                resp = (struct.pack(">HHHHHH", txid, 0x8500, *counts)
+                        + body + tail)
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        check(f"TCP trailing-bytes ({label}) packet -> _query_tcp refuses",
+              isinstance(err, ValueError) and "trailing bytes" in str(err),
+              f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1440,6 +1543,7 @@ if __name__ == "__main__":
     _test_ad_cd_bits()
     _test_ns_ar_counts()
     _test_qd_count()
+    _test_trailing_bytes()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

@@ -156,6 +156,52 @@ def _server_target(host: str, port: int):
     return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
 
 
+def _skip_name(data: bytes, off: int) -> int:
+    """Offset just past the name at off (labels or a pointer)."""
+    while True:
+        if off >= len(data):
+            raise ValueError("truncated DNS response — response is not ours")
+        length = data[off]
+        if length == 0:
+            return off + 1
+        if length & 0xC0 == 0xC0:
+            if off + 2 > len(data):
+                raise ValueError(
+                    "truncated DNS response — response is not ours")
+            return off + 2
+        if length & 0xC0:
+            raise ValueError("malformed name in response — response is not ours")
+        off += 1 + length
+
+
+def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
+    """Refuse bytes left over after the counted sections, twin of
+    client._parse_response: neither daemon response builder ever
+    emits any — build_response ends exactly at its last answer's
+    rdata and error_response is a bare header plus the echoed
+    question — so trailing bytes can carry nothing the daemon
+    meant, however well-formed the packet before them. Walking the
+    sections is the only way to know where they end; a walk that
+    runs past the packet is a truncation, refused likewise."""
+    off = 12
+    for _ in range(qd):
+        off = _skip_name(resp, off)
+        if off + 4 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += 4  # qtype + qclass
+    for _ in range(an):
+        off = _skip_name(resp, off)
+        if off + 10 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        rdlen = struct.unpack_from(">H", resp, off + 8)[0]
+        off += 10
+        if off + rdlen > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += rdlen
+    if off != len(resp):
+        raise ValueError("response carries trailing bytes the daemon never sends — response is not ours")
+
+
 def _query(name: str, qtype: int, server: str, port: int,
            timeout: float = 3.0) -> tuple[int, int, int]:
     """Return (rcode, ancount, txid_echoed). Raises on transport failure."""
@@ -254,6 +300,9 @@ def _query(name: str, qtype: int, server: str, port: int,
     # and is not the daemon's reply to THIS query.
     if qd != 1:
         raise ValueError("response does not echo exactly one question — response is not ours")
+    # Trailing bytes, twin of client._parse_response: the packet
+    # must end exactly at its counted sections (see _refuse_trailing).
+    _refuse_trailing(resp, qd, an)
     return flags & 0x000F, an, rtxid
 
 
@@ -333,6 +382,9 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # daemon's reply to it.
     if qd != 1:
         raise ValueError("response does not echo exactly one question — response is not ours")
+    # Trailing bytes, twin of _query above: the packet must end
+    # exactly at its counted sections (see _refuse_trailing).
+    _refuse_trailing(resp, qd, an)
     return flags & 0x000F, an, rtxid
 
 
