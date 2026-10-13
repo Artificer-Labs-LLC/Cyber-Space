@@ -861,8 +861,17 @@ def _reach_mint(privkey_hex: str, node_pubkey: str, name: str, reach,
     The descriptor rides the name-key-signed /fed/announce (announce half);
     mirrors merge it like directory rows. Never the master identity."""
     msg = _reach_canonical(name, node_pubkey, reach, issued_at, expires_at)
-    sig = _fed_ed25519.sign(msg, bytes.fromhex(privkey_hex),
-                            bytes.fromhex(node_pubkey)).hex()
+    priv_b = bytes.fromhex(privkey_hex)
+    pub_b = bytes.fromhex(node_pubkey)
+    # Decoded-length gates, twin of mint_rotation / _reach_build:
+    # bytes.fromhex ignores embedded spaces, so a spaced 64-char seed
+    # or pubkey decodes to 31 bytes and sign() silently minted a
+    # descriptor _reach_descriptor_verify itself refuses (checkvalid
+    # length-gates both decodes) — a descriptor no seat accepts,
+    # contradicting mint's own contract. Only 32-byte decodes mint.
+    if len(priv_b) != 32 or len(pub_b) != 32:
+        raise ValueError("name key seed and pubkey must decode to 32 bytes")
+    sig = _fed_ed25519.sign(msg, priv_b, pub_b).hex()
     return {"name": name, "node_pubkey": node_pubkey, "reach": reach,
             "issued_at": issued_at, "expires_at": expires_at,
             "signature": sig}
