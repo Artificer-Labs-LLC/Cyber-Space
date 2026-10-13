@@ -2433,7 +2433,17 @@ def _reannounce_loop() -> None:
     never raises."""
     while True:
         try:
-            base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
+            # Twin of _gossip_loop: the parse must never reach the bare
+            # except below without a sleep — a non-integer interval
+            # (an operator's "1h", or a set-but-empty value) raised
+            # ValueError here every pass and the loop spun at full CPU
+            # while announcements never ran. Fall back to the 3600
+            # default (resolver _env_int semantics: bad values degrade,
+            # never spin), floor 300 intact.
+            try:
+                base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
+            except (ValueError, TypeError):
+                base = 3600
             time.sleep(base * random.uniform(0.8, 1.2))
             _announce_out()
             _reach_out()  # hosted-name reach announce rides the cadence
