@@ -179,6 +179,27 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--expect-pubkey",
                     help="fail unless the binding is keyed to this name key")
     args = ap.parse_args(argv)
+    # The pins are arguments, not verdicts: a pin that can never match
+    # any binding (an invalid label, or a key that is not 64 hex chars)
+    # read as exit 1 "binding is for/keyed to X, not the expected Y" —
+    # a verdict on the binding — when the pin itself was at fault.
+    # Gate them before any input is read, exit 2, twin of the mirror
+    # gates in mint/rotate/resolve_chain.
+    if args.expect_name is not None and not _valid_label(
+            _normalize_expected(args.expect_name)):
+        print("refused: --expect-name is not a valid .cyberspace label "
+              "— bad argument, no verdict", file=sys.stderr)
+        return 2
+    if args.expect_pubkey is not None:
+        exp = _normalize_expected(args.expect_pubkey)
+        try:
+            pin_ok = len(exp) == 64 and len(bytes.fromhex(exp)) == 32
+        except ValueError:
+            pin_ok = False
+        if not pin_ok:
+            print("refused: --expect-pubkey is not a 64-hex name key "
+                  "— bad argument, no verdict", file=sys.stderr)
+            return 2
     src = args.source
     try:
         raw = sys.stdin.read() if src == "-" else open(src, encoding="utf-8").read()

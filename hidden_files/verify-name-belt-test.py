@@ -173,5 +173,21 @@ check("CLI --expect-name agrees -> exit 0", rc == 0 and "pinned.cyberspace" in o
 rc, out, err = _run_cli_pin(b, "--expect-name", "someone-else")
 check("CLI --expect-name disagrees -> exit 1 saying expected", rc == 1 and "expected" in err)
 
+for bad_pin in ("zz", "ab" * 16, "zz" * 32):
+    rc, out, err = _run_cli_pin(b, "--expect-pubkey", bad_pin)
+    check(f"CLI malformed --expect-pubkey {bad_pin[:8]!r} -> exit 2 bad argument",
+          rc == 2 and "bad argument" in err and "--expect-pubkey" in err)
+
+for bad_name in ("bad..name", "-bad", ""):
+    rc, out, err = _run_cli_pin(b, "--expect-name", bad_name)
+    check(f"CLI malformed --expect-name {bad_name!r} -> exit 2 bad argument",
+          rc == 2 and "bad argument" in err and "--expect-name" in err)
+
+out, err = io.StringIO(), io.StringIO()
+with redirect_stdout(out), redirect_stderr(err):
+    rc = verify_name.main(["/nonexistent-binding.json", "--expect-pubkey", "zz"])
+check("CLI malformed pin gated before input read -> exit 2 pin reason",
+      rc == 2 and "--expect-pubkey" in err.getvalue())
+
 print(f"\n{PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)
