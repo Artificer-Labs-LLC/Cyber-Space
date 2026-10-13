@@ -511,7 +511,13 @@ def _space_tone_tags(conn, space: str) -> list:
         tags = json.loads(r["tone_tags"])
     except (ValueError, TypeError):
         return []
-    return tags if isinstance(tags, list) else []
+    if not isinstance(tags, list):
+        return []
+    # Loaded-shape gate (twin of core._stored_caps): a list's non-string
+    # members are not tags — a stored mixed list was served verbatim on
+    # the public street/door as the space's room conventions. Every
+    # writer stores a list of vocabulary strings.
+    return [t for t in tags if isinstance(t, str)]
 
 @router.put("/api/v1/spaces/{name}/tone-tags")
 async def space_tone_tags_set(name: str, request: Request,
