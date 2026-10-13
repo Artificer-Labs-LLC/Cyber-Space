@@ -127,7 +127,12 @@ def refused_leaf(name: str, node_pubkey: str, reason: str) -> bytes:
     """Build the canonical refused-binding leaf bytes for one binding."""
     if reason not in REASONS:
         raise ValueError(f"unknown refused-bindings reason: {reason!r}")
-    pub = str(node_pubkey).lower()
+    # A non-string pubkey has no hex form: str() would alias a DB/
+    # gossip-carried int pubkey (123456) into the leaf as "123456",
+    # None as "none", and bytes as their repr — three different
+    # corrupt leaves for one malformed field. It contributes the
+    # empty pubkey instead (twin of the snapshot leaf-name gate).
+    pub = node_pubkey.lower() if isinstance(node_pubkey, str) else ""
     if reason == "grammar":
         # Every grammar leaf hashes the label (spec §7.3.9 R2 sha256 form).
         name_field = "sha256:" + hashlib.sha256(
@@ -254,6 +259,11 @@ def snapshot_refused_bindings(rows, manifest_labels):
                 leaf_name = ""
             leaf_pub = (row.get("node_pubkey", "")
                         if isinstance(row, dict) else "")
+            if not isinstance(leaf_pub, str):
+                # Twin of the leaf-name gate above: a non-string
+                # pubkey contributes no key to its leaf (refused_leaf
+                # would otherwise write the str() alias).
+                leaf_pub = ""
             refused.append((refused_leaf(leaf_name, leaf_pub,
                                         reason), reason))
     return holds, refused

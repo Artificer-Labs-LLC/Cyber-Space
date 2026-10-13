@@ -190,5 +190,20 @@ _h, _r = rb.snapshot_refused_bindings((row("goodname"),), MANIFEST)
 check("snapshot tuple rows container: valid row still holds",
       len(_h) == 1 and _r == [])
 
+print("non-string pubkey contributes empty key to leaf, never a str() alias")
+for bad_pub in (123456, None, b"ab" * 32, ["ab"], True):
+    _h, _r = rb.snapshot_refused_bindings([row("goodname", pub=bad_pub)],
+                                          {"othername"})
+    check(f"snapshot non-string pubkey {type(bad_pub).__name__} -> empty key leaf",
+          _h == [] and len(_r) == 1 and _r[0][1] == "not-in-manifest"
+          and _r[0][0].split(b"\n")[2] == b"node_pubkey=")
+    check(f"refused_leaf non-string pubkey {type(bad_pub).__name__} -> empty key",
+          rb.refused_leaf("goodname", bad_pub, "not-in-manifest")
+          .split(b"\n")[2] == b"node_pubkey=")
+_h, _r = rb.snapshot_refused_bindings([row("goodname")], {"othername"})
+check("snapshot valid string pubkey leaf unchanged",
+      len(_r) == 1 and _r[0][0].split(b"\n")[2]
+      == b"node_pubkey=" + PUB.encode())
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)
