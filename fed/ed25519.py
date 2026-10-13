@@ -159,3 +159,96 @@ def checkvalid(s: bytes, m: bytes, pk: bytes) -> bool:
         return _scalarmult(_BPOINT, S) == _edwards(R, _scalarmult(A, h))
     except Exception:
         return False
+
+
+# --------------------------------------------------------------- libsodium
+# The rotation-cert path verifies through libsodium (PyNaCl). The strict
+# checks above (canonical R and A, S < L, no small-order R or A) still run
+# first in pure Python; only the verification equation moves to libsodium.
+# If libsodium is missing, this fails CLOSED and names the cause.
+SODIUM_MISSING = "libsodium (PyNaCl) unavailable: rotation-cert verify fails closed"
+try:
+    from nacl.bindings import crypto_sign_open as _sodium_open
+
+    def _sodium_verify(sig, msg, pk):
+        _sodium_open(sig + msg, pk)
+    from nacl.exceptions import BadSignatureError as _SodiumBadSig
+    SODIUM_ERROR = None
+except Exception:  # pragma: no cover - exercised by the fail-closed row
+    _sodium_verify = None
+    _SodiumBadSig = Exception
+    SODIUM_ERROR = SODIUM_MISSING
+
+
+def checkvalid_sodium(s: bytes, m: bytes, pk: bytes) -> bool:
+    """Strict checks (as checkvalid steps 1-3), then libsodium's verify.
+    Returns False on any failure, including libsodium being missing."""
+    if _sodium_verify is None:
+        return False
+    try:
+        if len(s) != _B // 4 or len(pk) != _B // 8:
+            return False
+        R = _decodepoint_strict(s[:_B // 8])
+        A = _decodepoint_strict(pk)
+        if int.from_bytes(s[_B // 8:_B // 4], "little") >= _L:
+            return False
+        if _is_small_order(A) or _is_small_order(R):
+            return False
+        _sodium_verify(bytes(s), bytes(m), bytes(pk))
+        return True
+    except _SodiumBadSig:
+        return False
+    except Exception:
+        return False
+
+
+try:
+    from nacl.bindings import crypto_core_ed25519_is_valid_point as _sodium_valid_point
+except Exception:  # pragma: no cover - exercised by the fail-closed row
+    _sodium_valid_point = None
+
+
+SODIUM_MIN_VERSION = (1, 0, 18)
+
+
+def sodium_version():
+    """libsodium version as a tuple, or None when it cannot be told.
+    PyNaCl's bundled build exports no sodium_version_string symbol, so the
+    version is read in this order: the shared library's own
+    sodium_version_string (system builds), else the floor that the PyNaCl
+    release bundles (PyNaCl >= 1.4.0 bundles libsodium 1.0.18 or later,
+    per its changelog). Unknown -> None -> admission refused."""
+    import ctypes
+    try:
+        import nacl._sodium as _s
+        f = ctypes.CDLL(_s.__file__).sodium_version_string
+        f.restype = ctypes.c_char_p
+        return tuple(int(x) for x in f().decode().split(".")[:3])
+    except Exception:
+        pass
+    try:
+        import nacl
+        nv = tuple(int(x) for x in nacl.__version__.split(".")[:2])
+        return (1, 0, 18) if nv >= (1, 4) else None
+    except Exception:
+        return None
+
+
+def sodium_version_ok() -> bool:
+    """Startup/admission gate: refuse below libsodium 1.0.18."""
+    v = sodium_version()
+    return v is not None and tuple(v) >= SODIUM_MIN_VERSION
+
+
+def sodium_key_ok(pk: bytes):
+    """libsodium crypto_core_ed25519_is_valid_point: canonical encoding,
+    on the curve, not small order, and in the prime-order subgroup (so
+    mixed-order keys refuse). Returns None when libsodium is missing; the
+    caller must refuse, never fall back. Equivalent to window_open.
+    weak_reason on Cipher's key corpus with zero disagreements (belt row)."""
+    if _sodium_valid_point is None or not sodium_version_ok():
+        return None
+    try:
+        return bool(_sodium_valid_point(bytes(pk)))
+    except Exception:
+        return False

@@ -360,14 +360,57 @@ def _canonical(rec: dict) -> bool:
     return True
 
 
+# Key subgroup check (fast path, Cipher with Bulwark's conditions):
+# libsodium crypto_core_ed25519_is_valid_point replaces weak_reason on this
+# path. It is equivalent to weak_reason on Cipher's corpus (51-vector keys,
+# small-order, identity, non-canonical, mixed-order, honest, random) with
+# zero disagreements either way. NO fallback to weak_reason: if libsodium
+# is missing, admission is refused. Still charged before the check, and
+# run outside _db_lock. Passing keys are cached per sender (bounded); a
+# refusal is never cached.
+import collections as _collections
+import contextvars as _contextvars
+WEAK_OK_CACHE_PER_SENDER = 64
+WEAK_OK_CACHE_SENDERS = 128
+SODIUM_KEY_MISSING = "libsodium (PyNaCl) unavailable: key check refuses"
+_weak_ok_cache: "_collections.OrderedDict[str, _collections.OrderedDict]" = \
+    _collections.OrderedDict()
+_cur_sender = _contextvars.ContextVar("name_fork_sender", default="")
+_weak_calls = 0
+
+
+def _key_check(pub: str) -> str | None:
+    """Patchable. None = key passes; otherwise the refusal reason."""
+    from fed import ed25519 as _ed
+    ok = _ed.sodium_key_ok(bytes.fromhex(pub))
+    if ok is None:
+        return SODIUM_KEY_MISSING
+    return None if ok else "not a prime-order-subgroup point (libsodium)"
+
+
 def _weak(pub: str) -> str | None:
-    import window_open
-    return window_open.weak_reason(pub)
+    global _weak_calls
+    sender = _cur_sender.get()
+    per = _weak_ok_cache.get(sender) if sender else None
+    if per is not None and pub in per:
+        per.move_to_end(pub)
+        return None
+    _weak_calls += 1
+    reason = _key_check(pub)
+    if reason is None and sender:
+        per = _weak_ok_cache.setdefault(sender, _collections.OrderedDict())
+        _weak_ok_cache.move_to_end(sender)
+        per[pub] = True
+        while len(per) > WEAK_OK_CACHE_PER_SENDER:
+            per.popitem(last=False)
+        while len(_weak_ok_cache) > WEAK_OK_CACHE_SENDERS:
+            _weak_ok_cache.popitem(last=False)
+    return reason
 
 
 def _keys_ok(rec: dict) -> bool:
     """Strict checkvalid on both keys (canonical, not small-order) plus
-    weak_reason (mixed-order) on BOTH old_pub and new_pub. Before verify."""
+    the subgroup check (libsodium is_valid_point; mixed-order refused) on BOTH old_pub and new_pub. Before verify."""
     from fed import ed25519 as _ed
     for key in (rec["old_pubkey"], rec["new_pubkey"]):
         raw = bytes.fromhex(key)
@@ -403,8 +446,13 @@ def _verify(rec: dict, tag: bytes) -> bool:
     payload = cert_payload(rec["name"], rec["old_pubkey"], rec["new_pubkey"],
                            rec["issued_at"], rec["seq"], rec["prev_hash"],
                            tag=tag)
-    return _ed.checkvalid(bytes.fromhex(rec["signature"]), payload,
-                          bytes.fromhex(rec["old_pubkey"]))
+    if _ed.SODIUM_ERROR is not None:
+        # Fail closed, by name: no fallback to the pure-Python equation.
+        import logging
+        logging.getLogger("name_fork").error(_ed.SODIUM_ERROR)
+        return False
+    return _ed.checkvalid_sodium(bytes.fromhex(rec["signature"]), payload,
+                                 bytes.fromhex(rec["old_pubkey"]))
 
 
 def _shape(raw) -> dict | None:
@@ -834,7 +882,8 @@ def birth_contest_allowed(conn, name, old_pub, round_bindings) -> bool:
 def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                           sender_pub: str | None,
                           round_bindings: list | None = None,
-                          now: float | None = None) -> dict:
+                          now: float | None = None,
+                          prenormalized: list | None = None) -> dict:
     """One gossip call's rotation certificates. The caller has already
     charged every cert against the pre-verify budgets (outside the lock).
 
@@ -858,7 +907,8 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
     normalized = []
     rb_names = {str(b.get("name", "")).strip().lower()
                 for b in (round_bindings or []) if isinstance(b, dict)}
-    for raw in certs or []:
+    pre = list(prenormalized) if prenormalized is not None else None
+    for i, raw in enumerate(certs or []):
         # Charge-before-write for the evidence store, before any verify: a
         # cert for a name with no pin, no held binding and no binding in
         # this round can only become evidence, so a full store refuses it
@@ -871,7 +921,10 @@ def ingest_rotation_round(conn: sqlite3.Connection, certs: list,
                 out["refused"] += 1
                 out["outcomes"].append("evidence-full")
                 continue
-        rec = _norm_cert(raw)
+        # The caller normalizes OUTSIDE _db_lock (core.normalize_rotation_
+        # certs) and passes the results in; only direct callers (tests,
+        # drain) normalize here.
+        rec = pre[i] if pre is not None else _norm_cert(raw)
         if rec is None:
             out["refused"] += 1
             out["outcomes"].append("refused-invalid")

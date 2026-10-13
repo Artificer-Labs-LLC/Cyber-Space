@@ -1709,6 +1709,21 @@ def _gossip_claim_weak(pub: str):
 # charged before checkvalid. A single gossip call may verify at most
 # NAMES_GOSSIP_VERIFY_PER_CALL bindings; the node may verify at most
 # GOSSIP_VERIFY_GLOBAL_LIMIT bindings per window, across every caller.
+#
+# Re-derived 2026-10-12 (Bulwark/Cipher, BLOCK on 4e8c95d). One charge
+# unit is one rotation cert's admission work: weak_reason on old_pub and
+# new_pub plus one libsodium verify (strict R/A/S/small-order included).
+# Measured on the shared research box, 8 cores, load average 20.5-24:
+#   weak_reason ........................... ~90-110 ms per key
+#   checkvalid_sodium (strict + libsodium)  ~2-3 ms   (raw libsodium 0.05 ms)
+#   unit = 2 x weak_reason + 1 verify ..... ~184 ms
+#   (pure-Python checkvalid, binding path: ~320 ms)
+# All of it runs outside _db_lock. One call at the per-call cap is
+# 32 units = ~5.9 s of one worker's CPU with the lock never held; the
+# global cap (256 units / 60 s) bounds every caller together to ~47 s of
+# CPU per minute, under one of 8 cores. Passing keys are cached per
+# sender, so an honest peer's repeat keys cost less than a unit. The caps
+# are kept at 32 / 256; lowering them is a board call, not this build's.
 NAMES_GOSSIP_VERIFY_PER_CALL = 32
 GOSSIP_VERIFY_GLOBAL_LIMIT = 256
 GOSSIP_VERIFY_GLOBAL_WINDOW = 60.0
@@ -2419,15 +2434,33 @@ def charge_rotation_certs(certs: list, sender_pub: str, verify_box):
     return admitted, False
 
 
+def normalize_rotation_certs(admitted: list, sender_pub=None):
+    """_norm_cert for every admitted cert, outside _db_lock. Patchable: the
+    belt's normalize-inside-the-lock mutant returns None here."""
+    import name_fork
+    tok = name_fork._cur_sender.set(str(sender_pub or "").strip().lower())
+    try:
+        # Order inside _norm_cert: canonical decode, weak_reason on old_pub
+        # and new_pub, then the libsodium verify. Any refusal refuses.
+        return [name_fork._norm_cert(raw) for raw in admitted]
+    finally:
+        name_fork._cur_sender.reset(tok)
+
+
 def ingest_rotation_certs(certs: list, sender_pub: str, verify_box,
                           round_bindings=None) -> dict:
     """Rotation half of a names-gossip call: charge, then ingest under the
     lock, then fire the bounded catch-up pulls at the sender."""
     import name_fork
     admitted, stopped = charge_rotation_certs(certs, sender_pub, verify_box)
+    # Bulwark (BLOCK on 4e8c95d): decode, canonical/key checks and the
+    # libsodium verify run here, OUTSIDE _db_lock. The lock is taken only
+    # for state reads and writes.
+    normalized = normalize_rotation_certs(admitted, sender_pub)
     with _db_lock, _db() as conn:
         summary = name_fork.ingest_rotation_round(
-            conn, admitted, sender_pub, round_bindings=round_bindings)
+            conn, admitted, sender_pub, round_bindings=round_bindings,
+            prenormalized=normalized)
     for pull in summary["pulls"]:
         _spawn_chain_pull(pull["sender"], pull["name"])
     summary["charged"] = len(admitted)

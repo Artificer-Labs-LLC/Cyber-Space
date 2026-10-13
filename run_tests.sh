@@ -50,6 +50,7 @@ TESTS=(
   "test_name_claim.py"
   "test_names_claim_cap.py"
   "test_ed25519_strict.py"
+  "test_ed25519_sodium_parity.py"
   "test_names_rotate_zero_key.py"
   "test_window_open_preconditions.py"
   "test_legacy_migrate_stub.py"

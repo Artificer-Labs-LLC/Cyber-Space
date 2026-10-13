@@ -257,4 +257,266 @@ check("acceptance is one SAVEPOINT: evidence, chain, log, slot",
       and inspect.getsource(nf._accept_hop).index("_append_rotation")
       < inspect.getsource(nf._accept_hop).index("_note_round"))
 
+# ===================================================== verify outside the lock
+print("Bulwark: _norm_cert (and verify) runs outside _db_lock", flush=True)
+
+
+class TrackingLock:
+    """Stands in for core._db_lock and counts verify calls made while held."""
+    def __init__(self, inner):
+        self.inner, self.held = inner, 0
+
+    def __enter__(self):
+        self.inner.acquire()
+        self.held += 1
+        return self
+
+    def __exit__(self, *a):
+        self.held -= 1
+        self.inner.release()
+
+    def acquire(self, *a, **k):
+        r = self.inner.acquire(*a, **k)
+        if r:
+            self.held += 1
+        return r
+
+    def release(self):
+        self.held -= 1
+        self.inner.release()
+
+
+def run_lock_row():
+    reset_rates()
+    nm = f"lk{secrets.token_hex(3)}"
+    kA = seed()
+    claim_gate_pin(nm, kA)
+    certs = [bad_sig(cert_next(nm, kA, pub(seed()))) for _ in range(32)]
+    lock = TrackingLock(core._db_lock)
+    counts = {"in_lock": 0, "total": 0, "weak_in_lock": 0, "weak_total": 0}
+    real_weak = nf._weak
+
+    def w(p):
+        counts["weak_total"] += 1
+        if lock.held:
+            counts["weak_in_lock"] += 1
+        return real_weak(p)
+
+    def v(rec, tag):
+        counts["total"] += 1
+        if lock.held:
+            counts["in_lock"] += 1
+        return REAL_VERIFY(rec, tag)
+    with patched(core, "_db_lock", lock), patched(nf, "_verify", v), \
+            patched(nf, "_weak", w):
+        out = core.ingest_rotation_certs(certs, pk6, [0])
+    return (counts["in_lock"] == 0 and counts["weak_in_lock"] == 0
+            and counts["total"] == 32 and counts["weak_total"] == 64
+            and out["outcomes"].count("refused-invalid") == 32), counts
+
+
+real, info = run_lock_row()
+check("32 well-shaped bad-signature certs: 0 weak_reason and 0 verify calls "
+      "while _db_lock is held (64 + 32 outside)", real, info)
+with patched(core, "normalize_rotation_certs", lambda admitted, sender_pub=None: None):
+    mut, minfo = run_lock_row()
+print("   normalize-inside-lock mutant:", minfo, flush=True)
+mutant("normalize inside the lock",
+       "32 bad-sig certs: 0 weak_reason and 0 verify calls under _db_lock", real, mut)
+
+with patched(_ed, "SODIUM_ERROR", _ed.SODIUM_MISSING):
+    nmx = f"sx{secrets.token_hex(3)}"
+    kX = seed()
+    claim_gate_pin(nmx, kX)
+    rx = ingest([cert_next(nmx, kX, pub(seed()))], now=next_round())
+fail_closed = rx["outcomes"] == ["refused-invalid"]
+check("libsodium missing: a valid rotation cert fails closed", fail_closed, rx)
+
+# ===================================================== weak pre-check vs libsodium
+print("Cipher: weak_reason pre-check before the libsodium verify", flush=True)
+
+
+def run_mixed_new():
+    nm = f"mx{secrets.token_hex(3)}"
+    kA = seed()
+    claim_gate_pin(nm, kA)
+    c = cert_next(nm, kA, mixed_pub(seed()))
+    rec = nf._shape(c)
+    sig_ok = _ed.checkvalid_sodium(bytes.fromhex(rec["signature"]),
+                                   nf.cert_payload(rec["name"], rec["old_pubkey"],
+                                                   rec["new_pubkey"], rec["issued_at"],
+                                                   rec["seq"], rec["prev_hash"],
+                                                   tag=nf.TAG),
+                                   bytes.fromhex(rec["old_pubkey"]))
+    r = ingest([c], now=next_round())
+    return (sig_ok and r["outcomes"] == ["refused-invalid"]
+            and head(nm)[0] == pub(kA)), (sig_ok, r["outcomes"])
+
+
+real, info = run_mixed_new()
+check("mixed-order new_pub with a VALID libsodium signature is refused", real, info)
+with patched(nf, "_weak", lambda p: None):
+    mut, minfo = run_mixed_new()
+mutant("drop the weak_reason pre-check",
+       "mixed-order new_pub, valid libsodium sig, refused", real, mut)
+
+wc = nf._weak_calls
+nf._weak_ok_cache.clear()
+good_pub, weak_pub = pub(seed()), mixed_pub(seed())
+tok = nf._cur_sender.set("cc" * 32)
+try:
+    a1 = nf._weak(good_pub); a2 = nf._weak(good_pub)
+    b1 = nf._weak(weak_pub); b2 = nf._weak(weak_pub)
+finally:
+    nf._cur_sender.reset(tok)
+per = nf._weak_ok_cache.get("cc" * 32, {})
+check("weak cache: pass cached (1 call for 2 checks), refusal never cached "
+      "(2 calls for 2 checks), bounded per sender",
+      a1 is None and a2 is None and b1 is not None and b2 is not None
+      and nf._weak_calls - wc == 3 and good_pub in per and weak_pub not in per
+      and len(per) <= nf.WEAK_OK_CACHE_PER_SENDER,
+      (nf._weak_calls - wc, len(per)))
+
+# ===================================================== libsodium key check
+print("Cipher fast path: is_valid_point vs weak_reason", flush=True)
+import window_open  # noqa: E402
+
+_P = 2 ** 255 - 19
+
+
+def _enc(y, xs=0):
+    return (y | (xs << 255)).to_bytes(32, "little")
+
+
+SMALL = [_enc(1), _enc(_P - 1), _enc(0), _enc(0, 1),
+         bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),
+         bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"),
+         bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
+         bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85")]
+IDENTITY = [_enc(1)]
+NONCANON = [_enc(_P), _enc(_P + 1), _enc(2 ** 255 - 1), _enc(_P + 1, 1)]
+with open(os.path.join(HERE, "rfc8032_vectors.json")) as _f:
+    RFC = [bytes.fromhex(v["pk"])
+           for v in json.load(_f)]
+HONEST = [bytes.fromhex(pub(seed())) for _ in range(12)]
+MIXED = [bytes.fromhex(mixed_pub(seed())) for _ in range(8)]
+
+
+def with_torsion(t_enc):
+    A = _ed._decodepoint_strict(bytes.fromhex(pub(seed())))
+    return _ed._encodepoint(_ed._edwards(A, _ed._decodepoint_strict(t_enc)))
+
+
+# Examiner: separate mixed-order rows, torsion of order 2, 4 and 8.
+T2 = _enc(_P - 1)          # (0, -1), order 2
+T4 = _enc(0)               # (x, 0), order 4
+T8 = bytes.fromhex(ORDER8)
+MIXED2 = [with_torsion(T2) for _ in range(3)]
+MIXED4 = [with_torsion(T4) for _ in range(3)]
+MIXED8 = [with_torsion(T8) for _ in range(3)]
+RANDOM = [secrets.token_bytes(32) for _ in range(12)]
+CORPUS = {"small-order": SMALL, "identity": IDENTITY, "non-canonical": NONCANON,
+          "rfc8032": RFC, "honest": HONEST, "mixed-order": MIXED, "random": RANDOM,
+          "mixed order-2": MIXED2, "mixed order-4": MIXED4,
+          "mixed order-8": MIXED8}
+for _lbl, _ks in (("order-2", MIXED2), ("order-4", MIXED4), ("order-8", MIXED8)):
+    check(f"mixed-order row ({_lbl} torsion): is_valid_point refuses, "
+          "weak_reason refuses",
+          all(not nf._key_check(k.hex()) is None for k in _ks)
+          and all(window_open.weak_reason(k.hex()) is not None for k in _ks))
+
+
+def key_pass(raw):
+    return nf._key_check(raw.hex()) is None
+
+
+dis = [(g, k.hex()) for g, ks in CORPUS.items() for k in ks
+       if key_pass(k) != (window_open.weak_reason(k.hex()) is None)]
+check(f"equivalence: is_valid_point == weak_reason on {sum(map(len, CORPUS.values()))}"
+      " keys, 0 disagreements either way", not dis and len(RFC) == 5, dis)
+
+
+def mixed_row():
+    return (all(not key_pass(k) for k in MIXED + MIXED2 + MIXED4 + MIXED8)
+            and all(key_pass(k) for k in HONEST))
+
+
+real = mixed_row()
+check("mixed-order keys refused, honest keys pass (libsodium path)", real)
+
+
+def no_subgroup(pub_hex):
+    raw = bytes.fromhex(pub_hex)
+    if not nf._strict_point_ok(raw):
+        return "non-canonical"
+    return "small" if _ed._is_small_order(_ed._decodepoint_strict(raw)) else None
+
+
+with patched(nf, "_key_check", no_subgroup):
+    mut = mixed_row()
+mutant("drop the subgroup test (canonical + small-order only)",
+       "mixed-order keys refused", real, mut)
+
+
+def run_no_nacl():
+    """PyNaCl bindings stubbed out: admission refused, weak_reason never
+    called."""
+    calls = [0]
+    real_wr = window_open.weak_reason
+
+    def counting(p):
+        calls[0] += 1
+        return real_wr(p)
+    nm = f"nn{secrets.token_hex(3)}"
+    kA = seed()
+    claim_gate_pin(nm, kA)
+    c = cert_next(nm, kA, pub(seed()))
+    nf._weak_ok_cache.clear()
+    with patched(_ed, "_sodium_valid_point", None), \
+            patched(window_open, "weak_reason", counting):
+        r = ingest([c], now=next_round())
+    return (r["outcomes"] == ["refused-invalid"] and calls[0] == 0
+            and head(nm)[0] == pub(kA)), (r["outcomes"], calls[0])
+
+
+real, info = run_no_nacl()
+check("bindings stubbed: admission refused, weak_reason called 0 times", real, info)
+REAL_KEY_CHECK = nf._key_check
+
+
+def fallback_check(pub_hex):
+    r = REAL_KEY_CHECK(pub_hex)
+    if r == nf.SODIUM_KEY_MISSING:
+        return window_open.weak_reason(pub_hex)
+    return r
+
+
+with patched(nf, "_key_check", fallback_check):
+    mut, minfo = run_no_nacl()
+print("   fallback mutant:", minfo, flush=True)
+mutant("fallback to weak_reason when PyNaCl is missing",
+       "bindings stubbed: refused, weak_reason 0 calls", real, mut)
+
+
+def run_version(ver):
+    nm = f"vv{secrets.token_hex(3)}"
+    kA = seed()
+    claim_gate_pin(nm, kA)
+    c = cert_next(nm, kA, pub(seed()))
+    nf._weak_ok_cache.clear()
+    with patched(_ed, "sodium_version", lambda: ver):
+        r = ingest([c], now=next_round())
+    return r["outcomes"] == ["refused-invalid"] and head(nm)[0] == pub(kA), r["outcomes"]
+
+
+print("libsodium version at runtime:", _ed.sodium_version(), flush=True)
+real, info = run_version((1, 0, 17))
+check("libsodium version stubbed to 1.0.17: admission refused", real, info)
+ok18, info18 = run_version((1, 0, 18))
+check("libsodium 1.0.18 (control): admission not refused by the gate", not ok18, info18)
+with patched(_ed, "sodium_version_ok", lambda: True):
+    mut, _ = run_version((1, 0, 17))
+mutant("drop the libsodium version gate", "version 1.0.17 -> admission refused",
+       real, mut)
+
 finish()
