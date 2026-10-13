@@ -150,8 +150,28 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
+# Mirror-response read bound, twin of core._PEER_RESP_MAX and
+# resolve_chain._FETCH_MAX: the mirror is untrusted for every other
+# shape this client checks, so its body gets the same 64KB cap (legit
+# mirror answers — a claim verdict, a name resolution — are a few
+# hundred bytes). read() unbounded let a mirror stream an endless
+# body into memory before any verdict ran; an oversize body is never
+# a parsed document (see the two readers below).
+_MIRROR_RESP_MAX = 65536
+
+
+def _read_bounded(stream) -> bytes | None:
+    """Read at most _MIRROR_RESP_MAX bytes; None when the body is larger."""
+    raw = stream.read(_MIRROR_RESP_MAX + 1)
+    return None if len(raw) > _MIRROR_RESP_MAX else raw
+
+
 def _post_form(url: str, fields: dict, timeout: float = 30.0) -> tuple[int | None, str]:
-    """POST urlencoded form; returns (status, body). status None = no HTTP answer."""
+    """POST urlencoded form; returns (status, body). status None = no HTTP answer.
+
+    An oversize body (success or HTTPError alike) returns as "" — the
+    caller reads a 200 with an empty body as its unparseable-claim
+    refusal, and every other status refuses on the status itself."""
     data = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(
         url, data=data,
@@ -159,9 +179,11 @@ def _post_form(url: str, fields: dict, timeout: float = 30.0) -> tuple[int | Non
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace")
+            raw = _read_bounded(resp)
+            return resp.status, "" if raw is None else raw.decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "replace")
+        raw = _read_bounded(e)
+        return e.code, "" if raw is None else raw.decode("utf-8", "replace")
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
@@ -169,7 +191,10 @@ def _post_form(url: str, fields: dict, timeout: float = 30.0) -> tuple[int | Non
 def _get_json(url: str, timeout: float = 30.0) -> dict | None:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = _read_bounded(resp)
+            if raw is None:
+                return None
+            data = json.loads(raw.decode("utf-8"))
             return data if isinstance(data, dict) else None
     except Exception:
         return None
