@@ -112,12 +112,22 @@ def fed_announce(env: dict):
     if desc is not None:
         if not isinstance(desc, dict):
             raise HTTPException(status_code=400, detail="bad reach descriptor")
-        if str(desc.get("node_pubkey", "")).lower() != sender_pub.lower():
+        # Only real strings are descriptor identity fields: str()
+        # aliased a JSON number/bool into the field -- a digit-only
+        # pubkey served as a number stringified to its own hex and
+        # passed this name-key gate, and the return echoed a numeric
+        # name as its digit string ("12345") and true as "true", the
+        # same alias the descriptor comparison seats refuse on sight.
+        # ingest_reach_descriptor gates both fields downstream, but
+        # this seat's gate and echo must be self-contained.
+        desc_pub = desc.get("node_pubkey", "")
+        if not isinstance(desc_pub, str) or desc_pub.lower() != sender_pub.lower():
             raise HTTPException(status_code=400, detail="name-key mismatch")
         _check_rate(f"fedreachannounce:{sender_pub}")
         outcome = ingest_reach_descriptor(desc)
+        desc_name = desc.get("name", "")
         return {"ok": True, "reach": outcome,
-                "name": str(desc.get("name", "")).lower(),
+                "name": desc_name.lower() if isinstance(desc_name, str) else "",
                 "node_pubkey": sender_pub.lower()}
     # Only real strings are roster fields: str() aliased an
     # announce-carried JSON number into the field -- a numeric name

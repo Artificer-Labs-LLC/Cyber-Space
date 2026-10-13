@@ -11,7 +11,10 @@ strings are announce roster fields; absent fields keep defaults.
 
 Covers: int name refused (400, no row); int network refused
 (400, no row); int version refused (400, no row);
-valid string announce stored exact (control).
+valid string announce stored exact (control); reach_descriptor
+seat: int/bool desc name not echoed aliased; int digit-only desc
+pubkey refused 400 at the name-key gate; valid string desc
+control echoed exact.
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/fed-announce-field-type-belt-test.py
 """
@@ -90,6 +93,95 @@ check("valid string announce stored exact",
       status == 200 and row is not None and row["name"] == "validnode"
       and row["network"] == "cybernet" and row["version"] == "0.1.0",
       f"{status} {detail} row={row}")
+
+
+# --- reach_descriptor seat: its gate and echo carry the same shape ---
+DESC_BASE = {"reach": [], "issued_at": "2026-01-01T00:00:00+00:00",
+             "expires_at": "2027-01-01T00:00:00+00:00",
+             "signature": "00" * 32}
+
+
+def attempt_desc(desc, stub=False, sender=None):
+    sk = secrets.token_bytes(32)
+    pk = sender or ed25519.publickey(sk).hex()
+    body = {"node_pub": pk, "reach_descriptor": desc}
+    if stub:
+        env = {"sender_pub": pk, "recipient": core._NODE_PUB, "body": body}
+        orig = fenv.verify_envelope
+        fenv.verify_envelope = lambda e: True
+    else:
+        env = fenv.make_envelope(sk.hex(), pk, core._NODE_PUB, body)
+    try:
+        out = federation.fed_announce(env)
+        return 200, "", out
+    except HTTPException as e:
+        return e.status_code, str(e.detail), None
+    finally:
+        if stub:
+            fenv.verify_envelope = orig
+
+
+def desc_for(pk, **kw):
+    d = dict(DESC_BASE, node_pubkey=pk, name="somename")
+    d.update(kw)
+    return d
+
+
+# 5. int descriptor name: echo must not alias it to its digit string.
+#    (ingest drops the descriptor unverifiable either way; the seat's
+#    own return is what aliased.)
+sk5 = secrets.token_bytes(32)
+pk5 = ed25519.publickey(sk5).hex()
+env5 = fenv.make_envelope(sk5.hex(), pk5, core._NODE_PUB,
+                          {"node_pub": pk5,
+                           "reach_descriptor": desc_for(pk5, name=12345)})
+try:
+    out5 = federation.fed_announce(env5)
+    st5, nm5 = 200, out5.get("name")
+except HTTPException as e:
+    st5, nm5 = e.status_code, None
+check("int desc name not echoed as digit string",
+      st5 == 200 and nm5 == "", f"{st5} name={nm5!r}")
+
+# 6. bool descriptor name: echo must not alias it to "true".
+sk6 = secrets.token_bytes(32)
+pk6 = ed25519.publickey(sk6).hex()
+env6 = fenv.make_envelope(sk6.hex(), pk6, core._NODE_PUB,
+                          {"node_pub": pk6,
+                           "reach_descriptor": desc_for(pk6, name=True)})
+try:
+    out6 = federation.fed_announce(env6)
+    st6, nm6 = 200, out6.get("name")
+except HTTPException as e:
+    st6, nm6 = e.status_code, None
+check("bool desc name not echoed as 'true'",
+      st6 == 200 and nm6 == "", f"{st6} name={nm6!r}")
+
+# 7. int digit-only descriptor pubkey: str() stringified it to its own
+#    hex and it passed the name-key gate (200); must be 400 mismatch.
+#    Envelope verify stubbed: no real keypair has a digit-only pubkey
+#    on demand, and the gate under test sits past envelope verify.
+DIGITS = "1234567890" * 6 + "1234"
+status, detail, out = attempt_desc(desc_for(DIGITS, node_pubkey=int(DIGITS)),
+                                   stub=True, sender=DIGITS)
+check("int digit desc pubkey refused 400 name-key mismatch",
+      status == 400 and detail == "name-key mismatch",
+      f"{status} {detail} out={out}")
+
+# 8. valid string descriptor control: passes the gate, name echoed
+#    lowercased byte-exact.
+sk8 = secrets.token_bytes(32)
+pk8 = ed25519.publickey(sk8).hex()
+env8 = fenv.make_envelope(sk8.hex(), pk8, core._NODE_PUB,
+                          {"node_pub": pk8,
+                           "reach_descriptor": desc_for(pk8, name="ValidName")})
+try:
+    out8 = federation.fed_announce(env8)
+    st8, nm8 = 200, out8.get("name")
+except HTTPException as e:
+    st8, nm8 = e.status_code, None
+check("valid string desc passes gate, echo exact",
+      st8 == 200 and nm8 == "validname", f"{st8} name={nm8!r}")
 
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)
