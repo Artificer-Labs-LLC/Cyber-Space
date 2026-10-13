@@ -916,7 +916,8 @@ def fed_workspace_invite(env: dict):
     invitee_key = _ik.lower() if isinstance(_ik, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", invitee_key):
         raise HTTPException(status_code=400, detail="bad invitee_agent_key")
-    inviter_sig = str(body.get("inviter_sig", ""))
+    _sg = body.get("inviter_sig")
+    inviter_sig = _sg if isinstance(_sg, str) else ""
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(inviter_sig),
@@ -997,7 +998,8 @@ def fed_workspace_countersign(env: dict):
         raise HTTPException(status_code=400,
                             detail="charter mismatch: the charter quoted by the invitee "
                                    "is not this workspace's current charter.")
-    countersign_sig = str(body.get("countersign_sig", ""))
+    _sg = body.get("countersign_sig")
+    countersign_sig = _sg if isinstance(_sg, str) else ""
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(countersign_sig),
@@ -1071,7 +1073,8 @@ async def fed_workspace_leave(env: dict):
     member_key = _mk.lower() if isinstance(_mk, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", member_key):
         raise HTTPException(status_code=400, detail="bad member_key")
-    leave_sig = str(body.get("leave_sig", ""))
+    _sg = body.get("leave_sig")
+    leave_sig = _sg if isinstance(_sg, str) else ""
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(leave_sig),
@@ -1148,7 +1151,8 @@ def fed_workspace_removed(env: dict):
     member_key = _mk.lower() if isinstance(_mk, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", member_key):
         raise HTTPException(status_code=400, detail="bad member_key")
-    removed_sig = str(body.get("removed_sig", ""))
+    _sg = body.get("removed_sig")
+    removed_sig = _sg if isinstance(_sg, str) else ""
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(removed_sig),
