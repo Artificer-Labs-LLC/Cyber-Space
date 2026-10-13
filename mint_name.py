@@ -136,6 +136,11 @@ def _valid_mirror(mirror: str) -> bool:
     into a 0600 file installed under /etc. A leading space / trailing
     tab passed the same way and wrote a value hostd never reads back
     as written. No honest mirror contains whitespace; refuse it."""
+    # A non-string has no mirror shape at all: it escaped as TypeError
+    # from the iteration below (int/None) or AttributeError from a
+    # bytes element's .isspace — a crash, not this predicate's False.
+    if not isinstance(mirror, str):
+        return False
     if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in mirror):
         return False
     try:
@@ -149,6 +154,11 @@ def _valid_mirror(mirror: str) -> bool:
 
 def _valid_label(label: str) -> bool:
     """Client-side fast check; mirrors core._valid_name_label (server decides)."""
+    # Twin of the _valid_mirror gate above: a non-string label escaped
+    # as TypeError from len()/the "." test instead of this predicate's
+    # False (None alone happened to read as empty).
+    if not isinstance(label, str):
+        return False
     if not label or len(label) > _LABEL_MAX:
         return False
     if label != label.lower() or "." in label:
