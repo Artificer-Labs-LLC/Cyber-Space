@@ -170,7 +170,11 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             # Unlike the daemon's own replies, an upstream's flags are
             # NOT otherwise policed here: a recursive resolver
             # legitimately sets RA and clears AA. Only QR is refused.
-            if len(reply) < 4 or not reply[2] & 0x80:
+            # A reply must also carry a whole header: a DNS header is
+            # 12 bytes (client._parse_response's first check), so a
+            # QR-set stub of 4-11 bytes — txid and flags but truncated
+            # counts — is not a response at all, however well addressed.
+            if len(reply) < 12 or not reply[2] & 0x80:
                 return error_response(raw, 2)
             return bytes(reply)
         finally:

@@ -237,6 +237,28 @@ def test_forward_qr_clear_servfail():
               f"got resp={resp!r}")
 
 
+def test_forward_short_header_servfail():
+    """A reply shorter than a whole DNS header is not a response:
+    before, _forward required only 4 bytes for its QR check, so a
+    right-source, right-txid, QR-set stub of 4-11 bytes (txid and
+    flags, truncated counts) was relayed byte-for-byte. Both stubs
+    SERVFAIL; a full 12-byte QR-set reply (the passthrough tests)
+    is the control."""
+    raw = _query_packet("example.com")
+    stub4 = struct.pack(">HH", 0x4321, 0x8180)
+    stub11 = struct.pack(">HHHHH", 0x4321, 0x8180, 0, 0, 0) + b"\x00"
+    for label, canned in [("4-byte QR-set stub", stub4),
+                          ("11-byte QR-set stub", stub11)]:
+        resp = _with_socket_factory(
+            lambda c=canned: _CannedSocket(c),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("8.8.8.8", 53)))
+        check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
+              resp != canned and len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
+
+
 def test_forward_unresolvable_hostname_servfail():
     """An unresolvable hostname upstream raises gaierror in
     _upstream_target, which _forward already reads as SERVFAIL."""
@@ -347,6 +369,7 @@ def main():
     test_forward_wrong_source_servfail()
     test_forward_wrong_txid_servfail()
     test_forward_qr_clear_servfail()
+    test_forward_short_header_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()
