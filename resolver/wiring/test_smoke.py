@@ -1871,6 +1871,39 @@ def _test_query_timeout_malformed():
           smoke._check_timeout(3.0) == 3.0 and smoke._check_timeout(1) == 1)
 
 
+# 9. _read_exact refuses a malformed length instead of raising or
+#    aliasing it (twin of client._read_exact / daemon._read_exact):
+#    a str/None/float escaped as raw TypeError, True aliased to a
+#    1-byte read, and a negative length silently returned b"" as if
+#    a frame had been read. The gate fires before the socket is
+#    touched, so a fake socket records no recv at all.
+class _FakeSock:
+    def __init__(self, data=b"abcd"):
+        self.data = data
+        self.recvd = False
+
+    def recv(self, n):
+        self.recvd = True
+        chunk, self.data = self.data[:n], self.data[n:]
+        return chunk
+
+
+def _test_read_exact_malformed():
+    for bad in ("2", None, 2.0, True, False, -1):
+        sock = _FakeSock()
+        try:
+            smoke._read_exact(sock, bad, 3.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"_read_exact(n={bad!r}) -> ValueError, socket untouched",
+              isinstance(err, ValueError) and not sock.recvd,
+              f"err={err} recvd={sock.recvd}")
+    check("_read_exact valid lengths read exact",
+          smoke._read_exact(_FakeSock(), 2, 3.0) == b"ab"
+          and smoke._read_exact(_FakeSock(), 0, 3.0) == b"")
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1904,6 +1937,7 @@ if __name__ == "__main__":
     _test_packet_shape()
     _test_build_query_malformed()
     _test_query_timeout_malformed()
+    _test_read_exact_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)

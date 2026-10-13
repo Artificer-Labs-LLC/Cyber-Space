@@ -511,6 +511,18 @@ def _query(name: str, qtype: int, server: str, port: int,
 
 def _read_exact(sock, n: int, timeout: float) -> bytes:
     """Read exactly n bytes from a blocking socket with a deadline."""
+    # n is caller-supplied at this library seat (the TCP wire passes a
+    # real int unpacked from the frame, but a direct caller can pass
+    # anything): a str/None/float escaped as a raw TypeError from the
+    # comparison/recv, True aliased to a 1-byte read, and a negative
+    # length silently returned b"" as if a frame had been read — none
+    # of them the refusal this smoke owes for a read that cannot
+    # happen. Only a real non-negative int (bool excluded, twin of
+    # client._read_exact's and daemon._read_exact's gates) is a
+    # length; anything else raises ValueError before the socket is
+    # touched. Valid and zero lengths are untouched.
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError(f"bad read length {n!r}")
     buf = b""
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
