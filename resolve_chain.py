@@ -180,6 +180,19 @@ def check_live(name: str, mirror: str, terminal_key: str) -> str:
     """Fetch the live binding and compare it against the chain's terminal
     key. Returns a one-line verdict. Raises ChainError if the binding
     exists but does not agree."""
+    # The arguments are caller-supplied at this library seat too
+    # (main() passes validated strings, but walk()'s twin gate left
+    # this sibling open): a non-string mirror or name leaked
+    # AttributeError from .rstrip()/.strip(), and a non-string
+    # terminal key leaked TypeError from the [:16] slice in the
+    # mismatch verdict — none of them the ChainError this function
+    # promises. Only real strings can be fetched or compared.
+    if not isinstance(name, str):
+        raise ChainError("queried name is not a string")
+    if not isinstance(mirror, str):
+        raise ChainError("mirror is not a string")
+    if not isinstance(terminal_key, str):
+        raise ChainError("terminal key is not a string")
     binding = _fetch(f"{mirror.rstrip('/')}/api/v1/names/{_label(name)}")
     if not isinstance(binding, dict):
         raise ChainError("live binding is not a JSON object")

@@ -57,6 +57,41 @@ if terminal2 != PK_B.lower():
     print(f"FAIL: unpinned walk changed: {terminal2!r}")
     fails += 1
 
+# check_live()'s twin gate: non-string name/mirror/terminal key must
+# come back as ChainError before any fetch, never AttributeError/
+# TypeError. Fetch and binding verification are stubbed (no network);
+# the gate must fire with the stub untouched.
+_fetch_calls = []
+resolve_chain._fetch = lambda url: _fetch_calls.append(url) or {  # noqa: E731
+    "node_pubkey": PK_B, "issued_at": "2026-01-01T00:00:00Z"}
+resolve_chain.verify_binding = lambda b: None  # noqa: E731
+for label, args in (
+        ("name", (123, "http://x:1", PK_B)),
+        ("name", (None, "http://x:1", PK_B)),
+        ("mirror", ("foo", 123, PK_B)),
+        ("mirror", ("foo", None, PK_B)),
+        ("terminal", ("foo", "http://x:1", 123)),
+        ("terminal", ("foo", "http://x:1", None)),
+        ("terminal", ("foo", "http://x:1", b"x"))):
+    try:
+        resolve_chain.check_live(*args)
+        print(f"FAIL: check_live {label}={args!r} returned")
+        fails += 1
+    except resolve_chain.ChainError as e:
+        if "not a string" not in str(e):
+            print(f"FAIL: check_live {args!r} -> ChainError {e!r}")
+            fails += 1
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: check_live {args!r} raised {type(e).__name__}: {e}")
+        fails += 1
+if _fetch_calls:
+    print(f"FAIL: check_live gate fetched anyway: {_fetch_calls!r}")
+    fails += 1
+verdict = resolve_chain.check_live("foo", "http://x:1", PK_B)
+if "terminal key" not in verdict:
+    print(f"FAIL: valid check_live changed: {verdict!r}")
+    fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)
