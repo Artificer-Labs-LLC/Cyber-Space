@@ -2100,6 +2100,15 @@ def ingest_reach_descriptor(desc: dict) -> str:
                   "expires_at", "signature"):
             if k not in desc:
                 return "dropped-malformed"
+        # Only real strings are descriptor fields: str() below aliased
+        # a gossip-carried JSON true into the label "true" — verify
+        # refused it, but the expiry diagnosis then ran over the alias
+        # and an int-pubkey / list-signature row read dropped-expired
+        # for a claim nobody served in that form (twin of the binding
+        # merge's seat gate). Times keep the verify-trusting contract.
+        if any(not isinstance(desc[_f], str) for _f in
+               ("name", "node_pubkey", "signature")):
+            return "dropped-malformed"
         name = str(desc["name"]).lower()
         node_pubkey = str(desc["node_pubkey"]).lower()
         if not _reach_descriptor_verify(desc):
