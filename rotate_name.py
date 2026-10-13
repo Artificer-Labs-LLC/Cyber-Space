@@ -201,6 +201,28 @@ def _load_record(rec_path):
         return None, "badjson"
 
 
+# Key-seed read bound: a seed file is 64 hex chars plus whitespace, yet
+# every seed seat (promote x2, submit x2, main x1) loaded it via
+# read_text() unbounded before bytes.fromhex ran — the last unbounded
+# local read in this tool, after the record bound above. The cap is
+# generous (16x a real seed file) so padded/hand-copied seeds still
+# read byte-exact; anything larger is never a seed.
+_SEED_MAX = 1024
+
+
+def _read_seed(path) -> bytes:
+    """Read a hex seed file under _SEED_MAX; ValueError on oversize.
+
+    Raises OSError/ValueError exactly as the seats' old
+    bytes.fromhex(path.read_text().strip()) did, so each caller's
+    existing (OSError, ValueError) refusal wording is untouched."""
+    with path.open(encoding="utf-8") as f:
+        raw = f.read(_SEED_MAX + 1)
+    if len(raw) > _SEED_MAX:
+        raise ValueError(f"seed file at {path} exceeds {_SEED_MAX} chars")
+    return bytes.fromhex(raw.strip())
+
+
 def _post_form(url: str, fields: dict, timeout: float = 30.0
                ) -> tuple[int | None, str]:
     """POST urlencoded form; returns (status, body). status None = no HTTP
@@ -523,8 +545,8 @@ def promote_rotation(label: str, home: Path,
         return False, (f"current name key missing at {key_path} — "
                        f"continuity broken, refuse")
     try:
-        new_priv = bytes.fromhex(next_path.read_text().strip())
-        old_priv = bytes.fromhex(key_path.read_text().strip())
+        new_priv = _read_seed(next_path)
+        old_priv = _read_seed(key_path)
     except (OSError, ValueError):
         return False, "key files do not hold 32-byte hex seeds"
     if len(new_priv) != 32 or len(old_priv) != 32:
@@ -659,7 +681,7 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     if reason is not None:
         return False, f"rotation record does not verify: {reason}"
     try:
-        new_priv = bytes.fromhex(next_path.read_text().strip())
+        new_priv = _read_seed(next_path)
     except (OSError, ValueError):
         return False, (f"no pending new key at {next_path} — "
                        f"mint a rotation first (rotate_name.py {label})")
@@ -670,7 +692,7 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
         return False, ("the .next seed does not derive the record's "
                        "new_pubkey — stale or foreign key, refuse")
     try:
-        old_priv = bytes.fromhex(key_path.read_text().strip())
+        old_priv = _read_seed(key_path)
     except (OSError, ValueError):
         return False, (f"current name key missing at {key_path} — "
                        f"continuity broken, refuse")
@@ -860,7 +882,7 @@ def main(argv: list[str]) -> int:
               f"mint the name first (mint_name.py)", file=sys.stderr)
         return 1
     try:
-        old_priv = bytes.fromhex(key_path.read_text().strip())
+        old_priv = _read_seed(key_path)
     except (OSError, ValueError):
         print(f"refused: cannot read a 32-byte seed from {key_path}",
               file=sys.stderr)
