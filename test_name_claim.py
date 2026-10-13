@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _node_url_host, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _name_claim_beats, _node_url_host, _parse_claim_time, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -199,6 +199,37 @@ def reject_nonpublic_cases():
               f"-> {e.status_code}")
 
 
+def claim_time_cases():
+    print("claim-time parser:")
+    # Refusal contract is ValueError on ANY unparseable input — every
+    # caller (conflict rule, liveness, memo) guards ValueError alone.
+    # A non-string stamp (a JSON/gossip field can carry one straight
+    # in) escaped as TypeError from the regex .match() instead.
+    for bad in (123, 1.5, True, None, b"2026-10-07T20:00:00Z",
+                ["2026-10-07T20:00:00Z"], {"t": 1}):
+        try:
+            got = _parse_claim_time(bad)
+        except ValueError:
+            check(f"non-string {bad!r} refused as ValueError", True)
+            continue
+        except Exception as e:  # noqa: BLE001
+            check(f"non-string {bad!r} refused as ValueError", False,
+                  f"raised {type(e).__name__}: {e}")
+            continue
+        check(f"non-string {bad!r} refused as ValueError", False,
+              f"-> {got!r}")
+    check("canonical +00:00 parses exact",
+          _parse_claim_time(EARLY).isoformat() == "2026-10-07T20:00:00+00:00")
+    check("canonical Z parses exact",
+          _parse_claim_time("2026-10-07T20:00:00Z").isoformat()
+          == "2026-10-07T20:00:00+00:00")
+    try:
+        _parse_claim_time("garbage")
+        check("garbage string still ValueError", False, "parsed")
+    except ValueError:
+        check("garbage string still ValueError", True)
+
+
 def main():
     print("names-registry primitive tests (core.py):")
     label_cases()
@@ -206,6 +237,7 @@ def main():
     node_url_cases()
     node_url_host_cases()
     reject_nonpublic_cases()
+    claim_time_cases()
     print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

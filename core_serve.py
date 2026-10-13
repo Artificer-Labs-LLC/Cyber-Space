@@ -985,6 +985,14 @@ def _parse_claim_time(s: str) -> datetime:
     gets no hold, and is refused at intake with reason expiry-cap.
     Raises ValueError on any unparseable input — every caller treats
     that as refusal/absent."""
+    # The ValueError contract covers non-strings too: a stamp field
+    # carried in a JSON body or a gossip row can be 123/true/a list,
+    # and the regex .match() escaped those as TypeError — past every
+    # caller guarding ValueError alone (_old_binding_beaten's and
+    # _incumbent_is_live's Examiner-block fallback, _resolve_memo_put).
+    # Only a real string can be a canonical stamp; refuse at the source.
+    if not isinstance(s, str):
+        raise ValueError(f"not canonical UTC timestamp: {s!r}")
     m = _canonical_ts_pattern().match(s)
     if not m:
         raise ValueError(f"not canonical UTC timestamp: {s!r}")
