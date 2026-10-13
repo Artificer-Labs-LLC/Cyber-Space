@@ -908,10 +908,12 @@ def fed_workspace_invite(env: dict):
     wid = body.get("workspace_id")
     if isinstance(wid, bool) or not isinstance(wid, int) or wid < 1:
         raise HTTPException(status_code=400, detail="bad workspace_id")
-    charter_hash = str(body.get("charter_hash", "")).lower()
+    _ch = body.get("charter_hash")
+    charter_hash = _ch.lower() if isinstance(_ch, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", charter_hash):
         raise HTTPException(status_code=400, detail="bad charter_hash")
-    invitee_key = str(body.get("invitee_agent_key", "")).lower()
+    _ik = body.get("invitee_agent_key")
+    invitee_key = _ik.lower() if isinstance(_ik, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", invitee_key):
         raise HTTPException(status_code=400, detail="bad invitee_agent_key")
     inviter_sig = str(body.get("inviter_sig", ""))
@@ -974,10 +976,12 @@ def fed_workspace_countersign(env: dict):
     wid = body.get("workspace_id")
     if isinstance(wid, bool) or not isinstance(wid, int) or wid < 1:
         raise HTTPException(status_code=400, detail="bad workspace_id")
-    charter_hash = str(body.get("charter_hash", "")).lower()
+    _ch = body.get("charter_hash")
+    charter_hash = _ch.lower() if isinstance(_ch, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", charter_hash):
         raise HTTPException(status_code=400, detail="bad charter_hash")
-    invitee_key = str(body.get("invitee_agent_key", "")).lower()
+    _ik = body.get("invitee_agent_key")
+    invitee_key = _ik.lower() if isinstance(_ik, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", invitee_key):
         raise HTTPException(status_code=400, detail="bad invitee_agent_key")
     with _db_lock, _db() as conn:
@@ -1063,7 +1067,8 @@ async def fed_workspace_leave(env: dict):
     wid = body.get("workspace_id")
     if isinstance(wid, bool) or not isinstance(wid, int) or wid < 1:
         raise HTTPException(status_code=400, detail="bad workspace_id")
-    member_key = str(body.get("member_key", "")).lower()
+    _mk = body.get("member_key")
+    member_key = _mk.lower() if isinstance(_mk, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", member_key):
         raise HTTPException(status_code=400, detail="bad member_key")
     leave_sig = str(body.get("leave_sig", ""))
@@ -1139,7 +1144,8 @@ def fed_workspace_removed(env: dict):
     wid = body.get("workspace_id")
     if isinstance(wid, bool) or not isinstance(wid, int) or wid < 1:
         raise HTTPException(status_code=400, detail="bad workspace_id")
-    member_key = str(body.get("member_key", "")).lower()
+    _mk = body.get("member_key")
+    member_key = _mk.lower() if isinstance(_mk, str) else ""
     if not re.fullmatch(r"[0-9a-f]{64}", member_key):
         raise HTTPException(status_code=400, detail="bad member_key")
     removed_sig = str(body.get("removed_sig", ""))
