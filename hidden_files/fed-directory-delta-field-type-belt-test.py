@@ -61,7 +61,15 @@ with _db() as conn:
 
 
 def mint(osk, opk, row, seq=1):
-    sig = ed25519.sign(_delta_payload(row, seq, False),
+    # The owner signs the STRING form of its row; the delivered row may
+    # carry a field as a JSON number (the alias under test). Sign the
+    # string twin: _delta_payload itself now refuses non-string rows
+    # (delta-payload-field-type belt), which is the builder doing at
+    # the source what this seat's gate does at the door.
+    twin = {**row, **{k: str(row[k]) for k in
+                       ("node_pub", "name", "node_url", "network",
+                        "version") if k in row}}
+    sig = ed25519.sign(_delta_payload(twin, seq, False),
                        osk, bytes.fromhex(opk)).hex()
     return {"row": row, "seq": seq, "sig": sig, "retire": False}
 

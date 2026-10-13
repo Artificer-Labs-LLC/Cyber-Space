@@ -2095,6 +2095,23 @@ def _delta_payload(row: dict, seq: int, retire: bool) -> bytes:
     cannot forge or tamper with another node's row. Lives in core so both
     the mint (send half) and the receivers can build it without a
     circular import."""
+    # Only real strings are row fields, and only a real int is a seq:
+    # str()/int() here aliased a JSON number/bool into the canonical
+    # bytes -- an int name (12345) built byte-identical payload to the
+    # string "12345", and seq True/"1" to seq 1 -- so a signature over
+    # the alias verified as a signature over the string row. The
+    # receiver seats gate their rows before calling, but the builder
+    # is the canonical seat and must refuse on its own; every caller
+    # already treats a raise here as a failed verification (fail-
+    # closed). Absent fields keep their defaults; present ones must
+    # be strings.
+    if not isinstance(row, dict):
+        raise ValueError("delta row must be a dict")
+    if any(k in row and not isinstance(row[k], str) for k in
+           ("node_pub", "name", "node_url", "network", "version")):
+        raise ValueError("delta row fields must be strings")
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        raise ValueError("delta seq must be an int")
     payload = {
         "node_pub": str(row.get("node_pub", "")).lower(),
         "name": str(row.get("name", "")),
