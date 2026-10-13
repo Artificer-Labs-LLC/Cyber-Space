@@ -132,6 +132,71 @@ def test_forward_v6_upstream_uses_inet6():
     check("forward: v6 reply passthrough", resp == canned, f"got {resp!r}")
 
 
+def test_forward_hostname_upstream_resolves_family():
+    """A v6-only hostname upstream: before, _forward guessed AF_INET
+    from the string, sent to the unresolved hostname, so the forward
+    was never reached and SERVFAILed. Now dials _upstream_target via
+    getaddrinfo AF_UNSPEC: AF_INET6 socket to the resolved sockaddr."""
+    raw = _query_packet("example.com")
+    canned = b"\x00" * 12 + b"v6-host upstream says hi"
+    seen = {}
+    sock_inst = _CannedSocket(canned)
+
+    def factory(family, *a, **k):
+        seen["family"] = family
+        return sock_inst
+
+    def fake_gai(host, port, family=0, type=0, proto=0, flags=0):
+        seen["gai"] = (host, port)
+        return [(answer.socket.AF_INET6, answer.socket.SOCK_DGRAM, 17, "",
+                 ("::1", port, 0, 0))]
+
+    real_sock, real_gai = answer.socket.socket, answer.socket.getaddrinfo
+    answer.socket.socket, answer.socket.getaddrinfo = factory, fake_gai
+    try:
+        resp = answer.handle_query(
+            raw, mirror_url="http://mirror.invalid",
+            upstream=("v6only.example", 53))
+        lit_v4 = answer._upstream_target(("8.8.8.8", 53))
+        lit_v6 = answer._upstream_target(("::1", 5353))
+    finally:
+        answer.socket.socket, answer.socket.getaddrinfo = real_sock, real_gai
+    check("forward: v6-only hostname -> AF_INET6 socket",
+          seen.get("family") == answer.socket.AF_INET6,
+          f"got {seen.get('family')}")
+    check("forward: v6-only hostname -> resolved sockaddr target",
+          sock_inst.sent_to is not None
+          and sock_inst.sent_to[1] == ("::1", 53, 0, 0),
+          f"got {sock_inst.sent_to}")
+    check("forward: v6-host reply passthrough", resp == canned)
+    check("forward: literals keep exact family+target",
+          lit_v4 == (answer.socket.AF_INET, ("8.8.8.8", 53))
+          and lit_v6 == (answer.socket.AF_INET6, ("::1", 5353)),
+          f"got {lit_v4} {lit_v6}")
+
+
+def test_forward_unresolvable_hostname_servfail():
+    """An unresolvable hostname upstream raises gaierror in
+    _upstream_target, which _forward already reads as SERVFAIL."""
+    raw = _query_packet("example.com")
+
+    def fake_gai(*a, **k):
+        raise answer.socket.gaierror("no such host")
+
+    real_gai = answer.socket.getaddrinfo
+    answer.socket.getaddrinfo = fake_gai
+    try:
+        resp = _with_socket_factory(
+            lambda: _CannedSocket(b"never"),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("nope.example", 53)))
+    finally:
+        answer.socket.getaddrinfo = real_gai
+    check("forward: unresolvable hostname -> SERVFAIL (rcode 2)",
+          _rcode(resp) == 2, f"got {_rcode(resp)}")
+
+
 def test_forward_failure_servfail():
     """A dead upstream is a SERVFAIL, never an invented answer."""
     raw = _query_packet("example.com")
@@ -216,6 +281,8 @@ def main():
     print("forward + ttl unit tests (resolver/answer.py):")
     test_forward_passthrough()
     test_forward_v6_upstream_uses_inet6()
+    test_forward_hostname_upstream_resolves_family()
+    test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()
     test_ttl_remaining()

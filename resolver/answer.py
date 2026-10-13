@@ -81,6 +81,34 @@ def _family_addresses(node_url: str, qtype: int) -> list[bytes]:
     return list(dict.fromkeys(out))
 
 
+def _upstream_target(upstream: tuple[str, int]):
+    """(family, sockaddr) the forward wire dials for an upstream.
+
+    A literal keeps its own family and (host, port) target, exactly as
+    before (an IPv6 literal — daemon._parse_upstream's "[v6]:port"
+    form, stored unbracketed — needs AF_INET6; an AF_INET sendto to it
+    raises and every forward would SERVFAIL). A HOSTNAME is resolved
+    first (getaddrinfo, AF_UNSPEC) and the socket is created from the
+    answer's family, dialing the resolved sockaddr — the family can
+    no longer be guessed from the string's shape. Before, every
+    hostname picked AF_INET and sendto carried the unresolved string,
+    so an upstream reached by a v6-only hostname (a host:port form
+    _parse_upstream explicitly accepts) was never reached on the UDP
+    wire and every forward SERVFAILed. First getaddrinfo result wins.
+    An unresolvable hostname raises gaierror here, which _forward
+    already reads as SERVFAIL, honestly."""
+    host, port = upstream
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                   socket.SOCK_DGRAM)
+        family, _kind, _proto, _canon, sockaddr = infos[0]
+        return family, sockaddr
+    family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+    return family, (host, port)
+
+
 def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
     """Relay the untouched query to the upstream resolver, return its reply
     byte-for-byte. Any failure answers SERVFAIL — the daemon forwards or
@@ -92,20 +120,11 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
     the monkeypatched-socket harness instead. Exercise the real wire path
     on the HQ node when wiring it up."""
     try:
-        # An IPv6-literal upstream (daemon._parse_upstream's "[v6]:port"
-        # form, stored unbracketed) needs an AF_INET6 socket — an AF_INET
-        # sendto to it raises and every forward would SERVFAIL. Hostnames
-        # and IPv4 literals keep AF_INET.
-        try:
-            family = (socket.AF_INET6
-                      if ipaddress.ip_address(upstream[0]).version == 6
-                      else socket.AF_INET)
-        except ValueError:
-            family = socket.AF_INET
+        family, target = _upstream_target(upstream)
         sock = socket.socket(family, socket.SOCK_DGRAM)
         try:
             sock.settimeout(UPSTREAM_TIMEOUT)
-            sock.sendto(raw, upstream)
+            sock.sendto(raw, target)
             # Read a whole datagram (65535, the UDP maximum — twin of
             # daemon._serve_udp's read buffer): the query is forwarded
             # untouched, so a query carrying EDNS legitimately draws a
