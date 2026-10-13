@@ -21,6 +21,7 @@ False instead of raising across its boundary; callers fail closed.
 """
 
 import hashlib
+import math
 
 RENDEZVOUS_DST = b"cybernet-rendezvous-v1:"
 
@@ -52,11 +53,13 @@ def epoch_for(now: float, epoch_len: int = EPOCH_LEN_DEFAULT) -> int | None:
     """Whole epochs since the unix epoch. None on invalid epoch_len."""
     if not _epoch_len_ok(epoch_len):
         return None
+    if isinstance(now, bool):
+        return None
     try:
         now_f = float(now)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if now_f < 0:
+    if not math.isfinite(now_f) or now_f < 0:
         return None
     return int(now_f // epoch_len)
 
@@ -69,7 +72,8 @@ def derive_point_id(name_pub_hex: str, epoch: int) -> str | None:
     raw = _name_pub_bytes(name_pub_hex)
     if raw is None:
         return None
-    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+    if (not isinstance(epoch, int) or isinstance(epoch, bool)
+            or epoch < 0 or epoch > 0xFFFFFFFFFFFFFFFF):
         return None
     return hashlib.sha256(
         RENDEZVOUS_DST + raw + epoch.to_bytes(8, "big")).hexdigest()
