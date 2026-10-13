@@ -116,7 +116,7 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     NOERROR, 2 = SERVFAIL, 3 = NXDOMAIN. Anything else raises ValueError —
     the daemon answers only what it means.
     """
-    if rcode not in _RCODE_NAMES:
+    if not isinstance(rcode, int) or rcode not in _RCODE_NAMES:
         raise ValueError(f"unsupported rcode {rcode}")
     # The header packs two caller-supplied fields the answer loop below
     # never sees: the query id and the answer count. Both are uint16 on
@@ -124,17 +124,33 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     # only yields 0..65535) or more than 65535 answers escaped as
     # struct.error from the header pack, the same ValueError-contract
     # break the answer fields had. Range-check them here too.
-    if not 0 <= query["id"] <= 65535:
+    if not isinstance(query["id"], int) \
+            or not 0 <= query["id"] <= 65535:
         raise ValueError("bad query id")
-    if len(answers) > 65535:
+    try:
+        n_answers = len(answers)
+    except TypeError:
+        raise ValueError("answers is not a sized list") from None
+    if n_answers > 65535:
         raise ValueError("too many answers")
-    for qtype, ttl, rdata in answers:
+    for _answer in answers:
+        try:
+            qtype, ttl, rdata = _answer
+        except (TypeError, ValueError):
+            raise ValueError("bad answer") from None
         # Range-check every field struct will pack, not just ttl's
         # floor: a ttl past the uint32 wire field or a qtype outside
         # uint16 used to escape as struct.error, breaking this
         # function's ValueError contract (callers guarding ValueError
         # — the codec's fail-closed boundary language — missed it).
-        if not 0 <= qtype <= 65535 or not 0 <= ttl <= 4294967295 \
+        # Type-check them too: a non-int field escaped as TypeError
+        # from the comparison (or struct.error from the pack for a
+        # float, which passes a range check), and non-bytes rdata
+        # escaped as TypeError from len() or the body join.
+        if not isinstance(qtype, int) or not isinstance(ttl, int) \
+                or not isinstance(rdata, (bytes, bytearray)) \
+                or not 0 <= qtype <= 65535 \
+                or not 0 <= ttl <= 4294967295 \
                 or len(rdata) > 65535:
             raise ValueError("bad answer")
     flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode

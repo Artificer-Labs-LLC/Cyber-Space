@@ -215,6 +215,34 @@ check("build: max uint16 answer count builds",
       int.from_bytes(dns.build_response(
           q, [(1, 300, b"\x7f\x00\x00\x01")] * 65535)[6:8], "big") == 65535)
 
+# Non-int / non-bytes fields must read as ValueError too, not escape
+# as TypeError (from a comparison or len()) or struct.error (a float
+# passes a range check, then fails the pack) — the ValueError contract
+# is the boundary language callers guard.
+check("build: string query id raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, dict(q, id="1234"), []))
+check("build: float query id raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, dict(q, id=1.5), []))
+check("build: string ttl raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [(1, "300", b"\x7f\x00\x00\x01")]))
+check("build: float ttl raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, q, [(1, 1.5, b"\x7f\x00\x00\x01")]))
+check("build: string qtype raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [("1", 300, b"\x7f\x00\x00\x01")]))
+check("build: float rcode raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [], 0.0))
+check("build: non-bytes rdata raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [(1, 300, 4)]))
+check("build: None rdata raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [(1, 300, None)]))
+check("build: None answers raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, None))
+check("build: malformed answer tuple raises ValueError, not TypeError",
+      raises_valueerror(dns.build_response, q, [4]))
+check("build: bytearray rdata still builds",
+      dns.build_response(q, [(1, 300, bytearray(b"\x7f\x00\x00\x01"))])[-4:]
+      == b"\x7f\x00\x00\x01")
+
 # --- error_response ---------------------------------------------------------
 
 er = dns.error_response(b"")
