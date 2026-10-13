@@ -1450,6 +1450,18 @@ def names_reach(request: Request, name: str):
     # never use — read as absent, exactly like malformed JSON above.
     if not isinstance(reach, list):
         raise HTTPException(status_code=404, detail="No such name.")
+    # String-length gate, twin of _names_gossip_out (008dfd2): this
+    # seat serves the stored row VERBATIM, and bytes.fromhex ignores
+    # embedded spaces, so a legacy row with a 129-char inserted-space
+    # sig (or a 65-char spaced pubkey) decoded to the TRUE bytes yet
+    # was served in a non-canonical spelling every consumer refuses
+    # on sight (_reach_descriptor_verify gates len(signature) != 128
+    # / len(node_pubkey) != 64). Only exact 128/64 spellings are
+    # served; case is left alone (uppercase served before and still
+    # does). Anything else reads as absent, like the shape seat above.
+    if not isinstance(row[4], str) or len(row[4]) != 128 \
+            or not isinstance(row[0], str) or len(row[0]) != 64:
+        raise HTTPException(status_code=404, detail="No such name.")
     return {"name": label, "node_pubkey": row[0], "reach": reach,
             "issued_at": row[2], "expires_at": row[3],
             "signature": row[4]}
