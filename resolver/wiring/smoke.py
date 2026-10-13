@@ -215,6 +215,12 @@ def _query(name: str, qtype: int, server: str, port: int,
     # an RD-clear packet is not the daemon's reply to THIS query.
     if not flags & 0x0100:
         raise ValueError("response does not echo RD — response is not ours")
+    # TC bit, twin of client._parse_response: a packet with TC set
+    # claims its own answer was truncated — neither daemon response
+    # builder ever sets TC (its replies are whole on both wires), so
+    # a TC-set packet is not the daemon's whole reply.
+    if flags & 0x0200:
+        raise ValueError("response claims truncation (TC set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -266,6 +272,11 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # daemon's reply to this RD-set query.
     if not flags & 0x0100:
         raise ValueError("response does not echo RD — response is not ours")
+    # TC bit, twin of _query above: a TC-set packet claims its own
+    # answer was truncated; the daemon's replies are whole on both
+    # wires, so over TCP it is contradicting itself.
+    if flags & 0x0200:
+        raise ValueError("response claims truncation (TC set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
