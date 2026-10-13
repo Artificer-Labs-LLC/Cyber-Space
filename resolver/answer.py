@@ -149,6 +149,18 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
                 source_ip = source[0]
             if (source_ip, source[1]) != (expected, target[1]):
                 return error_response(raw, 2)
+            # The reply's TRANSACTION ID is part of the transaction
+            # too (twin of client._parse_response's txid check and
+            # wiring/smoke's): the query leaves untouched, so its
+            # reply must echo its first two bytes. Before, a packet
+            # from the exact upstream source carrying another query's
+            # txid — a late reply to an earlier forward on a reused
+            # ephemeral port — was relayed byte-for-byte as THIS
+            # query's answer. A mismatched (or impossibly short)
+            # reply is a failed forward: SERVFAIL, never a borrowed
+            # answer.
+            if len(reply) < 2 or bytes(reply[:2]) != raw[:2]:
+                return error_response(raw, 2)
             return bytes(reply)
         finally:
             sock.close()
