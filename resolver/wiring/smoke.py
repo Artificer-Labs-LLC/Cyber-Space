@@ -221,6 +221,12 @@ def _query(name: str, qtype: int, server: str, port: int,
     # a TC-set packet is not the daemon's whole reply.
     if flags & 0x0200:
         raise ValueError("response claims truncation (TC set) — response is not ours")
+    # RA bit, twin of client._parse_response: a packet with RA set
+    # claims recursion was available — the daemon is authoritative-only
+    # for this zone and neither response builder ever sets RA, so an
+    # RA-set packet is a recursive resolver's answer, not the daemon's.
+    if flags & 0x0080:
+        raise ValueError("response claims recursion available (RA set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -277,6 +283,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # wires, so over TCP it is contradicting itself.
     if flags & 0x0200:
         raise ValueError("response claims truncation (TC set) — response is not ours")
+    # RA bit, twin of _query above: an RA-set packet claims recursion
+    # was available; the authoritative-only daemon never sets RA.
+    if flags & 0x0080:
+        raise ValueError("response claims recursion available (RA set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
