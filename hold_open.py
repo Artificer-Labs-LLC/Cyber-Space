@@ -163,6 +163,18 @@ def _rendezvous_hold_maybe(relay_url: str, token: str,
     Never raises."""
     if name_pub_hex is None:
         return point_epoch
+    # epoch_len is caller-supplied at this library seat (hold_open_cycle
+    # passes the env-derived value, but a direct caller can pass
+    # anything): epoch_for refuses a bad one (out of bounds, non-int,
+    # bool) with None, so the roll check below read it as "no epoch"
+    # and returned the stale point_epoch forever — the points were
+    # never re-registered, went unwilling at the relay, and the name
+    # went dark under rendezvous while the daemon looked healthy.
+    # _rendezvous_points_register, called just below, normalizes the
+    # same bad value to the frozen default; normalize here too, so
+    # the epoch compared and the epoch registered under agree.
+    if not rendezvous._epoch_len_ok(epoch_len):
+        epoch_len = rendezvous.EPOCH_LEN_DEFAULT
     try:
         epoch = rendezvous.epoch_for(time.time(), epoch_len)
     except Exception:

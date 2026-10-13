@@ -34,6 +34,54 @@ for good in (1, 0.5, 240.0, hold_open._KEEPALIVE_EVERY):
         print(f"FAIL: _keepalive_every_ok({good!r}) is False")
         fails += 1
 
+# _rendezvous_hold_maybe epoch_len belt: a bad epoch_len (out of
+# bounds, non-int, bool) made epoch_for return None, so the roll
+# check returned the stale point_epoch forever and the points were
+# never re-registered — while _rendezvous_points_register, its
+# sibling, normalizes the same bad value to the frozen default.
+# A bad epoch_len must register under the default and return the
+# current default epoch; a valid one is untouched.
+import rendezvous as _rv  # noqa: E402
+import time as _time  # noqa: E402
+
+_PUB = "ab" * 32
+_calls = []
+_orig_register = hold_open._rendezvous_points_register
+hold_open._rendezvous_points_register = (
+    lambda *a, **k: _calls.append((a, k)) or 2)
+try:
+    _want_default = _rv.epoch_for(_time.time(), _rv.EPOCH_LEN_DEFAULT)
+    for bad in (30, 999999, "3600", None, True, 1.5):
+        _calls.clear()
+        got = hold_open._rendezvous_hold_maybe(
+            "http://127.0.0.1:9", "tok", _PUB, 123, bad)
+        if got != _want_default or len(_calls) != 1 \
+                or _calls[0][0][3] != _rv.EPOCH_LEN_DEFAULT:
+            print(f"FAIL: _rendezvous_hold_maybe(epoch_len={bad!r}) "
+                  f"-> {got!r} calls={_calls!r}, want epoch "
+                  f"{_want_default!r} under the default")
+            fails += 1
+    _calls.clear()
+    _want_600 = _rv.epoch_for(_time.time(), 600)
+    got = hold_open._rendezvous_hold_maybe(
+        "http://127.0.0.1:9", "tok", _PUB, 123, 600)
+    if got != _want_600 or len(_calls) != 1 or _calls[0][0][3] != 600:
+        print(f"FAIL: valid epoch_len=600 changed: {got!r} {_calls!r}")
+        fails += 1
+    # No-roll and no-key seats are untouched.
+    _calls.clear()
+    if hold_open._rendezvous_hold_maybe(
+            "http://127.0.0.1:9", "tok", _PUB, _want_default) \
+            != _want_default or _calls:
+        print("FAIL: current-epoch hold_maybe re-registered")
+        fails += 1
+    if hold_open._rendezvous_hold_maybe(
+            "http://127.0.0.1:9", "tok", None, 123, 30) != 123:
+        print("FAIL: no-key hold_maybe passthrough changed")
+        fails += 1
+finally:
+    hold_open._rendezvous_points_register = _orig_register
+
 if fails:
     print(f"test_hold_open: {fails} FAIL")
     sys.exit(1)
