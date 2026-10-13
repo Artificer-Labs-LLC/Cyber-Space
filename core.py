@@ -2158,6 +2158,21 @@ def _delta_payload(row: dict, seq: int, retire: bool) -> bytes:
         raise ValueError("delta row fields must be strings")
     if isinstance(seq, bool) or not isinstance(seq, int):
         raise ValueError("delta seq must be an int")
+    # The remaining payload fields coerce too, and the coercions alias:
+    # a capabilities DICT iterated its keys into the same payload as
+    # the signed list ({"messaging": 0} == ["messaging"]), a string
+    # iterated its characters, and an int escaped as TypeError past
+    # this builder's ValueError contract; genesis "false"/1 bool()-
+    # coerced to true — byte-identical to the payload for a genesis
+    # row — and a non-bool retire ("false") coerced to a retire
+    # payload. Only the shapes the canonical form actually has are
+    # buildable: capabilities a list, genesis a bool, retire a bool.
+    if "capabilities" in row and not isinstance(row["capabilities"], list):
+        raise ValueError("delta capabilities must be a list")
+    if "genesis" in row and not isinstance(row["genesis"], bool):
+        raise ValueError("delta genesis must be a bool")
+    if not isinstance(retire, bool):
+        raise ValueError("delta retire must be a bool")
     payload = {
         "node_pub": str(row.get("node_pub", "")).lower(),
         "name": str(row.get("name", "")),
