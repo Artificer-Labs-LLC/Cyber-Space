@@ -287,6 +287,13 @@ def _parse_response(
     from the daemon's verified answer for this question — trusting
     it would let a correct question carry a stranger's address.
     """
+    # The packet itself is caller-supplied too: a str/None/int/float/
+    # list packet escaped as a raw TypeError from len()/struct.unpack
+    # before this function's ResolveError contract ever ran — the twin
+    # of the dns.parse_query non-bytes gate. Only a real bytes/bytearray
+    # packet can be a response; anything else is a mistransaction.
+    if not isinstance(data, (bytes, bytearray)):
+        raise ResolveError(f"bad response packet {type(data).__name__}")
     # The expected txid is caller-supplied too (resolve() passes the
     # random 16-bit id _build_query already gated, but a direct caller
     # could pass anything): it was compared as txid & 0xFFFF, so 65536

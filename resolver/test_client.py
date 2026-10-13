@@ -528,6 +528,19 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(client.ResolveError, msg=repr(bad)):
                 client._parse_response(resp, 0x42, "node.cyberspace", bad)
 
+    def test_parse_response_non_bytes_packet_raises_resolve_error(self):
+        """A str/None/int/float/list packet escaped as a raw TypeError
+        from len()/struct.unpack, past this parser's ResolveError
+        contract — the twin of the dns.parse_query non-bytes gate.
+        A bytearray packet stays valid, exactly as in the codec."""
+        resp = self._valid_response()
+        for bad in ("x" * 20, None, 123, 1.5, True, [1] * 20):
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._parse_response(bad, 0x42, "node.cyberspace", 1)
+        _flags, answers = client._parse_response(
+            bytearray(resp), 0x42, "node.cyberspace", 1)
+        self.assertEqual(len(answers), 1)
+
     def test_parse_response_qtype_none_and_boundaries_ok(self):
         resp = self._valid_response()
         _flags, answers = client._parse_response(resp, 0x42)
