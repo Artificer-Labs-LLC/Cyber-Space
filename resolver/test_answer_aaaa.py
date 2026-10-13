@@ -197,6 +197,13 @@ def main():
     check("empty host: []",
           answer._family_addresses("http:///no-host", 28) == [])
 
+    # 8. _family_addresses returns [] on an unasked qtype (never raises,
+    #    never aliases): other ints, a string, None, and the bool/float
+    #    keys that used to alias to the A family all have no addresses
+    for bad in (2, 0, 255, "1", None, True, False, 1.0, 28.0):
+        check(f"unasked qtype {bad!r}: []",
+              answer._family_addresses("http://127.0.0.1:18799", bad) == [])
+
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

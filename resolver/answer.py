@@ -73,6 +73,15 @@ def _family_addresses(node_url: str, qtype: int) -> list[bytes]:
     unparsable URL, DNS failure, no family match — returns []. The caller
     answers NXDOMAIN/NODATA; this function never guesses.
     """
+    # The family lookup sat outside the guard below: an unasked qtype
+    # (2, 255, "1", None) escaped as a raw KeyError instead of [], and
+    # True/1.0 aliased through the dict key to the A family, answering
+    # a family nobody asked for. Only a real int A/AAAA has a family
+    # (bool excluded, twin of _ttl_for's cap gate); anything else has
+    # no addresses, exactly like a family with no match.
+    if (isinstance(qtype, bool) or not isinstance(qtype, int)
+            or qtype not in (QTYPE_A, QTYPE_AAAA)):
+        return []
     want = {QTYPE_A: socket.AF_INET, QTYPE_AAAA: socket.AF_INET6}[qtype]
     try:
         host = urllib.parse.urlsplit(node_url).hostname or ""
