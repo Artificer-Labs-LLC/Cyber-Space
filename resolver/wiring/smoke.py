@@ -150,6 +150,33 @@ def main() -> int:
               f"(must be 1..65535) — bad argument, no query attempted")
         return 1
 
+    # The name is part of the argument shape too: a name that is not
+    # exactly one valid label under .cyberspace can never be claimed
+    # (the resolver client's label grammar), so querying it could only
+    # read back NXDOMAIN — "registered name did not resolve", a verdict
+    # on the daemon — or die in _build_query's ascii encode and read
+    # as "unreachable", when the argument itself was at fault. Gate
+    # the normalized name (strip, one FQDN root dot, lowercase — the
+    # client's normalization) before any wire use, as a bad argument.
+    asked = args.name.strip()
+    if asked.endswith("."):
+        asked = asked[:-1]
+    asked = asked.lower()
+    label = asked[: -len(".cyberspace")] if asked.endswith(".cyberspace") else ""
+    if (
+        not label
+        or len(label) > 63
+        or "." in label
+        or label.startswith("-")
+        or label.endswith("-")
+        or not all((c.isascii() and c.isalnum()) or c == "-" for c in label)
+    ):
+        print(f"FAIL: --name {args.name!r} is not a valid .cyberspace name "
+              f"(one label of ASCII letters/digits/hyphens under "
+              f".cyberspace) — bad argument, no query attempted")
+        return 1
+    args.name = asked
+
     query_fn = _query_tcp if args.tcp else _query
     wire = "tcp" if args.tcp else "udp"
     ok = True

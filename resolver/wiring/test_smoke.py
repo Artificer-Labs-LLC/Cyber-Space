@@ -228,6 +228,33 @@ def _test_undialable_port():
     check("valid port 53599 still dials (control)", rc == 0)
 
 
+# 5f. malformed --name is a bad argument, never a daemon verdict:
+#     no query is attempted for a non-zone / multi-label / bad-label
+#     name (each would otherwise read as NXDOMAIN "did not resolve"
+#     or an ascii-encode "unreachable"); uppercase + FQDN root dot
+#     still smoke (normalized before the wire)
+def _test_malformed_name():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    for bad in ("foo", "bad..cyberspace", "-bad.cyberspace",
+                "bad-.cyberspace", "a_b.cyberspace", ".cyberspace",
+                "é.cyberspace", "a" * 64 + ".cyberspace"):
+        calls["n"] = 0
+        rc, out = _run_main_with_fake(_counting, ["--name=" + bad])
+        check(f"--name {bad[:20]!r} -> exit 1, no query, bad argument",
+              rc == 1 and calls["n"] == 0 and "bad argument" in out
+              and "unreachable" not in out
+              and "did not resolve" not in out,
+              f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    rc, out = _run_main_with_fake(_counting, ["--name", "GENESIS.cyberspace."])
+    check("uppercase + FQDN-dot name still smokes (control)", rc == 0,
+          f"rc={rc} out={out[:80]!r}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -252,6 +279,7 @@ if __name__ == "__main__":
     _test_ipv6_server_forms()
     _test_aaaa_fallback()
     _test_undialable_port()
+    _test_malformed_name()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
