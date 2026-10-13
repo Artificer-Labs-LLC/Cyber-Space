@@ -146,6 +146,39 @@ class AgreementBelt(unittest.TestCase):
         self.assertEqual(result["node_url"], "http://8.8.4.4:8471")
         self.assertNotIn("via_relay", result)
 
+    def test_fqdn_root_dot_resolves_both_seats(self):
+        # The resolver client accepts one trailing FQDN root dot; dial
+        # learned to strip it (af3bce0) but resolve_cyberspace did not,
+        # so the canonical fully-qualified form read as not-in-zone
+        # (None, before any fetch) in the daemon while the planner
+        # previewed a dial for it. Both seats must resolve it.
+        label = "agreefqdn"
+        priv, pub = _name_key()
+        b = _binding(label, priv, pub)
+        d = _descriptor(label, priv, pub,
+                        [{"kind": "direct", "url": "http://8.8.4.4:8471"}])
+        with ScriptedNet(_routes(label, b, d), _peer_routes(b)):
+            code, lines = dial.plan(label + ".cyberspace.", MIRROR)
+            result = core.resolve_cyberspace(label + ".cyberspace.", MIRROR)
+        self.assertEqual(code, 0, lines)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["name"], label)
+        self.assertEqual(result["node_url"], "http://8.8.4.4:8471")
+
+    def test_double_root_dot_is_silence_both_seats(self):
+        # Only one root dot is stripped; a second leaves a trailing
+        # dot, so the address is still not in .cyberspace.
+        label = "agreeddot"
+        priv, pub = _name_key()
+        b = _binding(label, priv, pub)
+        d = _descriptor(label, priv, pub,
+                        [{"kind": "direct", "url": "http://8.8.4.4:8471"}])
+        with ScriptedNet(_routes(label, b, d), _peer_routes(b)):
+            code, _lines = dial.plan(label + ".cyberspace..", MIRROR)
+            result = core.resolve_cyberspace(label + ".cyberspace..", MIRROR)
+        self.assertEqual(code, 1)
+        self.assertIsNone(result)
+
     def test_mismatched_descriptor_falls_to_directory(self):
         # Descriptor signed by a STRANGER key (valid signature, live): the
         # daemon skips it and scans the directory; the plan must say the

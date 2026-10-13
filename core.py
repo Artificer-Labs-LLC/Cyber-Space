@@ -1405,6 +1405,8 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
     try:
         # Step 1: .cyberspace check — first label only, never a path.
         addr = (address or "").strip().lower()
+        if addr.endswith("."):
+            addr = addr[:-1]  # a single FQDN root dot, as the resolver client accepts
         if not addr.endswith(CYBERSPACE_SUFFIX):
             return None
         label = addr[: -len(CYBERSPACE_SUFFIX)]
