@@ -672,6 +672,23 @@ def _post_to_peer_path(node_url: str, path: str, env: dict) -> None:
         pass
 
 
+def _ws_payload_gate(workspace_id, **fields) -> None:
+    """Shape gate for the workspace vouch payload builders below, twin
+    of _name_claim_payload's string gate and _delta_payload's seq gate:
+    the builders are the canonical seat and must refuse on their own —
+    str(workspace_id) aliased the string "1" byte-identically to int 1
+    (and True to a "True" id no int row has), and .lower() on a
+    non-string field escaped as AttributeError past the ValueError
+    contract every sibling parser carries. Only a real int id and real
+    string fields have a canonical form; refuse the rest as ValueError,
+    which every receiver seat already treats as a failed verification."""
+    if isinstance(workspace_id, bool) or not isinstance(workspace_id, int):
+        raise ValueError(f"workspace_id must be an int: {workspace_id!r}")
+    for _field, _value in fields.items():
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
+
+
 def _invite_payload(workspace_id: int, charter_hash: str, invitee_agent_key: str) -> bytes:
     """Canonical bytes a home node signs to vouch for a workspace invite
     (docs/WORKSPACE_INVITE.md: remote members v1). Covers the workspace id
@@ -680,6 +697,8 @@ def _invite_payload(workspace_id: int, charter_hash: str, invitee_agent_key: str
     vouched for *this* charter for *this* invitee, and cannot be replayed
     onto a different workspace or a different charter. Lowercase hex is
     the wire form; comparison here is case-insensitive."""
+    _ws_payload_gate(workspace_id, charter_hash=charter_hash,
+                     invitee_agent_key=invitee_agent_key)
     return (b"workspace-invite|" + str(workspace_id).encode() + b"|"
             + charter_hash.lower().encode() + b"|" + invitee_agent_key.lower().encode())
 
@@ -706,6 +725,9 @@ def _countersign_payload(workspace_id: int, charter_hash: str, from_node_pub: st
     own pubkey (not replayable as another node's countersign), and the
     invited member key. Lowercase hex is the wire form; comparison here is
     case-insensitive."""
+    _ws_payload_gate(workspace_id, charter_hash=charter_hash,
+                     from_node_pub=from_node_pub,
+                     invitee_agent_key=invitee_agent_key)
     return (b"workspace-countersign|" + str(workspace_id).encode() + b"|"
             + charter_hash.lower().encode() + b"|" + from_node_pub.lower().encode() + b"|"
             + invitee_agent_key.lower().encode())
@@ -731,6 +753,7 @@ def _leave_payload(workspace_id: int, member_key: str) -> bytes:
     node vouched for its own agent's exit. Covers only the workspace id
     as known on the home node and the departing member key — the goodbye
     is a goodbye, no reason strings in v1."""
+    _ws_payload_gate(workspace_id, member_key=member_key)
     return (b"workspace-leave|" + str(workspace_id).encode() + b"|"
             + member_key.lower().encode())
 
@@ -2185,6 +2208,7 @@ def _removed_payload(workspace_id: int, member_key: str) -> bytes:
     strike the receipt on the invitee's side. Covers the home workspace
     id and the struck member key — the notice carries no reason in v1,
     just the closed door."""
+    _ws_payload_gate(workspace_id, member_key=member_key)
     return (b"workspace-removed|" + str(workspace_id).encode() + b"|"
             + member_key.lower().encode())
 
