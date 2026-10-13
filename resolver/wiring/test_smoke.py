@@ -437,17 +437,17 @@ def _test_udp_whole_datagram():
 
         def sendto(self, packet, target):
             txid = struct.unpack(">H", packet[:2])[0]
-            # one A answer whose owner is a long UNCOMPRESSED name
-            # (577 bytes of labels): a genuine >512 reply the daemon's
-            # shape allows — zero padding would be trailing bytes,
-            # which smoke now refuses (see 5w)
-            long_name = (b"\x3f" + b"a" * 63) * 9 + b"\x00"
+            # forty A answers, each owned by a pointer back to the
+            # question name: a genuine >512 reply the daemon's shape
+            # allows — zero padding would be trailing bytes, which
+            # smoke now refuses (see 5w), and a long unrelated owner
+            # would be a stranger's record, refused likewise (see 5y)
+            one = (struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                   + _socket.inet_aton("10.9.8.7"))
             canned["resp"] = (
-                struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                struct.pack(">HHHHHH", txid, 0x8500, 1, 40, 0, 0)
                 + packet[12:]
-                + long_name
-                + struct.pack(">HHIH", 1, 1, 120, 4)
-                + _socket.inet_aton("10.9.8.7"))
+                + one * 40)
             return len(packet)
 
         def recvfrom(self, n):
@@ -461,7 +461,7 @@ def _test_udp_whole_datagram():
                                     "127.0.0.1", 5399, timeout=1.0)
     finally:
         _socket.socket = real_socket
-    check("oversize reply -> _query answers", rcode == 0 and an == 1,
+    check("oversize reply -> _query answers", rcode == 0 and an == 40,
           f"rcode={rcode} an={an}")
     check("oversize reply -> recvfrom asked for a whole datagram (65535)",
           canned.get("n") == 65535, f"n={canned.get('n')}")
@@ -1598,6 +1598,99 @@ def _test_echoed_question():
               and "different question" in str(err), f"err={err}")
 
 
+# 5y. An answer must be owned by the asked name: client._parse_response
+#     refuses a collected record whose owner differs from the asked
+#     name (the daemon builds every answer with a pointer back to the
+#     question name), but both smoke wires only counted answers and
+#     walked them for the trailing check without reading the owner,
+#     so a packet answering alice's question with a record owned by
+#     mallory.cyberspace earned a PASS for a stranger's address.
+#     Both wires refuse an answer owned by a different name.
+def _test_answer_owner():
+    import socket as _socket
+    import threading
+
+    def _enc(name):
+        return b"".join(bytes([len(p)]) + p.encode("ascii")
+                        for p in name.split(".")) + b"\x00"
+
+    canned = {}
+
+    class _FakeUdp:
+        def __init__(self, family, kind):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, packet, target):
+            txid = struct.unpack(">H", packet[:2])[0]
+            canned["resp"] = (
+                struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                + packet[12:]
+                + _enc("mallory.cyberspace")
+                + struct.pack(">HHIH", 1, 1, 120, 4)
+                + _socket.inet_aton("10.9.8.7"))
+            return len(packet)
+
+        def recvfrom(self, n):
+            return canned["resp"], ("127.0.0.1", 5399)
+
+    real_socket = _socket.socket
+    _socket.socket = _FakeUdp
+    try:
+        smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399,
+                     timeout=1.0)
+        err = None
+    except Exception as exc:  # noqa: BLE001 - refusal is the check
+        err = exc
+    finally:
+        _socket.socket = real_socket
+    check("UDP stranger-owner answer -> _query refuses",
+          isinstance(err, ValueError)
+          and "owned by a different name" in str(err), f"err={err}")
+
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def _serve_once(srv=srv):
+        conn, _ = srv.accept()
+        with conn:
+            head = conn.recv(2)
+            (ln,) = struct.unpack(">H", head)
+            q = b""
+            while len(q) < ln:
+                q += conn.recv(ln - len(q))
+            (txid,) = struct.unpack(">H", q[:2])
+            resp = (struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                    + q[12:]
+                    + _enc("mallory.cyberspace")
+                    + struct.pack(">HHIH", 1, 1, 120, 4)
+                    + _socket.inet_aton("10.9.8.7"))
+            conn.sendall(struct.pack(">H", len(resp)) + resp)
+        srv.close()
+
+    threading.Thread(target=_serve_once, daemon=True).start()
+    try:
+        smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                         timeout=2.0)
+        err = None
+    except Exception as exc:  # noqa: BLE001 - refusal is the check
+        err = exc
+    check("TCP stranger-owner answer -> _query_tcp refuses",
+          isinstance(err, ValueError)
+          and "owned by a different name" in str(err), f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1641,6 +1734,7 @@ if __name__ == "__main__":
     _test_qd_count()
     _test_trailing_bytes()
     _test_echoed_question()
+    _test_answer_owner()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

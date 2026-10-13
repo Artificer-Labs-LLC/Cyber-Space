@@ -231,6 +231,37 @@ def _refuse_different_question(resp: bytes, name: str, qtype: int) -> None:
             "response answers a different question — response is not ours")
 
 
+def _refuse_stranger_answer(resp: bytes, qd: int, an: int,
+                            name: str) -> None:
+    """Refuse an answer owned by a different name, twin of
+    client._parse_response: the daemon builds every answer with a
+    pointer back to the question name, so a collected record owned
+    by another name never came from the daemon's verified answer
+    for this question — trusting it would let a correct question
+    carry a stranger's address. Name compared case-insensitively.
+    Walks question + answer headers only; type/class/rdlen parity
+    is a separate check, trailing is _refuse_trailing's."""
+    off = 12
+    for _ in range(qd):
+        off = _skip_name(resp, off)
+        if off + 4 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += 4  # qtype + qclass
+    for _ in range(an):
+        owner, off = _read_name(resp, off)
+        if owner.lower() != name.lower():
+            raise ValueError(
+                "response answer owned by a different name — "
+                "response is not ours")
+        if off + 10 > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        rdlen = struct.unpack_from(">H", resp, off + 8)[0]
+        off += 10
+        if off + rdlen > len(resp):
+            raise ValueError("truncated DNS response — response is not ours")
+        off += rdlen
+
+
 def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
     """Refuse bytes left over after the counted sections, twin of
     client._parse_response: neither daemon response builder ever
@@ -361,6 +392,9 @@ def _query(name: str, qtype: int, server: str, port: int,
     # question must be THIS one (name, qtype, class IN) — see
     # _refuse_different_question.
     _refuse_different_question(resp, name, qtype)
+    # Answer owner, twin of client._parse_response: every answer
+    # must be owned by the asked name — see _refuse_stranger_answer.
+    _refuse_stranger_answer(resp, qd, an, name)
     # Trailing bytes, twin of client._parse_response: the packet
     # must end exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)
@@ -447,6 +481,9 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # be THIS one (name, qtype, class IN) — see
     # _refuse_different_question.
     _refuse_different_question(resp, name, qtype)
+    # Answer owner, twin of _query above: every answer must be
+    # owned by the asked name — see _refuse_stranger_answer.
+    _refuse_stranger_answer(resp, qd, an, name)
     # Trailing bytes, twin of _query above: the packet must end
     # exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)
