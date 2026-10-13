@@ -118,6 +118,16 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     """
     if rcode not in _RCODE_NAMES:
         raise ValueError(f"unsupported rcode {rcode}")
+    # The header packs two caller-supplied fields the answer loop below
+    # never sees: the query id and the answer count. Both are uint16 on
+    # the wire; an out-of-range id (a hand-built query dict — parse_query
+    # only yields 0..65535) or more than 65535 answers escaped as
+    # struct.error from the header pack, the same ValueError-contract
+    # break the answer fields had. Range-check them here too.
+    if not 0 <= query["id"] <= 65535:
+        raise ValueError("bad query id")
+    if len(answers) > 65535:
+        raise ValueError("too many answers")
     for qtype, ttl, rdata in answers:
         # Range-check every field struct will pack, not just ttl's
         # floor: a ttl past the uint32 wire field or a qtype outside

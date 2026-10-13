@@ -202,6 +202,18 @@ check("build: qtype past uint16 raises ValueError, not struct.error",
       raises_valueerror(dns.build_response, q, [(70000, 300, b"\x7f\x00\x00\x01")]))
 check("build: negative qtype raises ValueError, not struct.error",
       raises_valueerror(dns.build_response, q, [(-1, 300, b"\x7f\x00\x00\x01")]))
+check("build: query id past uint16 raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, dict(q, id=70000), []))
+check("build: negative query id raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, dict(q, id=-1), []))
+check("build: max uint16 query id builds",
+      dns.build_response(dict(q, id=65535), [])[0:2] == b"\xff\xff")
+check("build: answer count past uint16 raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, q,
+                        [(1, 300, b"\x7f\x00\x00\x01")] * 65536))
+check("build: max uint16 answer count builds",
+      int.from_bytes(dns.build_response(
+          q, [(1, 300, b"\x7f\x00\x00\x01")] * 65535)[6:8], "big") == 65535)
 
 # --- error_response ---------------------------------------------------------
 
