@@ -2671,8 +2671,21 @@ def _seed_bootstrap() -> int:
                 continue
             if sender_pub == _NODE_PUB:
                 continue  # seeding from our own URL is a no-op
-            name = str(body.get("name", ""))
-            if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+            # Only real strings are roster fields (twin of the
+            # /fed/announce seat's gate in federation.py): str() here
+            # aliased a seed-carried JSON number into the field — a
+            # numeric name stringified to the valid label "12345" and
+            # was stored as that peer name, int network/version as
+            # their digit strings. Absent fields keep their defaults;
+            # a present non-string refuses the seed (skip, never raise).
+            name = body.get("name", "")
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+                continue
+            network = body.get("network", "cybernet")
+            if not isinstance(network, str):
+                continue
+            version = body.get("version", "0.1.0")
+            if not isinstance(version, str):
                 continue
             now = datetime.now(timezone.utc).isoformat()
             with _db_lock, _db() as conn:
@@ -2688,8 +2701,8 @@ def _seed_bootstrap() -> int:
                          announced_at=peers.announced_at  -- seed never re-announces
                     """,
                     (
-                        sender_pub, name, str(body.get("network", "cybernet")),
-                        str(body.get("version", "0.1.0")),
+                        sender_pub, name, network,
+                        version,
                         int(bool(body.get("genesis", False))),
                         "[]", node_url, "", now,
                     ),
