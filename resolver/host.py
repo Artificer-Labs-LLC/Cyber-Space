@@ -409,15 +409,32 @@ def _hostd_refresh_warnings() -> list[str]:
     return []
 
 
+# Mirror-response read bound, twin of mint_name._MIRROR_RESP_MAX /
+# rotate_name._MIRROR_RESP_MAX / core._PEER_RESP_MAX: every other depth
+# POST seat reads its mirror/peer reply under this same 64KB cap and
+# treats oversize as silence. This seat was the last exception — it
+# judged the reply by status alone and never read the body at all, so
+# an oversize 200 body (a mirror, or anything answering for it,
+# streaming without end) counted as an accepted announce. A legit
+# /fed/announce verdict is a few hundred bytes; an oversize body is
+# never that verdict, so it reads as not-accepted, exactly like every
+# other bad mirror answer at this seat.
+_MIRROR_RESP_MAX = 65536
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
-    """Signed POST to the mirror. True on HTTP 200; anything else
-    (4xx/5xx/timeout) is silence, never a crash. Never raises."""
+    """Signed POST to the mirror. True on HTTP 200 with a body under
+    the read bound; anything else (4xx/5xx/timeout/oversize) is
+    silence, never a crash. Never raises."""
     try:
         req = urllib.request.Request(
             mirror_url + path, data=json.dumps(env).encode(),
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+            raw = resp.read(_MIRROR_RESP_MAX + 1)
+            return len(raw) <= _MIRROR_RESP_MAX
     except Exception:
         return False
 
