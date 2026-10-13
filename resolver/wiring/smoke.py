@@ -191,6 +191,13 @@ def _query(name: str, qtype: int, server: str, port: int,
     (rtxid, flags, qd, an, ns, ar) = struct.unpack(">HHHHHH", resp[:12])
     if rtxid != txid:
         raise ValueError("txid mismatch — response is not ours")
+    # A matching txid alone never sufficed (twin of client._parse_response):
+    # a packet with the QR bit clear is a query, not an answer — the daemon
+    # builds every reply with QR set (dns.build_response/error_response),
+    # so a QR-clear packet claiming answers is not its word, however
+    # well-formed, and must not earn this smoke a PASS.
+    if not flags & 0x8000:
+        raise ValueError("not a response (QR bit clear) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -226,6 +233,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     (rtxid, flags, qd, an, ns, ar) = struct.unpack(">HHHHHH", resp[:12])
     if rtxid != txid:
         raise ValueError("txid mismatch — response is not ours")
+    # QR bit, twin of _query above (and client._parse_response): a
+    # QR-clear packet is a query, not the daemon's answer.
+    if not flags & 0x8000:
+        raise ValueError("not a response (QR bit clear) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
