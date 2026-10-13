@@ -168,6 +168,21 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
     (verbatim send, reply passthrough, SERVFAIL on failure) is covered by
     the monkeypatched-socket harness instead. Exercise the real wire path
     on the HQ node when wiring it up."""
+    # The query is caller-supplied at this library seat (handle_query
+    # passes a parse_query-proved packet, but a direct caller can pass
+    # anything): a non-bytes raw was carried to sendto verbatim (a stub
+    # socket could put a str/list on the wire), a sub-header raw was
+    # sent too, and a 2-byte raw whose bytes matched the reply's txid
+    # escaped as IndexError from the opcode check's raw[2] — IndexError
+    # is not among the failures the except below reads as SERVFAIL, so
+    # it broke this function's never-raises SERVFAIL contract. Only a
+    # real bytes/bytearray packet holding at least the 12-byte header
+    # (dns.parse_query's floor, twin of the _check_packet/_check_walk
+    # gates) is a query to forward; anything else is a failed forward,
+    # refused here before any socket is touched. error_response reads
+    # the same malformed raw safely (qid 0 when no header is readable).
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) < 12:
+        return error_response(raw, 2)
     try:
         family, target, expected = _upstream_target(upstream)
         sock = socket.socket(family, socket.SOCK_DGRAM)

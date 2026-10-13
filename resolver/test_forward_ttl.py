@@ -437,6 +437,43 @@ def test_forward_malformed_upstream_servfail():
         check(f"forward: _upstream_target refuses {upstream!r}", refused)
 
 
+def test_forward_malformed_raw_servfail():
+    """A malformed raw query is a failed forward, not a raise or a
+    wire packet: before, _forward carried a non-bytes raw to sendto
+    verbatim and sent a sub-header raw too, and a 2-byte raw whose
+    bytes matched the canned reply's txid escaped as IndexError from
+    the opcode check's raw[2] — IndexError is not a failure the
+    SERVFAIL guard reads. All SERVFAIL now, with no socket created;
+    the valid passthrough tests above are the control."""
+    raw = _query_packet("example.com")
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 1, 0, 0)
+              + raw[12:] + _a_record())
+    created = []
+
+    def factory(*a, **k):
+        created.append(1)
+        return _CannedSocket(canned)
+
+    bad = [
+        b"\x43\x21",          # txid-matching 2-byte packet (IndexError)
+        b"\x43", b"",         # sub-header lengths
+        raw[:11],             # 11 bytes: a header minus one byte
+        "example.com", None, 123, 1.5, True,
+        [0x43, 0x21] + [0] * 10,  # a 12-item list is not a packet
+    ]
+    for item in bad:
+        resp = _with_socket_factory(
+            factory,
+            lambda item=item: answer._forward(item, ("8.8.8.8", 53)))
+        check(f"forward: malformed raw {item!r:.40} -> SERVFAIL (rcode 2)",
+              len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
+    check("forward: malformed raw never creates a socket", not created,
+          f"created {len(created)}")
+    check("forward: 2-byte raw SERVFAIL echoes its readable qid",
+          answer._forward(b"\x43\x21", ("8.8.8.8", 53))[:2] == b"\x43\x21")
+
+
 def test_forward_failure_servfail():
     """A dead upstream is a SERVFAIL, never an invented answer."""
     raw = _query_packet("example.com")
@@ -531,6 +568,7 @@ def main():
     test_forward_malformed_sections_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_malformed_upstream_servfail()
+    test_forward_malformed_raw_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()
     test_ttl_remaining()
