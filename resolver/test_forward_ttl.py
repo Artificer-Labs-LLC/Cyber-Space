@@ -100,7 +100,8 @@ def _with_socket_factory(factory, fn):
 def test_forward_passthrough():
     """The query leaves byte-for-byte and the reply returns byte-for-byte."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"upstream says hi"
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
+              + raw[12:] + b"upstream says hi")
     resp = _with_socket_factory(
         lambda: _CannedSocket(canned),
         lambda: answer.handle_query(
@@ -113,7 +114,8 @@ def test_forward_v6_upstream_uses_inet6():
     """An IPv6-literal upstream is dialed on an AF_INET6 socket (an
     AF_INET sendto to it would raise and SERVFAIL every forward)."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"v6 upstream says hi"
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
+              + raw[12:] + b"v6 upstream says hi")
     seen = {}
 
     def factory(family, *a, **k):
@@ -139,7 +141,8 @@ def test_forward_hostname_upstream_resolves_family():
     was never reached and SERVFAILed. Now dials _upstream_target via
     getaddrinfo AF_UNSPEC: AF_INET6 socket to the resolved sockaddr."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"v6-host upstream says hi"
+    canned = (struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
+              + raw[12:] + b"v6-host upstream says hi")
     seen = {}
     sock_inst = _CannedSocket(canned, source=("::1", 53))
 
@@ -279,7 +282,8 @@ def test_forward_wrong_opcode_servfail():
           f"got resp={resp!r}")
     raw1 = bytearray(_query_packet("example.com"))
     raw1[2:4] = struct.pack(">H", 0x0900)  # opcode 1 + RD
-    canned1 = struct.pack(">HHHHHH", 0x4321, 0x8880, 0, 0, 0, 0) + b"opcode-1 answer"
+    canned1 = (struct.pack(">HHHHHH", 0x4321, 0x8880, 1, 0, 0, 0)
+               + bytes(raw1)[12:] + b"opcode-1 answer")
     resp1 = _with_socket_factory(
         lambda: _CannedSocket(canned1),
         lambda: answer.handle_query(
@@ -287,6 +291,45 @@ def test_forward_wrong_opcode_servfail():
             upstream=("8.8.8.8", 53)))
     check("forward: matching non-zero opcode reply passes through untouched",
           resp1 == canned1, f"got {resp1!r}")
+
+
+def test_forward_wrong_question_servfail():
+    """A reply echoing a DIFFERENT question answers another question:
+    before, _forward checked source, txid, QR, header length and opcode
+    but never the echoed question, so a right-source, right-txid reply
+    naming another name (or family, or class — or no question at all,
+    or a truncated one) was relayed byte-for-byte as this query's
+    answer. All SERVFAIL now; the passthrough tests (a reply echoing
+    the asked question) are the control."""
+    raw = _query_packet("example.com")
+    hdr = struct.pack(">HHHHHH", 0x4321, 0x8180, 1, 0, 0, 0)
+    cases = [
+        ("different name", hdr + _query_packet("other.com")[12:]),
+        ("different qtype", hdr + _query_packet("example.com", qtype=28)[12:]),
+        ("different qclass",
+         hdr + raw[12:-2] + struct.pack(">H", 3)),
+        ("no question",
+         struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"no question"),
+        ("truncated question", hdr + b"\x07exa"),
+    ]
+    for label, canned in cases:
+        resp = _with_socket_factory(
+            lambda c=canned: _CannedSocket(c),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("8.8.8.8", 53)))
+        check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
+              resp != canned and len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
+    # Case-insensitive name echo is a genuine echo, not a mismatch.
+    upper = hdr + _query_packet("EXAMPLE.COM")[12:]
+    resp = _with_socket_factory(
+        lambda: _CannedSocket(upper),
+        lambda: answer.handle_query(
+            raw, mirror_url="http://mirror.invalid",
+            upstream=("8.8.8.8", 53)))
+    check("forward: uppercase-echoed question passes through untouched",
+          resp == upper, f"got {resp!r}")
 
 
 def test_forward_unresolvable_hostname_servfail():
@@ -401,6 +444,7 @@ def main():
     test_forward_qr_clear_servfail()
     test_forward_short_header_servfail()
     test_forward_wrong_opcode_servfail()
+    test_forward_wrong_question_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()

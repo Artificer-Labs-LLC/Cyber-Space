@@ -25,7 +25,7 @@ import socket
 import urllib.parse
 from datetime import datetime, timezone
 
-from .dns import build_response, error_response, parse_query
+from .dns import _read_name, build_response, error_response, parse_query
 
 # Imported late on purpose: core.py is the six-step resolver's home.
 # Its import has no network side effects (threads spawn only on demand).
@@ -186,6 +186,34 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             # reply is a failed forward: SERVFAIL, never a borrowed
             # answer.
             if reply[2] & 0x78 != raw[2] & 0x78:
+                return error_response(raw, 2)
+            # The reply must echo THIS query's question: exactly one
+            # question, naming the asked name (case-insensitively) with
+            # the asked type and class (twin of client._parse_response's
+            # different-question refusal). Before, a right-source,
+            # right-txid, QR-set, right-opcode reply whose question
+            # named another name or family was relayed byte-for-byte —
+            # its answers belong to another question. A generic
+            # forwarder relays many names and families, so the rule is
+            # echo, not any fixed value. A reply with no question, a
+            # truncated question, or a mismatched one is a failed
+            # forward: SERVFAIL, never a borrowed answer.
+            if reply[4:6] != b"\x00\x01":
+                return error_response(raw, 2)
+            try:
+                asked = parse_query(raw)
+                seen_name, seen_off = _read_name(reply, 12)
+                if seen_off + 4 > len(reply):
+                    return error_response(raw, 2)
+                seen_qtype, seen_qclass = (
+                    int.from_bytes(reply[seen_off:seen_off + 2], "big"),
+                    int.from_bytes(reply[seen_off + 2:seen_off + 4], "big"),
+                )
+            except ValueError:
+                return error_response(raw, 2)
+            if (seen_name.lower() != asked["qname"].lower()
+                    or seen_qtype != asked["qtype"]
+                    or seen_qclass != asked["qclass"]):
                 return error_response(raw, 2)
             return bytes(reply)
         finally:
