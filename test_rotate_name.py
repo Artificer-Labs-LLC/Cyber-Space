@@ -205,6 +205,58 @@ if _st != "updated" or "b" * 64 not in _txt:
     print("FAIL: _refresh_hostd_env_text valid update changed")
     fails += 1
 
+# _installed_env_note: a malformed argument must read as a warning
+# note, never AttributeError from .exists()/.lower() — promote calls
+# it AFTER the keys have moved, so a crash would swallow a successful
+# promotion's report. A non-string key/label can match nothing: the
+# generic different/no-key warning. A non-path path: a warning. A
+# string path is coerced and reads exactly like the Path. Absent
+# file still reads "" even with malformed keys.
+import tempfile as _tempfile
+from pathlib import Path as _Path
+with _tempfile.TemporaryDirectory() as _td:
+    _ip = _Path(_td) / "hostd.env"
+    _ip.write_text("CYBERNET_HOSTED_NAME=foo\n"
+                   "CYBERNET_NAME_PRIVKEY=" + "b" * 64 + "\n")
+    if "already holds the new key" not in rotate_name._installed_env_note(
+            _ip, "a" * 64, "b" * 64, "foo"):
+        print("FAIL: _installed_env_note valid current changed")
+        fails += 1
+    if "still holds the OLD key" not in rotate_name._installed_env_note(
+            str(_ip), "b" * 64, "c" * 64, "foo"):
+        print("FAIL: _installed_env_note string path / valid old changed")
+        fails += 1
+    if "NOT this name's env" not in rotate_name._installed_env_note(
+            _ip, "a" * 64, "b" * 64, "bar"):
+        print("FAIL: _installed_env_note valid wrong-name changed")
+        fails += 1
+    for _args in ((_ip, "a" * 64, 123), (_ip, "a" * 64, None),
+                  (_ip, 123, "b" * 64), (_ip, None, "b" * 64),
+                  (_ip, "a" * 64, "b" * 64, 123),
+                  (_ip, "a" * 64, "b" * 64, None if False else b"foo")):
+        try:
+            _note = rotate_name._installed_env_note(*_args)
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL: _installed_env_note{_args!r} raised {type(e).__name__}: {e}")
+            fails += 1
+            continue
+        if "different or no CYBERNET_NAME_PRIVKEY" not in _note:
+            print(f"FAIL: _installed_env_note{_args!r} -> {_note!r}, want generic warning")
+            fails += 1
+    for _bad_path in (None, 123, ["x"], b"/tmp/x"):
+        try:
+            _note = rotate_name._installed_env_note(_bad_path, "a" * 64, "b" * 64)
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL: _installed_env_note path {_bad_path!r} raised {type(e).__name__}: {e}")
+            fails += 1
+            continue
+        if "not a path" not in _note:
+            print(f"FAIL: _installed_env_note path {_bad_path!r} -> {_note!r}, want path warning")
+            fails += 1
+    if rotate_name._installed_env_note(_Path(_td) / "absent.env", 123, None) != "":
+        print("FAIL: _installed_env_note absent file must stay ''")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

@@ -372,6 +372,23 @@ def _installed_env_note(installed_path: Path, old_hex: str,
     the key comparison is meaningless for this rotation — the file is
     another name's hostd env, 're-install over it' would evict that
     name, and 'restart hostd' would do nothing for this one. Say so."""
+    # Every argument is caller-supplied at this library seat (promote
+    # passes a Path and .hex() strings, but a direct caller can pass
+    # anything): a non-path crashed .exists(), and a non-string new
+    # key or label crashed .lower() AFTER the file was read — in
+    # promote that crash lands after the keys have already moved, so
+    # it would swallow a successful promotion's report. A string path
+    # is a legitimate way to name the file: coerce it. Anything else
+    # malformed reads as a key we cannot account for: the generic
+    # different/no-key warning below, never a crash, never a claim
+    # that the installed env holds either key.
+    if isinstance(installed_path, str):
+        installed_path = Path(installed_path)
+    if not isinstance(installed_path, Path):
+        return ("; WARNING: installed hostd env path is not a path — "
+                "check the installed hostd env's "
+                "CYBERNET_NAME_PRIVKEY manually; hostd reads that "
+                "file, not the staging env")
     if not installed_path.exists():
         return ""
     try:
@@ -387,6 +404,11 @@ def _installed_env_note(installed_path: Path, old_hex: str,
             cur = line.split("=", 1)[1].strip().lower()
         elif line.startswith("CYBERNET_HOSTED_NAME="):
             hosted = line.split("=", 1)[1].strip().lower()
+    if not (isinstance(old_hex, str) and isinstance(new_hex, str)
+            and isinstance(label, str)):
+        return (f"; WARNING: installed hostd env at {installed_path} "
+                f"holds a different or no CYBERNET_NAME_PRIVKEY — "
+                f"NOT touched; check it manually, hostd reads that file")
     if label and hosted is not None and hosted != label.lower():
         return (f"; NOTE: installed hostd env at {installed_path} hosts "
                 f"{hosted}.cyberspace, not {label.lower()}.cyberspace — "
