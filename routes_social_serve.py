@@ -1131,7 +1131,16 @@ async def names_claim(request: Request):
     if len(node_pubkey) != 64 or len(signature) != 128:
         raise HTTPException(status_code=400, detail="node_pubkey must be 64 hex chars, signature 128 hex chars.")
     try:
-        bytes.fromhex(node_pubkey); bytes.fromhex(signature)
+        # Decoded-length gate, twin of verify_name 69ba6b5 / dial.plan
+        # 9a67588 and of the sibling rotate route below (len(raw)*2 ==
+        # want): bytes.fromhex ignores embedded spaces, so a spaced
+        # 64-char pubkey decoded to 31 bytes (a spaced signature to
+        # 63), passed this parse, and checkvalid's decoded-length gate
+        # read it as "Signature does not verify" when the key/sig
+        # itself was malformed.
+        if (len(bytes.fromhex(node_pubkey)) != 32
+                or len(bytes.fromhex(signature)) != 64):
+            raise ValueError("decoded length")
     except Exception:
         raise HTTPException(status_code=400, detail="Malformed key or signature.")
     try:
