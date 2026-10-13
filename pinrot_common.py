@@ -196,6 +196,7 @@ def reset_rates():
         core_serve._hits.clear()
         core._gossip_verify_times.clear()
         core._catchup_times.clear()
+        core._catchup_small_times.clear()
 
 
 src_nf = open(os.path.join(HERE, "name_fork.py")).read()

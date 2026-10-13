@@ -1219,6 +1219,11 @@ def birth_contest_needs_origin() -> bool:
     return True
 
 
+class PrenormalizedRequired(RuntimeError):
+    """A lock-holding entry point was called without certs normalized
+    OUTSIDE _db_lock. Programming error, never a peer-reachable outcome."""
+
+
 def contiguous(rec, pin, seq) -> bool:
     """The signer is the current pin and seq is head+1. The non-contiguous
     mutant returns True."""
@@ -1228,7 +1233,11 @@ def contiguous(rec, pin, seq) -> bool:
 def consider_rotation(conn: sqlite3.Connection, rec: dict,
                       sender_pub: str | None = None, prenormalized=None) -> str:
     """prenormalized: [_norm_cert(rec)] computed by the caller OUTSIDE
-    _db_lock. Without it the cert is refused."""
+    _db_lock. Without it this RAISES before any read, normalize or verify
+    (Examiner/Cipher a8e70392, Bulwark N1): there is no inline fallback."""
+    if prenormalized is None:
+        raise PrenormalizedRequired("consider_rotation needs prenormalized "
+                                    "certs computed outside _db_lock")
     result = ingest_rotation_round(conn, [rec], sender_pub,
                                    prenormalized=prenormalized)
     name = str((rec or {}).get("name", "")).strip().lower()
@@ -1260,7 +1269,9 @@ def path_accept_rule(conn, name, path, prenormalized=None) -> list | None:
         # The caller (core.pull_name_chain) charges and normalizes OUTSIDE
         # _db_lock and passes the results in.
         # No inline fallback (never _norm_cert under _db_lock).
-        rec = prenormalized[i] if prenormalized is not None else None
+        if prenormalized is None:
+            raise PrenormalizedRequired("path_accept_rule needs prenormalized certs")
+        rec = prenormalized[i]
         if rec is None or rec["name"] != name:
             return None
         recs.append(rec)
@@ -1279,11 +1290,16 @@ def accept_catchup(conn, name, path, sender_pub=None,
                    now: float | None = None, prenormalized=None) -> str:
     """Apply a fetched path whole. Then re-judge pending certs that now
     link. Returns 'accepted', 'refused', 'contested', or 'rate-held'."""
+    if prenormalized is None:
+        # Examiner/Cipher a8e70392: no inline fallback. Raise before any
+        # read, normalize or verify.
+        raise PrenormalizedRequired("accept_catchup needs prenormalized "
+                                    "certs computed outside _db_lock")
     ensure_schema(conn)
     now = time.time() if now is None else now
     if is_contested(conn, name):
         return "contested"
-    if prenormalized is not None and len(prenormalized) != len(path):
+    if len(prenormalized) != len(path):
         return "refused"
     recs = path_accept_rule(conn, name, path, prenormalized)
     if recs is None:

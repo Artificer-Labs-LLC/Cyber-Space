@@ -2586,10 +2586,29 @@ def pull_name_chain(sender_pub: str, name: str, fetch=None, now=None) -> str:
 # cert is parsed: first the sending peer's own bucket (the same
 # namefork:<peer> bucket gossip uses, 32 / 60 s), then catch-up's reserved
 # slice of the global budget (64 of the 256 / 60 s), then the global budget.
-# Catch-up can never take more than its slice, so gossip keeps >= 192.
+#
+# N2 (Bulwark 6c9ade34, Cipher a8e70392): junk peers that send tip-linked
+# pages with bad signatures pass classify_page cheaply and are charged, so
+# two 32-cert junk pages filled the 64 slice and an honest 1-cert catch-up
+# was rate-limited for 60 s. Fix: a SMALL-PULL RESERVE of
+# CATCHUP_SMALL_RESERVE units that is NOT part of the shared slice. Only
+# charges of n <= CATCHUP_SMALL_MAX (1-2 cert paths) may draw on it, and
+# only once the shared slice cannot take them; each sender may hold at
+# most CATCHUP_SMALL_PER_SENDER reserve units per 60 s, so a few junk peers
+# sending 1-cert junk cannot drain it alone. Catch-up therefore never
+# takes more than slice + reserve (72), and gossip keeps >= 184 of 256.
+#
+# Per-sender share of the slice stays at one CATCHUP_PAGE (32), not ~16:
+# a 16 cap would make every full 32-cert page unchargeable and break the
+# board's 32/page paging ruling. The reserve alone carries Bulwark's row
+# (2 and 3 junk peers x 32 -> honest 1-cert pull accepted).
 CATCHUP_PER_SENDER = 32
 CATCHUP_GLOBAL_SLICE = 64
+CATCHUP_SMALL_RESERVE = 8
+CATCHUP_SMALL_MAX = 2
+CATCHUP_SMALL_PER_SENDER = 2
 _catchup_times = deque()
+_catchup_small_times: dict = {}   # sender -> deque of reserve charges
 _clock = time.monotonic   # patchable (the paging belt's fake clock)
 
 
@@ -2598,26 +2617,49 @@ def _catchup_sender_ok(q, n) -> bool:
     return len(q) + n <= CATCHUP_PER_SENDER
 
 
+def _small_reserve_ok(sender_q, n) -> bool:
+    """N2 reserve check: a 1-2 cert path, reserve not full, this sender
+    under its reserve share. Patchable: the belt's mutant returns False."""
+    used = sum(len(d) for d in _catchup_small_times.values())
+    return (n <= CATCHUP_SMALL_MAX and used + n <= CATCHUP_SMALL_RESERVE
+            and len(sender_q) + n <= CATCHUP_SMALL_PER_SENDER)
+
+
 def charge_catchup(sender_pub: str, n: int) -> str | None:
     """None when n units were charged; else which bucket refused
-    ('sender', 'slice', 'global'). Nothing is charged on refusal."""
+    ('sender', 'slice', 'global'). Nothing is charged on refusal. When the
+    shared slice is full, a 1-2 cert charge may come from the small-pull
+    reserve instead (N2)."""
     now = _clock()
     cutoff = now - GOSSIP_VERIFY_GLOBAL_WINDOW
+    sender = str(sender_pub).lower()
     with _db_lock:   # O(n) deque bookkeeping only; no parse, no verify
-        q = _hits[f"namefork:{str(sender_pub).lower()}"]
+        q = _hits[f"namefork:{sender}"]
         while q and now - q[0] > 60.0:
             q.popleft()
         for d in (_catchup_times, _gossip_verify_times):
             while d and d[0] < cutoff:
                 d.popleft()
+        for k in list(_catchup_small_times):
+            d = _catchup_small_times[k]
+            while d and d[0] < cutoff:
+                d.popleft()
+            if not d:
+                del _catchup_small_times[k]
         if not _catchup_sender_ok(q, n):
             return "sender"
+        use_reserve = False
         if len(_catchup_times) + n > CATCHUP_GLOBAL_SLICE:
-            return "slice"
+            if not _small_reserve_ok(_catchup_small_times.get(sender, ()), n):
+                return "slice"
+            use_reserve = True
         if len(_gossip_verify_times) + n > GOSSIP_VERIFY_GLOBAL_LIMIT:
             return "global"
         q.extend([now] * n)
-        _catchup_times.extend([now] * n)
+        if use_reserve:
+            _catchup_small_times.setdefault(sender, deque()).extend([now] * n)
+        else:
+            _catchup_times.extend([now] * n)
         _gossip_verify_times.extend([now] * n)
     return None
 

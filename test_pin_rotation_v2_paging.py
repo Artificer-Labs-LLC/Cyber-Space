@@ -342,14 +342,18 @@ with patched(core, "_clock", clk), patched(nf, "_wall", clk), \
             c2 = nf.mint_cert(nm2, k2, pub(seed()), 1, head(nm2)[2], issued_at=ISSUED)
             with core._db_lock, core._db() as c:
                 r1 = nf.ingest_rotation_round(c, [c2], PX, now=tick(1))
-                r2 = nf.accept_catchup(c, nm2, [c2], PX, now=tick(1))
+                try:
+                    nf.accept_catchup(c, nm2, [c2], PX, now=tick(1))
+                    r2 = "no-raise"
+                except nf.PrenormalizedRequired:
+                    r2 = "raised"
         ok = seen["held"] == 0 and seen["calls"] >= 6 \
-            and r1["outcomes"] == ["refused-invalid"] and r2 == "refused"
+            and r1["outcomes"] == ["refused-invalid"] and r2 == "raised"
         return ok, (seen, r1["outcomes"], r2)
 
     real, info = run_lock()
-    check("_db_lock not held in any _norm_cert call (tip pages, fork page); both "
-          "former inline sites refuse unnormalized input", real, info)
+    check("_db_lock not held in any _norm_cert call (tip pages, fork page); "
+          "ingest refuses and accept_catchup RAISES on unnormalized input", real, info)
     _acc = nf.accept_catchup
 
     def norm_in_lock(conn, name, path, sender_pub=None, now=None, prenormalized=None):
