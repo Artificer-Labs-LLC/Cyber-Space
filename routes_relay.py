@@ -362,8 +362,17 @@ async def relay_answer(request: Request, body: dict):
         raise HTTPException(
             status_code=400, detail="name_key_sig must be 128 hex chars.")
     try:
-        bytes.fromhex(sig)
+        raw_sig = bytes.fromhex(sig)
     except Exception:
+        raise HTTPException(
+            status_code=400, detail="name_key_sig must be 128 hex chars.")
+    # Decoded-length gate, same as hold_open/rendezvous: bytes.fromhex
+    # ignores embedded spaces, so a spaced 128-char string decodes to
+    # fewer than 64 bytes — not a signature, and no dialer can verify
+    # it (checkvalid refuses a non-64-byte sig decode). Storing it
+    # would burn this session's one-shot answer slot on bytes that
+    # can never prove anything; refuse it like any malformed sig.
+    if len(raw_sig) != 64:
         raise HTTPException(
             status_code=400, detail="name_key_sig must be 128 hex chars.")
     with _relay_lock:
