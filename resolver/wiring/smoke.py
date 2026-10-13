@@ -227,6 +227,12 @@ def _query(name: str, qtype: int, server: str, port: int,
     # RA-set packet is a recursive resolver's answer, not the daemon's.
     if flags & 0x0080:
         raise ValueError("response claims recursion available (RA set) — response is not ours")
+    # Z bit, twin of client._parse_response: a packet with Z set uses
+    # a header bit reserved for future use — neither daemon response
+    # builder ever sets Z (its replies are QR|AA|RD echo|rcode only),
+    # so a Z-set packet is not one of the daemon's replies.
+    if flags & 0x0040:
+        raise ValueError("response sets the reserved Z bit — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -287,6 +293,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # was available; the authoritative-only daemon never sets RA.
     if flags & 0x0080:
         raise ValueError("response claims recursion available (RA set) — response is not ours")
+    # Z bit, twin of _query above: a Z-set packet uses a reserved
+    # header bit; neither daemon response builder ever sets Z.
+    if flags & 0x0040:
+        raise ValueError("response sets the reserved Z bit — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
