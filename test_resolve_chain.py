@@ -109,6 +109,32 @@ if resolve_chain._label("  Foo-Bar ") != "foo-bar":
     print("FAIL: _label valid value changed")
     fails += 1
 
+# Regression-note belt: hops compare PARSED instants, never strings.
+# A canonical stamp has two spellings for one instant ("...Z" vs
+# "...+00:00"); string order puts "+00:00" first, so a same-instant
+# second hop read as regressed in one spelling order only. Both
+# orders must read as a tie (no note), and a true 1s regression must
+# still be noted in either spelling.
+_SK_B2 = secrets.token_bytes(32)
+_PK_B2 = publickey(_SK_B2).hex()
+_PK_C2 = publickey(secrets.token_bytes(32)).hex()
+for first, second, want_note in (
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:00+00:00", False),
+        ("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00Z", False),
+        ("2026-01-01T00:00:02Z", "2026-01-01T00:00:01+00:00", True),
+        ("2026-01-01T00:00:02+00:00", "2026-01-01T00:00:01Z", True),
+        ("2026-01-01T00:00:00Z", "2026-01-01T00:00:01+00:00", False)):
+    _r0 = rotate_name.mint_rotation("foo", SK_A, _PK_B2, issued_at=first)
+    _r1 = rotate_name.mint_rotation("foo", _SK_B2, _PK_C2,
+                                    issued_at=second)
+    _, _hops = resolve_chain.walk(
+        {"name": "foo", "rotations": [_r0, _r1]}, "foo")
+    _noted = bool(_hops[1]["note"])
+    if _noted != want_note:
+        print(f"FAIL: regression note {first!r} -> {second!r}: "
+              f"noted={_noted}, want {want_note}")
+        fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)

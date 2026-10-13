@@ -52,7 +52,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mint_name import _valid_mirror  # noqa: E402
-from rotate_name import verify_rotation  # noqa: E402
+from rotate_name import verify_rotation, _parse_canonical_ts  # noqa: E402
 from verify_name import verify as verify_binding, _normalize_expected, _valid_label  # noqa: E402
 
 _LABEL_MAX = 63
@@ -167,12 +167,20 @@ def walk(doc: dict, name: str, expect_original_key: str | None = None):
                 f"hop {i - 1}'s new key {prev_new[:16]}... — lineage gap")
         note = ""
         issued = row["issued_at"]
-        if prev_issued is not None and issued < prev_issued:
+        # Regression compares PARSED instants, never strings (twin of
+        # core._name_claim_beats' M-1 rule): a canonical stamp has two
+        # spellings for one instant ("...Z" vs "...+00:00"), and string
+        # order puts "+00:00" before "Z", so two hops issued at the
+        # SAME instant read as a regression in one spelling order and
+        # clean in the other. verify_rotation above already held this
+        # stamp to the canonical shape, so the parse cannot fail here.
+        issued_dt = _parse_canonical_ts(issued)
+        if prev_issued is not None and issued_dt < prev_issued:
             note = "issued time regressed vs previous hop"
         hops.append({"old_pubkey": old, "new_pubkey": new,
                      "issued_at": issued, "note": note})
         prev_new = new
-        prev_issued = issued
+        prev_issued = issued_dt
     return prev_new, hops
 
 
