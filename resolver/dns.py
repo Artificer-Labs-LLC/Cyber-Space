@@ -84,6 +84,17 @@ def parse_query(data: bytes) -> dict:
             f"query carries counted sections (an={ancount}, "
             f"ns={nscount}, ar={arcount}) this codec never reads")
     qname, off = _read_name(data, 12)
+    # The name itself must fit the DNS wire limit (255 octets in
+    # uncompressed form: one length byte per label plus the root zero
+    # — len(qname) + 2 for a non-root name). client._build_query
+    # refuses to BUILD a name past that limit, but this codec accepted
+    # one: five 63-byte labels parse to a 319-character name no legal
+    # packet can carry, which was then answered or forwarded as if it
+    # were a name. A name expanded through a pointer is judged by its
+    # expanded length — the pointer is an encoding of that name, not
+    # a shorter name. Refuse rather than half-parse.
+    if qname and len(qname) + 2 > 255:
+        raise ValueError("name exceeds the 255-byte DNS wire limit")
     if off + 4 > len(data):
         raise ValueError("truncated question tail")
     qtype, qclass = struct.unpack(">HH", data[off:off + 4])

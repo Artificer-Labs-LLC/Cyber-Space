@@ -114,6 +114,21 @@ check("parse: OPT-carrying query refused (arcount claimed)",
 check("parse: claimed section refused even with no bytes for it",
       raises_valueerror(dns.parse_query, _counted_query(an=1)))
 
+# A name past the 255-byte wire limit is refused, not answered or
+# forwarded as if it were a name (client._build_query refuses to build
+# one). Boundaries are exact: 63+63+63+61 labels = 255 wire octets
+# parses; one byte more refuses; five 63-byte labels (319 chars) refuse.
+check("parse: name at exactly 255 wire bytes parses",
+      dns.parse_query(_query([b"a" * 63, b"b" * 63, b"c" * 63,
+                              b"d" * 61]))["qname"].endswith("d" * 61))
+check("parse: name at 256 wire bytes refused",
+      raises_valueerror(dns.parse_query,
+                        _query([b"a" * 63, b"b" * 63, b"c" * 63,
+                                b"d" * 62])))
+check("parse: five 63-byte labels (319 chars) refused",
+      raises_valueerror(dns.parse_query,
+                        _query([b"a" * 63] * 5)))
+
 # --- parse_query: label grammar ------------------------------------------
 
 # pointer: "vill" then a 0xC0 pointer to the "cyberspace" label, which
