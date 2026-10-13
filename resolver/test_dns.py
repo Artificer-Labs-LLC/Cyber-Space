@@ -87,6 +87,33 @@ check("parse: truncated question tail refused",
       raises_valueerror(dns.parse_query,
                          _query([b"vill", b"cyberspace"], tail=b"\x00\x00\x01")))
 
+
+def _counted_query(an=0, ns=0, ar=0, extra=b""):
+    """A query whose header CLAIMS sections (the _query builder above
+    always claims none). extra is the claimed sections' raw bytes."""
+    labels = b"\x04vill\x0acyberspace\x00"
+    header = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, an, ns, ar)
+    return header + labels + struct.pack(">HH", 1, 1) + extra
+
+
+# A header claiming a section the codec never reads is refused, not
+# half-parsed (the module contract): a packet carrying answers is not
+# a plain question, and OPT/TSIG ride the additional count — an
+# OPT-carrying query must be refused whole rather than answered as
+# if its EDNS promises had never been made. The pointer fixture
+# below is the control: uncounted bytes past the question (a
+# compression target) still parse.
+_a_rec = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + b"\x7f\x00\x00\x01"
+check("parse: answer-carrying query refused (ancount claimed)",
+      raises_valueerror(dns.parse_query, _counted_query(an=1, extra=_a_rec)))
+check("parse: authority-carrying query refused (nscount claimed)",
+      raises_valueerror(dns.parse_query, _counted_query(ns=1, extra=_a_rec)))
+_opt_rec = struct.pack(">HHHIH", 0, 41, 1232, 0, 0)
+check("parse: OPT-carrying query refused (arcount claimed)",
+      raises_valueerror(dns.parse_query, _counted_query(ar=1, extra=_opt_rec)))
+check("parse: claimed section refused even with no bytes for it",
+      raises_valueerror(dns.parse_query, _counted_query(an=1)))
+
 # --- parse_query: label grammar ------------------------------------------
 
 # pointer: "vill" then a 0xC0 pointer to the "cyberspace" label, which

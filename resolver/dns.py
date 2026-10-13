@@ -69,6 +69,20 @@ def parse_query(data: bytes) -> dict:
         raise ValueError("not a query")
     if qdcount != 1:
         raise ValueError(f"expected 1 question, got {qdcount}")
+    if ancount or nscount or arcount:
+        # The header claims sections this codec never reads (answers,
+        # authority, or additional — OPT and TSIG live in additional).
+        # The module contract is refuse rather than half-parse: before,
+        # such a packet was answered as a plain question, so a packet
+        # carrying answers was treated as if it asked one, and an
+        # OPT-carrying query was answered as if its EDNS promises (DO
+        # bit, buffer size) had never been made. Bytes past the
+        # question are NOT refused on their own — a compressed name
+        # may legitimately point at labels living there (see
+        # _read_name); what may not exist is a COUNTED section.
+        raise ValueError(
+            f"query carries counted sections (an={ancount}, "
+            f"ns={nscount}, ar={arcount}) this codec never reads")
     qname, off = _read_name(data, 12)
     if off + 4 > len(data):
         raise ValueError("truncated question tail")
