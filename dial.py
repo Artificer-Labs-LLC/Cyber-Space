@@ -209,7 +209,13 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
 
     directory = core._resolve_get_json(mirror + "/api/v1/directory?limit=200")
     if isinstance(directory, dict):
-        for entry in directory.get("entries") or []:
+        # The directory is mirror-controlled: an entries value that is
+        # not a list (123, true) died in a TypeError traceback on the
+        # iteration instead of reading as no matching entry — plan()
+        # promises never to raise on bad input. Only a list can hold
+        # entries; every other shape simply has none.
+        entries = directory.get("entries")
+        for entry in entries if isinstance(entries, list) else []:
             if not isinstance(entry, dict):
                 continue
             if str(entry.get("node_pub", "")).lower() != node_pubkey:
