@@ -87,6 +87,12 @@ def _valid_label(label: str) -> bool:
 def _normalize(s: str) -> str:
     """Expected/held values are normalized identically before any rule:
     strip, lowercase — the mirror twin."""
+    # Twin of verify_name._normalize_expected's gate: a non-string
+    # escaped as AttributeError from .strip() or aliased through bytes'
+    # own .strip()/.lower() into a bytes value compared against str.
+    # "" is the no-value sentinel every downstream gate refuses.
+    if not isinstance(s, str):
+        return ""
     return s.strip().lower()
 
 

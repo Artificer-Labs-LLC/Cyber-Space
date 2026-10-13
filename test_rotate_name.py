@@ -139,6 +139,23 @@ if ok is not False:
     print("FAIL: promote_rotation('foo') on empty home no longer refuses")
     fails += 1
 
+# _normalize twin of verify_name._normalize_expected: a non-string
+# must come back as the "" no-value sentinel, never AttributeError
+# from .strip() or a bytes alias through bytes' .strip()/.lower().
+for bad in (123, 1.5, True, b"Foo", ["Foo"], {"a": 1}, None):
+    try:
+        got = rotate_name._normalize(bad)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _normalize({bad!r}) raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if got != "":
+        print(f"FAIL: _normalize({bad!r}) -> {got!r}, want ''")
+        fails += 1
+if rotate_name._normalize("  Foo-Bar ") != "foo-bar":
+    print("FAIL: _normalize valid value changed")
+    fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

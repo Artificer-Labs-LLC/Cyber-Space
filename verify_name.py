@@ -107,6 +107,16 @@ def _parse_ts(s: str, field: str) -> datetime:
 def _normalize_expected(s: str) -> str:
     """Expected names/keys get the same normalize-identically-first
     treatment the mirror applies to bindings: strip, lowercase."""
+    # A non-string has nothing to normalize: it escaped as AttributeError
+    # from .strip() (int/None/list/dict) or — worse — ALIASED through
+    # bytes' own .strip()/.lower(), returning bytes where every caller
+    # compares against str (a bytes pin/name then read as a garbage
+    # naming-the-sides verdict instead of no value at all). The empty
+    # string is this module's no-value sentinel: every downstream gate
+    # refuses it (invalid label, wrong hex length, unequal pin), exactly
+    # as resolve_chain._label already maps a falsy name to "".
+    if not isinstance(s, str):
+        return ""
     return s.strip().lower()
 
 

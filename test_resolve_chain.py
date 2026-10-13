@@ -92,6 +92,23 @@ if "terminal key" not in verdict:
     print(f"FAIL: valid check_live changed: {verdict!r}")
     fails += 1
 
+# _label rides verify_name._normalize_expected: a non-string name must
+# read as the "" no-name sentinel, never AttributeError from .strip()
+# or a bytes alias compared against str names downstream.
+for bad in (123, 1.5, True, b"Foo", ["Foo"], {"a": 1}, None):
+    try:
+        got = resolve_chain._label(bad)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _label({bad!r}) raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if got != "":
+        print(f"FAIL: _label({bad!r}) -> {got!r}, want ''")
+        fails += 1
+if resolve_chain._label("  Foo-Bar ") != "foo-bar":
+    print("FAIL: _label valid value changed")
+    fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)

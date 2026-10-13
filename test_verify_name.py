@@ -74,6 +74,25 @@ if verify_name._parse_ts("2026-01-01T00:00:00Z", "issued_at").year != 2026:
     print("FAIL: _parse_ts canonical Z no longer parses")
     fails += 1
 
+# _normalize_expected is the shared normalizer every pin/binding field
+# passes through: a non-string must come back as the "" no-value
+# sentinel, never AttributeError from .strip() — and never bytes,
+# which bytes' own .strip()/.lower() aliased through as a bytes value
+# compared against str downstream.
+for bad in (123, 1.5, True, b"Foo", ["Foo"], {"a": 1}, None):
+    try:
+        got = verify_name._normalize_expected(bad)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _normalize_expected({bad!r}) raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if got != "":
+        print(f"FAIL: _normalize_expected({bad!r}) -> {got!r}, want ''")
+        fails += 1
+if verify_name._normalize_expected("  Foo-Bar ") != "foo-bar":
+    print("FAIL: _normalize_expected valid value changed")
+    fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)
