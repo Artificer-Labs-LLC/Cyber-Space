@@ -133,12 +133,19 @@ def refused_leaf(name: str, node_pubkey: str, reason: str) -> bytes:
     # corrupt leaves for one malformed field. It contributes the
     # empty pubkey instead (twin of the snapshot leaf-name gate).
     pub = node_pubkey.lower() if isinstance(node_pubkey, str) else ""
+    # A non-string name has no label: str() would alias a DB/gossip-
+    # carried int name (123456) into the leaf as "123456", None as
+    # "None", and bytes as their repr — and for grammar, hash the
+    # str() alias instead of the label. It contributes the empty
+    # label instead (twin of the pubkey gate above; snapshot already
+    # gates its leaf names, this is the source seat for direct callers).
+    label = name if isinstance(name, str) else ""
     if reason == "grammar":
         # Every grammar leaf hashes the label (spec §7.3.9 R2 sha256 form).
         name_field = "sha256:" + hashlib.sha256(
-            str(name).encode("utf-8")).hexdigest()
+            label.encode("utf-8")).hexdigest()
     else:
-        name_field = str(name)
+        name_field = label
     leaf = (LEAF_PREFIX + "\nname=" + name_field
             + "\nnode_pubkey=" + pub + "\nreason=" + reason)
     return leaf.encode("utf-8")

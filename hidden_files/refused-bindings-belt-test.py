@@ -205,5 +205,20 @@ check("snapshot valid string pubkey leaf unchanged",
       len(_r) == 1 and _r[0][0].split(b"\n")[2]
       == b"node_pubkey=" + PUB.encode())
 
+print("non-string name contributes empty label to a direct leaf, never a str() alias")
+_empty_hash = b"name=sha256:" + hashlib.sha256(b"").hexdigest().encode()
+for bad_name in (123456, None, b"goodname", ["goodname"], True):
+    check(f"refused_leaf non-string name {type(bad_name).__name__} (plain) -> empty label",
+          rb.refused_leaf(bad_name, PUB, "not-in-manifest")
+          .split(b"\n")[1] == b"name=")
+    check(f"refused_leaf non-string name {type(bad_name).__name__} (grammar) -> empty-label hash",
+          rb.refused_leaf(bad_name, PUB, "grammar")
+          .split(b"\n")[1] == _empty_hash)
+check("refused_leaf valid string name unchanged (plain + grammar)",
+      rb.refused_leaf("goodname", PUB, "not-in-manifest").split(b"\n")[1]
+      == b"name=goodname"
+      and rb.refused_leaf("bad_name", PUB, "grammar").split(b"\n")[1]
+      == b"name=sha256:" + hashlib.sha256(b"bad_name").hexdigest().encode())
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)
