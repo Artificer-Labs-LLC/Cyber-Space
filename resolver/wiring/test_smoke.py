@@ -1147,6 +1147,89 @@ def _test_z_bit():
           f"err={err}")
 
 
+# 5t. A reply must not set AD or CD: client._parse_response refuses
+#     an AD/CD-set packet (its query sends RD only, no AD/CD, and
+#     neither daemon response builder ever sets them — an AD/CD-set
+#     packet carries a recursive checker's marks, not the daemon's),
+#     but both smoke wires checked only QR+AA+opcode+RD+TC+RA+Z, so a
+#     QR|AA|RD|AD- or CD-set packet claiming an answer earned a PASS.
+#     Both wires refuse either bit.
+def _test_ad_cd_bits():
+    import socket as _socket
+    import threading
+
+    for label, flags in (("AD", 0x8520), ("CD", 0x8510)):
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, flags, 1, 1, 0, 0)
+                    + packet[12:]
+                    + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                    + _socket.inet_aton("10.9.8.7"))
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399, timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP {label}-set packet -> _query refuses",
+              isinstance(err, ValueError) and "AD/CD bits" in str(err),
+              f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, flags=flags):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                resp = struct.pack(">HHHHHH", txid, flags, 1, 1, 0, 0) + q[12:]
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        check(f"TCP {label}-set packet -> _query_tcp refuses",
+              isinstance(err, ValueError) and "AD/CD bits" in str(err),
+              f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1185,6 +1268,7 @@ if __name__ == "__main__":
     _test_tc_bit()
     _test_ra_bit()
     _test_z_bit()
+    _test_ad_cd_bits()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

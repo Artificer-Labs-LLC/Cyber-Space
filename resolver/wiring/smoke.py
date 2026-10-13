@@ -233,6 +233,13 @@ def _query(name: str, qtype: int, server: str, port: int,
     # so a Z-set packet is not one of the daemon's replies.
     if flags & 0x0040:
         raise ValueError("response sets the reserved Z bit — response is not ours")
+    # AD/CD bits, twin of client._parse_response: a packet with AD
+    # or CD set reports DNSSEC checking states this smoke never
+    # asked for (its query sends RD only, no AD/CD) and neither
+    # daemon response builder ever sets — an AD/CD-set packet
+    # carries a recursive checker's marks, not the daemon's.
+    if flags & 0x0030:
+        raise ValueError("response sets AD/CD bits the daemon never sets — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -297,6 +304,11 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # header bit; neither daemon response builder ever sets Z.
     if flags & 0x0040:
         raise ValueError("response sets the reserved Z bit — response is not ours")
+    # AD/CD bits, twin of _query above: an AD/CD-set packet carries
+    # a recursive checker's marks; neither daemon response builder
+    # ever sets AD or CD and this smoke's query never asks for them.
+    if flags & 0x0030:
+        raise ValueError("response sets AD/CD bits the daemon never sets — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
