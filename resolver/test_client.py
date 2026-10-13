@@ -483,6 +483,15 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 client._build_query(0x1, "node.cyberspace", bad)
 
+    def test_query_nonstring_qname_raises_valueerror(self):
+        """resolve() gates the name's type, but a direct caller passing
+        a non-string escaped as AttributeError/TypeError from
+        .endswith() — not the ValueError _build_query's other malformed
+        inputs raise. All must raise ValueError at the source."""
+        for bad in (None, 123, 1.5, b"node.cyberspace", True, ["node"]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._build_query(0x1, bad, 1)
+
     def test_query_txid_and_qtype_wire_boundaries_ok(self):
         for txid in (0, 65535):
             pkt = client._build_query(txid, "node.cyberspace", 65535)

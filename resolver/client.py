@@ -174,6 +174,13 @@ def _build_query(txid: int, qname: str, qtype: int) -> bytes:
         if not isinstance(_value, int) or isinstance(_value, bool) \
                 or not 0 <= _value <= 65535:
             raise ValueError(f"bad {_field} {_value!r}")
+    # The qname is caller-supplied too: resolve() gates its type, but a
+    # direct caller passing a non-string (None, an int, bytes) escaped
+    # as AttributeError/TypeError from .endswith() below — not the
+    # ValueError this function's other malformed inputs raise and its
+    # callers guard. Only a real string is a name to build.
+    if not isinstance(qname, str):
+        raise ValueError(f"bad qname {qname!r}")
     if qname.endswith("."):
         qname = qname[:-1]  # a single FQDN root dot; a second leaves an empty label
     qname = qname.lower()
