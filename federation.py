@@ -933,6 +933,17 @@ def fed_workspace_invite(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself): claim the envelope's
+    # sig after verify+recipient, before the sender_pub/standing gates,
+    # the inviter_sig ed25519 verify, and the membership receipt write.
+    # verify_envelope already established a valid sig, so the claim's
+    # ValueError is unreachable. Named post-claim edges: sender_pub
+    # mismatch, unknown peer, and bad inviter_sig all claim; genuine
+    # resends re-sign with a fresh ts (new sig).
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
@@ -971,9 +982,9 @@ def fed_workspace_invite(env: dict):
     with _db_lock, _db() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO workspace_remote_members "
-            "(workspace_id, agent_pub, node_name, countersigned_at, struck_at) "
-            "VALUES (?,?,?,NULL,NULL)",
-            (wid, invitee_key, home_node))
+            "(workspace_id, agent_pub, node_name, node_pub, countersigned_at, struck_at) "
+            "VALUES (?,?,?,?,NULL,NULL)",
+            (wid, invitee_key, home_node, sender_pub))
     return {"invited": True, "workspace_id": wid, "node": NODE_NAME,
             "from_node": home_node, "agent_key": invitee_key,
             "charter_hash": charter_hash}
