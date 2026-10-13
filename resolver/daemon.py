@@ -98,6 +98,8 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
     default. A bracketed host must be a real IPv6 literal (returned
     unbracketed, so answer._forward can pick AF_INET6); a bare IPv6
     literal has no unambiguous port split and stays malformed."""
+    if not isinstance(raw, str):
+        return ("1.1.1.1", 53)
     raw = raw.strip()
     if raw.startswith("["):
         host, _, rest = raw[1:].partition("]")

@@ -92,6 +92,8 @@ check("upstream: bracketed v6 bad port -> default", _p("[::1]:dns") == D)
 check("upstream: bracketed v4 -> default", _p("[10.0.0.1]:53") == D)
 check("upstream: bracketed garbage -> default", _p("[nope]:53") == D)
 check("upstream: bare v6 -> default (no port split)", _p("::1") == D)
+for _bad in (None, 123, 1.5, True, b"1.1.1.1:53", ["x"]):
+    check(f"upstream: non-str {type(_bad).__name__} -> default", _p(_bad) == D)
 
 # --- _config: full pass — defaults, overrides, malformed all fall back ---
 
