@@ -255,13 +255,20 @@ def _node_keypair() -> tuple[str, str]:
 
 _NODE_PRIV, _NODE_PUB = _node_keypair()
 
-_NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::\d{1,5})?(/[a-zA-Z0-9_./-]*)?$")
+_NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::(\d{1,5}))?(/[a-zA-Z0-9_./-]*)?$")
 
 
 def _valid_node_url(url: str) -> str:
     """Validate a peer's announced node_url (where to POST /fed/* to it)."""
     url = (url or "").strip()[:256].rstrip("/")
-    if not url or not _NODE_URL_RE.fullmatch(url):
+    m = _NODE_URL_RE.fullmatch(url) if url else None
+    if not m:
+        raise HTTPException(status_code=400, detail="bad node_url")
+    # The regex admits any 1-5 digit port, but a port outside 1..65535 can
+    # never be dialed (urlopen dies on it at fetch time) — a URL this gate
+    # blesses must be a URL the dial can actually attempt, the same range
+    # resolver._parse_upstream already enforces for upstream addresses.
+    if m.group(2) is not None and not (1 <= int(m.group(2)) <= 65535):
         raise HTTPException(status_code=400, detail="bad node_url")
     _reject_nonpublic_node_url(url)
     return url
