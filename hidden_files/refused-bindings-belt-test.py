@@ -134,5 +134,19 @@ h, r = rb.snapshot_refused_bindings([row("goodname")], set())
 check("empty manifest -> not-in-manifest",
       h == [] and len(r) == 1 and r[0][1] == "not-in-manifest")
 
+print("non-dict rows refuse as grammar, never crash")
+for bad in (123, None, "bare-string", ["x"], 1.5, True):
+    check(f"classify non-dict {bad!r} -> grammar",
+          rb.classify_binding(bad, MANIFEST) == "grammar")
+h, r = rb.snapshot_refused_bindings(
+    [123, row("goodname"), None], MANIFEST)
+check("snapshot survives non-dict rows: valid row still holds",
+      len(h) == 1 and h[0]["name"] == "goodname")
+check("snapshot: one grammar leaf per non-dict row",
+      len(r) == 2 and all(reason == "grammar" for _, reason in r))
+check("non-dict grammar leaf uses the sha256 name form",
+      all(leaf.split(b"\n")[1].startswith(b"name=sha256:")
+          for leaf, _ in r))
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)

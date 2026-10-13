@@ -143,6 +143,14 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
     """Return the refusal reason for a name_bindings row, or None if the
     row is hold-eligible. ``row`` needs name/node_pubkey/expires_at;
     ``manifest_labels`` is a set of labels present in the manifest."""
+    # Rows arrive from DB/gossip-shaped sources: a row that is not a
+    # dict at all (123, None, a bare string) escaped as AttributeError
+    # from .get() — a crash, not a verdict, and snapshot_refused_bindings
+    # died on the whole partition with it. A non-dict has no name, and
+    # a nameless binding fails the first check this filter runs: it is
+    # grammar-refused, exactly like the empty label str() yields below.
+    if not isinstance(row, dict):
+        return "grammar"
     label = str(row.get("name", ""))
     # B1 (Q1 fix, ART-29): grammar before length, per spec §7.3.9.
     if not _grammar_ok(label):
@@ -189,7 +197,14 @@ def snapshot_refused_bindings(rows, manifest_labels):
         if reason is None:
             holds.append(row)
         else:
-            refused.append((refused_leaf(row.get("name", ""),
-                                        row.get("node_pubkey", ""),
+            # classify_binding refuses a non-dict row as grammar, but
+            # the leaf build below still read its fields with .get() —
+            # the same AttributeError, one line later. A non-dict row
+            # contributes the empty name/pubkey to its grammar leaf
+            # (refused_leaf hashes the name field for grammar anyway).
+            leaf_name = row.get("name", "") if isinstance(row, dict) else ""
+            leaf_pub = (row.get("node_pubkey", "")
+                        if isinstance(row, dict) else "")
+            refused.append((refused_leaf(leaf_name, leaf_pub,
                                         reason), reason))
     return holds, refused
