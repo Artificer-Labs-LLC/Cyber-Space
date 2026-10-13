@@ -4,7 +4,7 @@ import json
 import threading
 import urllib.request
 from fed import envelope as _fed_env
-from core import WORKSPACE_CHARTER_MAX, WORKSPACE_ENTRY_MAX, WORKSPACE_MEMBERS_MAX, WORKSPACE_MEMBERS_MIN, WORKSPACE_NAME_MAX, _NODE_PRIV, _NODE_PUB, _authed, _countersign_mint, _db, _db_lock, _invite_mint, _now, _post_to_peer_path, _removed_mint, _workspace_entry_cap, _workspace_ledger, _workspace_maybe_done, _workspace_maybe_go_live, _workspace_row
+from core import WORKSPACE_CHARTER_MAX, WORKSPACE_ENTRY_MAX, WORKSPACE_MEMBERS_MAX, WORKSPACE_MEMBERS_MIN, WORKSPACE_NAME_MAX, _NODE_PRIV, _NODE_PUB, _authed, _countersign_mint, _db, _db_lock, _invite_mint, _now, _post_to_peer_path, _read_peer_json, _removed_mint, _workspace_entry_cap, _workspace_ledger, _workspace_maybe_done, _workspace_maybe_go_live, _workspace_row
 
 router = APIRouter()
 
@@ -352,7 +352,7 @@ async def workspace_invite(wid: int, request: Request,
             data=json.dumps(env).encode(),
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            ack = json.loads(resp.read().decode("utf-8"))
+            ack = _read_peer_json(resp)
     except Exception:
         raise HTTPException(status_code=502,
                             detail="Closed window: the invitee's node is unreachable.")
@@ -439,7 +439,7 @@ async def workspace_invite_countersign(wid: int, request: Request, authorization
             data=json.dumps(env).encode(),
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            ack = json.loads(resp.read().decode("utf-8"))
+            ack = _read_peer_json(resp)
     except Exception:
         raise HTTPException(status_code=502,
                             detail="Closed window: the home node's countersign receiver is "
