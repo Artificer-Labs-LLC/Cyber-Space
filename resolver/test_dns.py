@@ -193,6 +193,15 @@ check("build: unknown rcode 5 raises",
       raises_valueerror(dns.build_response, q, [], 5))
 check("build: negative ttl raises",
       raises_valueerror(dns.build_response, q, [(1, -1, b"\x7f\x00\x00\x01")]))
+check("build: ttl past uint32 raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, q, [(1, 4294967296, b"\x7f\x00\x00\x01")]))
+check("build: max uint32 ttl builds",
+      dns.build_response(q, [(1, 4294967295, b"\x7f\x00\x00\x01")])[12 + len(q["question"]) + 6:
+      12 + len(q["question"]) + 10] == b"\xff\xff\xff\xff")
+check("build: qtype past uint16 raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, q, [(70000, 300, b"\x7f\x00\x00\x01")]))
+check("build: negative qtype raises ValueError, not struct.error",
+      raises_valueerror(dns.build_response, q, [(-1, 300, b"\x7f\x00\x00\x01")]))
 
 # --- error_response ---------------------------------------------------------
 

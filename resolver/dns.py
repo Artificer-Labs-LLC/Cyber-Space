@@ -119,7 +119,13 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     if rcode not in _RCODE_NAMES:
         raise ValueError(f"unsupported rcode {rcode}")
     for qtype, ttl, rdata in answers:
-        if ttl < 0 or len(rdata) > 65535:
+        # Range-check every field struct will pack, not just ttl's
+        # floor: a ttl past the uint32 wire field or a qtype outside
+        # uint16 used to escape as struct.error, breaking this
+        # function's ValueError contract (callers guarding ValueError
+        # — the codec's fail-closed boundary language — missed it).
+        if not 0 <= qtype <= 65535 or not 0 <= ttl <= 4294967295 \
+                or len(rdata) > 65535:
             raise ValueError("bad answer")
     flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode
     if query["rd"]:
