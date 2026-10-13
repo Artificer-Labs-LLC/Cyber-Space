@@ -29,6 +29,7 @@ hostname reaches a ::1 daemon), via _server_target.
 
 import argparse
 import ipaddress
+import math
 import os
 import random
 import socket
@@ -373,9 +374,29 @@ def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
         raise ValueError("response carries trailing bytes the daemon never sends — response is not ours")
 
 
+def _check_timeout(timeout: float) -> float:
+    """Gate a caller-supplied timeout before any socket sees it.
+
+    The timeout reaches settimeout/create_connection raw: None meant
+    BLOCK FOREVER — a silent daemon would hang this smoke without
+    limit, the opposite of a check that must fail — True aliased to
+    1 second (bool is an int subclass), a string escaped as TypeError,
+    and inf/NaN escaped as OverflowError/ValueError from deep inside
+    settimeout. A timeout must be a real int/float (never bool),
+    finite, and positive; anything else raises ValueError at the
+    source (twin of client._check_timeout, whose contract is its
+    ResolveError). main()'s own callers pass the 3.0 default.
+    """
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
+            or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(f"bad timeout {timeout!r}")
+    return timeout
+
+
 def _query(name: str, qtype: int, server: str, port: int,
            timeout: float = 3.0) -> tuple[int, int, int]:
     """Return (rcode, ancount, txid_echoed). Raises on transport failure."""
+    _check_timeout(timeout)
     packet, txid = _build_query(name, qtype)
     host = _server_host(server)
     family, target, expected = _server_target(host, port)
@@ -507,6 +528,7 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     connection closes after the answer. Return (rcode, ancount,
     txid_echoed). Raises on transport failure.
     """
+    _check_timeout(timeout)
     packet, txid = _build_query(name, qtype)
     frame = struct.pack(">H", len(packet)) + packet
     with socket.create_connection((_server_host(server), port),

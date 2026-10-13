@@ -1849,6 +1849,28 @@ def _test_build_query_malformed():
     check("_build_query valid AAAA still builds", qtype == 28)
 
 
+# 8. _query/_query_tcp refuse a malformed timeout instead of handing
+#    it raw to the socket (twin of client._check_timeout): None blocked
+#    forever on a silent daemon, True aliased to 1 second, a string
+#    escaped as TypeError, inf as OverflowError. The gate fires before
+#    any socket is created, so a dead port still yields ValueError.
+def _test_query_timeout_malformed():
+    bad = [None, True, False, "3", 0, -1, 0.0,
+           float("inf"), float("nan")]
+    for fn in (smoke._query, smoke._query_tcp):
+        for timeout in bad:
+            try:
+                fn("genesis.cyberspace", 1, "127.0.0.1", 53599,
+                   timeout=timeout)
+                err = None
+            except Exception as exc:  # noqa: BLE001 - refusal is the check
+                err = exc
+            check(f"{fn.__name__}(timeout={timeout!r}) -> ValueError",
+                  isinstance(err, ValueError), f"err={err}")
+    check("_check_timeout valid values pass through",
+          smoke._check_timeout(3.0) == 3.0 and smoke._check_timeout(1) == 1)
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1881,6 +1903,7 @@ if __name__ == "__main__":
     _test_answer_type_class()
     _test_packet_shape()
     _test_build_query_malformed()
+    _test_query_timeout_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)
