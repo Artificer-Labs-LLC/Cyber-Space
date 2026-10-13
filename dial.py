@@ -209,10 +209,18 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
         for strat in desc.get("reach") or []:
             if not isinstance(strat, dict):
                 continue
-            if str(strat.get("kind", "")) != "direct":
+            # Only real strings are strategy fields (twin of core's
+            # step-5 direct seat and of _relay_route/_rendezvous_
+            # strategy): str() here aliased a non-string kind whose
+            # string form is "direct" into the direct strategy, and a
+            # non-string url past _valid_node_url's own non-string gate.
+            if strat.get("kind") != "direct":
+                continue
+            _url_raw = strat.get("url")
+            if not isinstance(_url_raw, str):
                 continue
             try:
-                direct = core._valid_node_url(str(strat.get("url", "")))
+                direct = core._valid_node_url(_url_raw)
             except core.HTTPException:
                 continue
             break

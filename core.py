@@ -1661,10 +1661,20 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
                 for strat in desc.get("reach", []) or []:
                     if not isinstance(strat, dict):
                         continue
-                    if str(strat.get("kind", "")) != "direct":
+                    # Only real strings are strategy fields (twin of
+                    # _relay_route's and _rendezvous_strategy's kind
+                    # seats): str() here aliased a non-string kind whose
+                    # string form is "direct" into the direct strategy,
+                    # and a non-string url into the string it merely
+                    # resembles — past _valid_node_url's own non-string
+                    # gate, which never saw the original value.
+                    if strat.get("kind") != "direct":
+                        continue
+                    _url_raw = strat.get("url")
+                    if not isinstance(_url_raw, str):
                         continue
                     try:
-                        cand = _valid_node_url(str(strat.get("url", "")))
+                        cand = _valid_node_url(_url_raw)
                     except HTTPException:
                         continue
                     if cand:
