@@ -1039,7 +1039,13 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
         # OverflowError joins ValueError (Bulwark low, ART-29): year-9999
         # stamps parse but overflow on arithmetic — still unparseable for
         # conflict purposes, never silently beaten by a foreign key.
-        return old is not None and old["node_pubkey"].lower() == node_pubkey.lower()
+        # Only real strings can be the same key: a non-string on either
+        # side (a gossip/DB-carried 123/None/list key) escaped as
+        # AttributeError from .lower() — a crash, not this seat's False.
+        return (old is not None
+                and isinstance(old["node_pubkey"], str)
+                and isinstance(node_pubkey, str)
+                and old["node_pubkey"].lower() == node_pubkey.lower())
 
 
 def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,

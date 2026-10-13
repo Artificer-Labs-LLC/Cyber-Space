@@ -135,6 +135,27 @@ def claim_beats_pubkey_cases():
           _name_claim_beats(_b("x", PUB_A, EARLY), _b("x", PUB_B, EARLY)) is True)
 
 
+def old_binding_fallback_pubkey_cases():
+    print("old-binding fallback pubkey types:")
+    # The Examiner-block fallback promises a bool: an unparseable stored
+    # row is beaten iff the claimant holds the SAME key. A non-string
+    # key on either side escaped as AttributeError from .lower()
+    # (int/None/list) instead of reading as not-the-same-key.
+    from datetime import datetime, timezone
+    now_dt = datetime.now(timezone.utc)
+    old_bad = _b("x", PUB_A, "garbage", expires="garbage")
+    for bad in (123, 1.5, True, None, ["aa"]):
+        check(f"non-string claimant {bad!r} reads not-beaten",
+              _old_binding_beaten(old_bad, _b("x", PUB_B, EARLY), bad, now_dt) is False)
+        old_intkey = _b("x", bad, "garbage", expires="garbage")
+        check(f"non-string stored key {bad!r} reads not-beaten",
+              _old_binding_beaten(old_intkey, _b("x", PUB_B, EARLY), PUB_A, now_dt) is False)
+    check("same key (case-insensitive) still beats unparseable row",
+          _old_binding_beaten(old_bad, _b("x", PUB_A, EARLY), PUB_A.upper(), now_dt) is True)
+    check("foreign key still refused on unparseable row",
+          _old_binding_beaten(old_bad, _b("x", PUB_B, EARLY), PUB_B, now_dt) is False)
+
+
 def node_url_cases():
     print("node_url gate:")
     # The refusal contract is HTTPException(400); every caller catches
@@ -299,6 +320,7 @@ def main():
     label_cases()
     conflict_cases()
     claim_beats_pubkey_cases()
+    old_binding_fallback_pubkey_cases()
     node_url_cases()
     node_url_host_cases()
     reject_nonpublic_cases()
