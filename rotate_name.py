@@ -171,6 +171,36 @@ def _read_bounded(stream) -> bytes | None:
     return None if len(raw) > _MIRROR_RESP_MAX else raw
 
 
+# Rotation-record read bound, twin of verify_name._INPUT_MAX and the
+# mirror bound above: the record file is local, but it is still input
+# this tool parses before any verdict runs, and a rotation record is
+# a few hundred bytes. read_text() unbounded at both record seats
+# (submit, promote) slurped the whole file into memory before
+# json.loads ran; an oversize file is never a rotation record.
+_RECORD_MAX = 65536
+
+
+def _load_record(rec_path):
+    """Load the rotation record at rec_path under the read bound.
+
+    Returns (record, None) or (None, kind), kind one of "missing"
+    (OSError), "oversize" (over _RECORD_MAX chars), or "badjson" —
+    each caller maps the kind to its own refusal wording, exactly as
+    the two seats worded their OSError/ValueError branches before.
+    """
+    try:
+        with rec_path.open(encoding="utf-8") as f:
+            raw = f.read(_RECORD_MAX + 1)
+    except OSError:
+        return None, "missing"
+    if len(raw) > _RECORD_MAX:
+        return None, "oversize"
+    try:
+        return json.loads(raw), None
+    except ValueError:
+        return None, "badjson"
+
+
 def _post_form(url: str, fields: dict, timeout: float = 30.0
                ) -> tuple[int | None, str]:
     """POST urlencoded form; returns (status, body). status None = no HTTP
@@ -479,9 +509,12 @@ def promote_rotation(label: str, home: Path,
                        f"mint one first (rotate_name.py {label})")
     if not rec_path.exists():
         return False, f"rotation record missing at {rec_path} — refuse"
-    try:
-        record = json.loads(rec_path.read_text())
-    except (OSError, ValueError):
+    record, _rec_err = _load_record(rec_path)
+    if _rec_err == "oversize":
+        return False, (f"rotation record at {rec_path} exceeds "
+                       f"{_RECORD_MAX} bytes — a rotation record is a "
+                       f"few hundred bytes, refuse")
+    if _rec_err is not None:
         return False, f"rotation record at {rec_path} is not readable JSON"
     reason = verify_rotation(record)
     if reason is not None:
@@ -612,12 +645,15 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     rec_path = home / f"{label}-rotate.json"
     next_path = home / f"{label}-name.key.next"
     key_path = home / f"{label}-name.key"
-    try:
-        record = json.loads(rec_path.read_text())
-    except OSError:
+    record, _rec_err = _load_record(rec_path)
+    if _rec_err == "missing":
         return False, (f"rotation record missing at {rec_path} — "
                        f"mint one first (rotate_name.py {label})")
-    except ValueError:
+    if _rec_err == "oversize":
+        return False, (f"rotation record at {rec_path} exceeds "
+                       f"{_RECORD_MAX} bytes — a rotation record is a "
+                       f"few hundred bytes; nothing was sent")
+    if _rec_err is not None:
         return False, f"rotation record at {rec_path} is not readable JSON"
     reason = verify_rotation(record)
     if reason is not None:
