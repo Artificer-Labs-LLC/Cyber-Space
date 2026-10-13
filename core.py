@@ -2604,7 +2604,16 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
     if _valid_name_label(name) is not True:
         return None
     try:
-        name_pub = _fed_ed25519.publickey(bytes.fromhex(name_priv_hex)).hex()
+        # Decoded-length gate: bytes.fromhex ignores embedded spaces,
+        # so a 64-char spaced seed decodes to 31 bytes and publickey()
+        # would silently derive a pubkey that is NOT the name's key —
+        # the descriptor would verify under that wrong key while no
+        # binding seat keys the name to it (hoster reads as absent).
+        # Twin of hold_open 17387df / rendezvous 5f37a3e.
+        _name_seed = bytes.fromhex(name_priv_hex)
+        if len(_name_seed) != 32:
+            return None
+        name_pub = _fed_ed25519.publickey(_name_seed).hex()
     except Exception:
         return None
     strategies = []
@@ -2621,7 +2630,12 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
         relay_url = _valid_node_url(relay_url)
         if len(relay_pub) != 64:
             raise ValueError("relay pubkey must be 64 hex")
-        bytes.fromhex(relay_pub)
+        # Decoded-length gate (twin of the name-seed gate above): a
+        # spaced 64-char relay pubkey decodes to 31 bytes and would
+        # ride into the signed descriptor verbatim — a strategy every
+        # dialer refuses since 81af8fa, advertised as if usable.
+        if len(bytes.fromhex(relay_pub)) != 32:
+            raise ValueError("relay pubkey must decode to 32 bytes")
         if not relay_token or len(relay_token) > 4096:
             raise ValueError("relay token empty or too long")
         strategies.append({"kind": "relay", "relay": relay_pub,
