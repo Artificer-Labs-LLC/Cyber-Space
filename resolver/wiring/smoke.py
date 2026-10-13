@@ -297,6 +297,32 @@ def _read_name(data: bytes, off: int) -> tuple[str, int]:
     return ".".join(labels), end
 
 
+def _check_walk(resp, qd, an) -> None:
+    """Gate a section walk's packet and counts before any loop.
+
+    The _refuse_* walkers are caller-supplied at this library seat:
+    _query passes header counts (always real uint16s), but a direct
+    caller passing a string/float count escaped as TypeError from
+    range(), True aliased to one section, and a NEGATIVE count made
+    range() empty — the walk ended at the header and a bare packet
+    was silently accepted as well-formed, the opposite of a refusal.
+    _refuse_different_question likewise compared an ungated name
+    (None escaped as AttributeError from .lower()) and qtype (True
+    and 1.0 compare equal to A, so both aliased to it). Only a real
+    bytes packet, real non-negative int counts (bool excluded), a
+    real string name, and a real int qtype in the uint16 wire range
+    (bool excluded) may be walked or compared; anything else raises
+    ValueError at the source, twin of client._parse_response's
+    txid/qtype gates and _check_name_read above."""
+    if not isinstance(resp, (bytes, bytearray)):
+        raise ValueError("truncated DNS response — response is not ours")
+    for count in (qd, an):
+        if isinstance(count, bool) or not isinstance(count, int) \
+                or count < 0:
+            raise ValueError(
+                "bad section count — response is not ours")
+
+
 def _refuse_different_question(resp: bytes, name: str, qtype: int) -> None:
     """Refuse an echoed question that is not THIS one, twin of
     client._parse_response: the daemon echoes exactly the question
@@ -306,6 +332,14 @@ def _refuse_different_question(resp: bytes, name: str, qtype: int) -> None:
     its answers belong to that question, however clean its header.
     Name compared case-insensitively (the wire form of the asked
     name is already normalized lower-case by main())."""
+    _check_walk(resp, 1, 0)
+    if not isinstance(name, str):
+        raise ValueError(
+            "response answers a different question — response is not ours")
+    if isinstance(qtype, bool) or not isinstance(qtype, int) \
+            or not 0 <= qtype <= 65535:
+        raise ValueError(
+            "response answers a different question — response is not ours")
     seen, off = _read_name(resp, 12)
     if off + 4 > len(resp):
         raise ValueError("truncated DNS response — response is not ours")
@@ -326,6 +360,11 @@ def _refuse_stranger_answer(resp: bytes, qd: int, an: int,
     carry a stranger's address. Name compared case-insensitively.
     Walks question + answer headers only; type/class/rdlen parity
     is _refuse_wrong_type_answer's, trailing is _refuse_trailing's."""
+    _check_walk(resp, qd, an)
+    if not isinstance(name, str):
+        raise ValueError(
+            "response answer owned by a different name — "
+            "response is not ours")
     off = 12
     for _ in range(qd):
         off = _skip_name(resp, off)
@@ -358,6 +397,7 @@ def _refuse_wrong_type_answer(resp: bytes, qd: int, an: int) -> None:
     however clean its owner. Walks question + answer headers only;
     owner is _refuse_stranger_answer's, trailing is
     _refuse_trailing's."""
+    _check_walk(resp, qd, an)
     off = 12
     for _ in range(qd):
         off = _skip_name(resp, off)
@@ -392,6 +432,7 @@ def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
     meant, however well-formed the packet before them. Walking the
     sections is the only way to know where they end; a walk that
     runs past the packet is a truncation, refused likewise."""
+    _check_walk(resp, qd, an)
     off = 12
     for _ in range(qd):
         off = _skip_name(resp, off)

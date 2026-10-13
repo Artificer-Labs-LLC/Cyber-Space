@@ -1957,6 +1957,59 @@ def _test_name_read_malformed():
           and smoke._read_name(bytearray(pkt), 0) == ("www", 5))
 
 
+# 12. _refuse_* walkers refuse malformed counts/name/qtype instead
+#     of raising, aliasing, or silently passing (twin of
+#     client._parse_response's txid/qtype gates): a string count
+#     escaped as TypeError from range(), True aliased to one
+#     section, a negative count silently accepted a bare header,
+#     a None name escaped as AttributeError, and qtype True/1.0
+#     aliased to A. _query passes real header values, but a direct
+#     caller bypassed every gate.
+def _test_refuse_walk_malformed():
+    import struct as _struct
+    pkt, _txid = smoke._build_query("alice.cyberspace", 1)
+    resp = _struct.pack(">HHHHHH", 1, 0x8500, 1, 0, 0, 0) + pkt[12:]
+    walkers = (smoke._refuse_stranger_answer, smoke._refuse_wrong_type_answer,
+               smoke._refuse_trailing)
+    for fn in walkers:
+        for qd, an in (("1", 0), (1, "0"), (True, 0), (1, True),
+                       (-1, 0), (1, -1), (1.0, 0), (None, 0)):
+            args = (resp, qd, an, "alice.cyberspace") \
+                if fn is smoke._refuse_stranger_answer else (resp, qd, an)
+            try:
+                fn(*args)
+                err = None
+            except Exception as exc:  # noqa: BLE001 - refusal is the check
+                err = exc
+            check(f"{fn.__name__}(qd={qd!r}, an={an!r}) -> ValueError",
+                  isinstance(err, ValueError), f"err={err}")
+    for name, qtype in ((None, 1), (123, 1), ("alice.cyberspace", True),
+                        ("alice.cyberspace", 1.0), ("alice.cyberspace", -1),
+                        ("alice.cyberspace", 65536),
+                        ("alice.cyberspace", "1")):
+        try:
+            smoke._refuse_different_question(resp, name, qtype)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"_refuse_different_question(name={name!r}, qtype={qtype!r})"
+              " -> ValueError", isinstance(err, ValueError), f"err={err}")
+    try:
+        smoke._refuse_stranger_answer(resp, 1, 0, None)
+        err = None
+    except Exception as exc:  # noqa: BLE001 - refusal is the check
+        err = exc
+    check("_refuse_stranger_answer(name=None) -> ValueError",
+          isinstance(err, ValueError), f"err={err}")
+    check("_refuse_* valid walks untouched",
+          smoke._refuse_trailing(resp, 1, 0) is None
+          and smoke._refuse_different_question(
+              resp, "alice.cyberspace", 1) is None
+          and smoke._refuse_wrong_type_answer(resp, 1, 0) is None
+          and smoke._refuse_stranger_answer(
+              resp, 1, 0, "alice.cyberspace") is None)
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1993,6 +2046,7 @@ if __name__ == "__main__":
     _test_read_exact_malformed()
     _test_query_port_malformed()
     _test_name_read_malformed()
+    _test_refuse_walk_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)
