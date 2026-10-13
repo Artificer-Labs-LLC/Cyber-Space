@@ -132,6 +132,17 @@ check("bind_family: bracketed v6 -> AF_INET6 unbracketed",
       daemon._bind_family("[::1]") == (_socket.AF_INET6, "::1"))
 check("bind_family: malformed -> AF_INET passthrough",
       daemon._bind_family("bad host!") == (_socket.AF_INET, "bad host!"))
+for _bad in (None, 123, 1.5, True, b"::1", ["x"]):
+    try:
+        daemon._bind_family(_bad)
+        check(f"bind_family: non-str {type(_bad).__name__} -> ValueError", False)
+    except ValueError:
+        check(f"bind_family: non-str {type(_bad).__name__} -> ValueError", True)
+    try:
+        daemon._bind_target(_bad, 5353)
+        check(f"bind_target: non-str {type(_bad).__name__} -> ValueError", False)
+    except ValueError:
+        check(f"bind_target: non-str {type(_bad).__name__} -> ValueError", True)
 
 # --- _bind_target: literals keep family/target, hostnames resolve ---
 

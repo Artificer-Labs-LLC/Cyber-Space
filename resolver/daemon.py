@@ -127,6 +127,8 @@ def _bind_family(bind_host: str) -> tuple[int, str]:
     stripped; anything else (IPv4 literal, hostname) keeps AF_INET,
     exactly as before. Shape only: a malformed value still falls
     through to AF_INET and the bind raises, as it always did."""
+    if not isinstance(bind_host, str):
+        raise ValueError("bind host must be a string")
     host = bind_host.strip()
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1].strip()
@@ -309,7 +311,7 @@ def run() -> None:
         tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         tsock.bind(target)
         tsock.listen(_TCP_BACKLOG)
-    except (OSError, OverflowError) as exc:
+    except (OSError, OverflowError, ValueError) as exc:
         # The bind is the one step run() cannot degrade past: the port
         # is taken (a second resolverd — an install re-run beside a
         # stale daemon is the common case) or the address is not local.
