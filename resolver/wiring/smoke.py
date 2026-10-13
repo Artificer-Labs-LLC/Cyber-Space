@@ -109,6 +109,11 @@ def _server_host(server: str) -> str:
     — the bracketed form died in transport (gaierror) for a daemon
     that was listening fine. Brackets are stripped when they wrap the
     whole value; anything else is returned unchanged."""
+    # Twin of client._server_host's gate: a non-string escaped as
+    # AttributeError from .strip() (None/int/bool) or TypeError from
+    # .startswith() (bytes), past the ValueError shape main() expects.
+    if not isinstance(server, str):
+        raise ValueError(f"bad server {server!r}")
     host = server.strip()
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1].strip()
@@ -120,6 +125,8 @@ def _server_family(host: str) -> int:
     literal, AF_INET otherwise. The UDP wire hardcoded AF_INET, so a
     daemon bound to ::1 — a bind the daemon itself now accepts — could
     never be smoked at all, however the address was written."""
+    if not isinstance(host, str):
+        raise ValueError(f"bad server host {host!r}")
     try:
         if ipaddress.ip_address(host).version == 6:
             return socket.AF_INET6
@@ -145,6 +152,12 @@ def _server_target(host: str, port: int):
     order. An unresolvable hostname raises gaierror here, which
     main() already reads as unreachable, honestly. The third value
     is the only source _query may accept a reply from (see there)."""
+    # Twin of client._server_target's gate: ip_address() ALIASED a
+    # non-string host (123 -> 0.0.0.123, True -> 0.0.0.1, a 4-byte
+    # bytes host -> its quad) and getaddrinfo ALIASED None to ::1 —
+    # a daemon nobody named was dialed and source-checked as expected.
+    if not isinstance(host, str):
+        raise ValueError(f"bad server host {host!r}")
     try:
         ip = ipaddress.ip_address(host)
         return _server_family(host), (host, port), str(ip)

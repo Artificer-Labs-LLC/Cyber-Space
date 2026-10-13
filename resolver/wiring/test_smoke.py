@@ -146,6 +146,21 @@ def _test_ipv6_server_forms():
     check("v6 literal -> AF_INET6", smoke._server_family("::1") == _socket.AF_INET6)
     check("v4 literal -> AF_INET", smoke._server_family("127.0.0.1") == _socket.AF_INET)
     check("hostname -> AF_INET", smoke._server_family("localhost") == _socket.AF_INET)
+    # Non-string servers/hosts raise ValueError at the source, never
+    # AttributeError/TypeError and never an aliased daemon (None->::1,
+    # 123->0.0.0.123, True->0.0.0.1, 4-byte bytes->its quad).
+    for bad in (None, 123, True, b"::1", b"\x7f\x00\x00\x01"):
+        for fn, args in ((smoke._server_host, (bad,)),
+                         (smoke._server_family, (bad,)),
+                         (smoke._server_target, (bad, 5353))):
+            try:
+                fn(*args)
+                check(f"{fn.__name__}({bad!r}) raises ValueError", False)
+            except ValueError:
+                check(f"{fn.__name__}({bad!r}) raises ValueError", True)
+            except Exception as exc:
+                check(f"{fn.__name__}({bad!r}) raises ValueError", False,
+                      repr(exc))
 
     # live wire: a one-shot TCP DNS server on ::1 answering NXDOMAIN;
     # before the fix the bracketed form died in create_connection
