@@ -64,6 +64,26 @@ if rec["old_pubkey"] != publickey(SK).hex():
     print(f"FAIL: bytearray seed mint changed: {rec!r}")
     fails += 1
 
+# _valid_label is a bool predicate: a non-string must come back False,
+# never a TypeError/AttributeError (twin of the mint_name belt).
+for bad in (123, 1.5, True, b"foo", ["foo"], None):
+    try:
+        got = rotate_name._valid_label(bad)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _valid_label({bad!r}) raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if got is not False:
+        print(f"FAIL: _valid_label({bad!r}) -> {got!r}, want False")
+        fails += 1
+if rotate_name._valid_label("foo-bar1") is not True:
+    print("FAIL: _valid_label('foo-bar1') no longer True")
+    fails += 1
+for bad in ("", "Foo", "a.b", "-a", "a-", "a" * 64):
+    if rotate_name._valid_label(bad) is not False:
+        print(f"FAIL: _valid_label({bad!r}) no longer False")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

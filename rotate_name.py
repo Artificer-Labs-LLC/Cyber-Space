@@ -69,6 +69,12 @@ _EXPIRY_DAYS_CAP = 365
 
 def _valid_label(label: str) -> bool:
     """Client-side mirror of core._valid_name_label (server decides)."""
+    # Twin of the mint_name gate: a non-string label escaped as
+    # TypeError from len()/the "." test or AttributeError from a list
+    # element's .lower — a crash, not this predicate's False (None
+    # alone happened to read as empty).
+    if not isinstance(label, str):
+        return False
     if not label or len(label) > _LABEL_MAX:
         return False
     if label != label.lower() or "." in label:
