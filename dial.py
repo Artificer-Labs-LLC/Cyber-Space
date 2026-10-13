@@ -237,10 +237,21 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
         for entry in entries if isinstance(entries, list) else []:
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("node_pub", "")).lower() != node_pubkey:
+            # Only real strings are directory fields (twin of core
+            # resolve_cyberspace's step-5 directory gate): str() here
+            # aliased a mirror-carried int node_pub into the digit-
+            # string form of a digit-only name key — the SAME entry
+            # the binding seats refuse on sight — and the plan read
+            # it as this name's legacy directory entry.
+            entry_pub = entry.get("node_pub")
+            if not isinstance(entry_pub, str) \
+                    or entry_pub.lower() != node_pubkey:
+                continue
+            entry_url = entry.get("node_url")
+            if not isinstance(entry_url, str):
                 continue
             try:
-                url = core._valid_node_url(str(entry.get("node_url", "")))
+                url = core._valid_node_url(entry_url)
             except core.HTTPException:
                 continue
             out.append(f"plan: direct {url}")

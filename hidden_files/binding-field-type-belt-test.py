@@ -200,5 +200,38 @@ check("directory valid string entry resolves",
       isinstance(_dres, dict)
       and _dres.get("node_url") == "http://8.8.8.8:8471")
 
+print("dial directory seat:")
+import dial  # noqa: E402
+
+
+def _dial_directory_result(directory):
+    saved_get = core._resolve_get_json
+    saved_bv = core._name_binding_verify
+    routes = {"http://127.0.0.1:8471/api/v1/node": {"ok": True},
+              "http://127.0.0.1:8471/api/v1/names/digdial": _db,
+              "http://127.0.0.1:8471/api/v1/directory?limit=200": directory}
+    core._resolve_get_json = lambda u: routes.get(u)
+    core._name_binding_verify = lambda *a, **k: True
+    try:
+        return dial.plan("digdial.cyberspace", "http://127.0.0.1:8471")
+    finally:
+        core._resolve_get_json = saved_get
+        core._name_binding_verify = saved_bv
+
+
+_db["name"] = "digdial"
+check("dial directory int node_pub refused",
+      _dial_directory_result(
+          {"entries": [{"node_pub": int(_digit_pub),
+                        "node_url": "http://8.8.8.8:8471"}]})[0] == 3)
+check("dial directory int node_url refused",
+      _dial_directory_result(
+          {"entries": [{"node_pub": _digit_pub, "node_url": 12345}]})[0] == 3)
+_dcode, _dlines = _dial_directory_result(
+    {"entries": [{"node_pub": _digit_pub,
+                  "node_url": "http://8.8.8.8:8471"}]})
+check("dial directory valid string entry plans direct",
+      _dcode == 0 and any("legacy directory" in _l for _l in _dlines))
+
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)
