@@ -13,6 +13,8 @@ Checks:
   --tcp routes both checks through _query_tcp (UDP never touched)
   A NODATA on the registered name -> AAAA leg asked (v6-only node passes);
   NODATA on both families -> main() exits 1
+  UDP wire dials a server hostname at its resolved family (fake-socket
+  seam: a v6-only hostname creates an AF_INET6 socket aimed at ::1)
   packet shape: _build_query header parses, qname encodes
 
 Run: cd ~/workspace/cybernet && ./venv/bin/python resolver/wiring/test_smoke.py
@@ -339,6 +341,72 @@ def _test_env_port_default():
           f"rc={rc} seen={seen}")
 
 
+# 5i. UDP wire follows the server HOSTNAME's resolved family, not the
+#     string's shape: a daemon bound to ::1 whose operator smokes it by a
+#     v6-only hostname was dialed on an AF_INET socket to the unresolved
+#     string — the query never reached the v6 daemon and read as
+#     "unreachable". _query must create its socket from getaddrinfo's
+#     answer (family + sockaddr), as _query_tcp's create_connection
+#     already does. Fake socket + fake getaddrinfo: the sandbox forbids
+#     real UDP sendto (EPERM), so the wire is proven at the seam the
+#     codebase uses for UDP everywhere else.
+def _test_udp_hostname_family():
+    import socket as _socket
+
+    canned = {}
+
+    class _FakeUdp:
+        def __init__(self, family, kind):
+            canned["family"] = family
+            self.family = family
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, packet, target):
+            canned["target"] = target
+            txid = struct.unpack(">H", packet[:2])[0]
+            # question section verbatim, one A answer via name pointer
+            canned["resp"] = (
+                struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                + packet[12:]
+                + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                + _socket.inet_aton("10.9.8.7"))
+            return len(packet)
+
+        def recvfrom(self, n):
+            return canned["resp"], canned["target"]
+
+    def _fake_gai(host, port, family=0, type=0, *a, **k):
+        if host == "v6only.example":
+            return [(_socket.AF_INET6, _socket.SOCK_DGRAM, 17, "",
+                     ("::1", port, 0, 0))]
+        return [(_socket.AF_INET, _socket.SOCK_DGRAM, 17, "",
+                 ("127.0.0.1", port))]
+
+    real_socket, real_gai = _socket.socket, _socket.getaddrinfo
+    _socket.socket, _socket.getaddrinfo = _FakeUdp, _fake_gai
+    try:
+        rcode, an, _ = smoke._query("alice.cyberspace", 1,
+                                    "v6only.example", 5399, timeout=1.0)
+    finally:
+        _socket.socket, _socket.getaddrinfo = real_socket, real_gai
+    check("v6-only hostname -> _query answers", rcode == 0 and an == 1,
+          f"rcode={rcode} an={an}")
+    check("v6-only hostname -> AF_INET6 socket created",
+          canned.get("family") == _socket.AF_INET6,
+          f"family={canned.get('family')}")
+    check("v6-only hostname -> sendto targets the resolved ::1 sockaddr",
+          canned.get("target") == ("::1", 5399, 0, 0),
+          f"target={canned.get('target')}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -366,6 +434,7 @@ if __name__ == "__main__":
     _test_malformed_name()
     _test_undialable_server()
     _test_env_port_default()
+    _test_udp_hostname_family()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

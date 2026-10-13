@@ -22,7 +22,9 @@ Usage:
 
 --server may be an IPv6 literal, bare ("::1") or bracketed ("[::1]",
 the form copied out of a URL) — the same forms the daemon binds and
-the resolver client dials; see _server_host/_server_family.
+the resolver client dials; see _server_host/_server_family. A hostname
+is dialed at its resolved family on the UDP wire too (a v6-only
+hostname reaches a ::1 daemon), via _server_target.
 """
 
 import argparse
@@ -98,14 +100,41 @@ def _server_family(host: str) -> int:
     return socket.AF_INET
 
 
+def _server_target(host: str, port: int):
+    """(family, sockaddr) the UDP wire dials for a bare server host.
+
+    A literal keeps _server_family + the literal itself, exactly as
+    before. A HOSTNAME is resolved first (getaddrinfo, AF_UNSPEC) and
+    the socket is created from the answer's family, dialing the
+    resolved sockaddr — the family can no longer be guessed from the
+    string's shape. Before, every hostname picked AF_INET and sendto
+    carried the unresolved string, so a daemon bound to ::1 and smoked
+    by a v6-only hostname (the natural --server a operator types) was
+    never reached on its own wire and read as "unreachable", while the
+    TCP leg — create_connection resolves the same way — passed. First
+    getaddrinfo result wins, as create_connection tries them in order.
+    An unresolvable hostname raises gaierror here, which main() already
+    reads as unreachable, honestly."""
+    try:
+        ipaddress.ip_address(host)
+        return _server_family(host), (host, port)
+    except ValueError:
+        pass
+    infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                               socket.SOCK_DGRAM)
+    family, _kind, _proto, _canon, sockaddr = infos[0]
+    return family, sockaddr
+
+
 def _query(name: str, qtype: int, server: str, port: int,
            timeout: float = 3.0) -> tuple[int, int, int]:
     """Return (rcode, ancount, txid_echoed). Raises on transport failure."""
     packet, txid = _build_query(name, qtype)
     host = _server_host(server)
-    with socket.socket(_server_family(host), socket.SOCK_DGRAM) as sock:
+    family, target = _server_target(host, port)
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
-        sock.sendto(packet, (host, port))
+        sock.sendto(packet, target)
         resp, _ = sock.recvfrom(512)
     if len(resp) < 12:
         raise ValueError("truncated DNS response")
