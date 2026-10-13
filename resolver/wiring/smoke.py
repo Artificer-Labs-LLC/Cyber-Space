@@ -60,6 +60,34 @@ def _default_port() -> int:
         return 5353
 
 
+def _port_warnings() -> list[str]:
+    """Loud env-port mistakes, or []. Twin of client._client_port_warnings
+    and daemon._daemon_config_warnings: unset/empty means the documented
+    default (silent, a choice). Set-but-ineffective cases _default_port
+    otherwise hides: not an integer (5353 will be smoked instead of the
+    port the operator named — and the result then reads as a verdict on
+    the daemon), below 1 (clamped to 1), or above 65535 (honored, so the
+    1..65535 gate in main() refuses it). Never prints the value."""
+    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
+    if not raw:
+        return []
+    try:
+        port = int(raw)
+    except (ValueError, TypeError):
+        return [
+            "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
+            "default will be smoked instead"]
+    if port < 1:
+        return [
+            "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 will be "
+            "smoked instead"]
+    if port > 65535:
+        return [
+            "CYBERNET_RESOLVER_PORT is above 65535 — no valid port "
+            "can be derived from it"]
+    return []
+
+
 def _build_query(name: str, qtype: int) -> tuple[bytes, int]:
     txid = random.getrandbits(16)
     flags = 0x0100  # RD set
@@ -197,6 +225,12 @@ def main() -> int:
                     help="run the same checks over DNS-over-TCP (RFC 7766)")
     args = ap.parse_args()
     if args.port is None:
+        # --port wins over the env derivation, and the env warnings
+        # (which describe the port the env WOULD have derived) stay
+        # silent when an explicit --port is given: that port is not
+        # the one about to be smoked (client.main's exact rule).
+        for warn in _port_warnings():
+            print(f"smoke: config: {warn}", file=sys.stderr)
         args.port = _default_port()
 
     # The port is part of the argument shape: a port outside 1..65535

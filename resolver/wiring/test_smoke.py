@@ -456,6 +456,70 @@ def _test_udp_whole_datagram():
           canned.get("n") == 65535, f"n={canned.get('n')}")
 
 
+# 5k. env-port warnings: _default_port silently hid a set-but-ineffective
+#     CYBERNET_RESOLVER_PORT (non-integer -> 5353, below 1 -> clamped to
+#     1) while daemon and client both warn loudly for the same value —
+#     the smoke then blamed the daemon ("unreachable") for a port the
+#     operator never chose. main() must print _port_warnings to stderr
+#     when (and only when) the port comes from the env.
+def _test_env_port_warnings():
+    seen = []
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        seen.append(port)
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    def _run(argv, env):
+        seen.clear()
+        real = smoke._query
+        smoke._query = _counting
+        old_argv = sys.argv
+        old_env = os.environ.get("CYBERNET_RESOLVER_PORT")
+        sys.argv = ["smoke.py", "--server", "127.0.0.1"] + argv
+        if env is None:
+            os.environ.pop("CYBERNET_RESOLVER_PORT", None)
+        else:
+            os.environ["CYBERNET_RESOLVER_PORT"] = env
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out_buf), \
+                    contextlib.redirect_stderr(err_buf):
+                rc = smoke.main()
+        finally:
+            smoke._query = real
+            sys.argv = old_argv
+            if old_env is None:
+                os.environ.pop("CYBERNET_RESOLVER_PORT", None)
+            else:
+                os.environ["CYBERNET_RESOLVER_PORT"] = old_env
+        return rc, out_buf.getvalue(), err_buf.getvalue()
+
+    rc, _, err = _run([], "banana")
+    check("non-integer env port -> warns not-an-integer, still smokes 5353",
+          rc == 0 and seen and all(p == 5353 for p in seen)
+          and "not an integer" in err,
+          f"rc={rc} seen={seen} err={err[:80]!r}")
+    rc, _, err = _run([], "0")
+    check("env port 0 -> warns below-floor, smokes 1",
+          rc == 0 and seen and all(p == 1 for p in seen)
+          and "below the 1 floor" in err,
+          f"rc={rc} seen={seen} err={err[:80]!r}")
+    rc, _, err = _run([], "99999")
+    check("env port 99999 -> warns above-65535, gate refuses, no query",
+          rc == 1 and not seen and "above 65535" in err,
+          f"rc={rc} seen={seen} err={err[:80]!r}")
+    rc, _, err = _run(["--port", "53598"], "banana")
+    check("explicit --port with bad env -> warnings stay silent",
+          rc == 0 and seen and all(p == 53598 for p in seen) and not err,
+          f"rc={rc} seen={seen} err={err[:80]!r}")
+    rc, _, err = _run([], "53599")
+    check("valid env port -> no warning (control)",
+          rc == 0 and not err, f"rc={rc} err={err[:80]!r}")
+    rc, _, err = _run([], None)
+    check("unset env port -> no warning (control)",
+          rc == 0 and not err, f"rc={rc} err={err[:80]!r}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -485,6 +549,7 @@ if __name__ == "__main__":
     _test_env_port_default()
     _test_udp_hostname_family()
     _test_udp_whole_datagram()
+    _test_env_port_warnings()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
