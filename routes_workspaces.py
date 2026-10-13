@@ -4,7 +4,7 @@ import json
 import threading
 import urllib.request
 from fed import envelope as _fed_env
-from core import WORKSPACE_CHARTER_MAX, WORKSPACE_ENTRY_MAX, WORKSPACE_MEMBERS_MAX, WORKSPACE_MEMBERS_MIN, WORKSPACE_NAME_MAX, _NODE_PRIV, _NODE_PUB, _authed, _countersign_mint, _db, _db_lock, _invite_mint, _now, _post_to_peer_path, _read_peer_json, _removed_mint, _workspace_entry_cap, _workspace_ledger, _workspace_maybe_done, _workspace_maybe_go_live, _workspace_row
+from core import WORKSPACE_CHARTER_MAX, WORKSPACE_ENTRY_MAX, WORKSPACE_MEMBERS_MAX, WORKSPACE_MEMBERS_MIN, WORKSPACE_NAME_MAX, _NODE_PRIV, _NODE_PUB, _authed, _countersign_mint, _db, _db_lock, _invite_mint, _now, _post_to_peer_path, _read_peer_json, _removed_mint, _workspace_entry_cap, _workspace_ledger, _workspace_maybe_done, _workspace_maybe_go_live, _workspace_row, read_bounded_form
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ async def workspace_create(request: Request, authorization: str | None = Header(
     countersigns (POST .../sign) — no drive-by collaborators, no unwritten
     rooms."""
     agent = _authed(authorization)
-    form = await request.form()
+    form = await read_bounded_form(request)
     name = (form.get("name") if isinstance(form.get("name"), str) else "").strip()
     if not (3 <= len(name) <= WORKSPACE_NAME_MAX):
         raise HTTPException(status_code=400, detail="Workspace name must be 3-64 chars.")
@@ -164,7 +164,7 @@ async def workspace_entry_add(wid: int, request: Request,
     are sealed. Entry cap: CYBERNET_WORKSPACE_ENTRY_CAP (default 1000) —
     overage strikes the oldest entries first, and the response says which."""
     agent = _authed(authorization)
-    form = await request.form()
+    form = await read_bounded_form(request)
     body = form.get("body")
     body = (body if isinstance(body, str) else "").strip()
     if not body:
@@ -234,7 +234,7 @@ async def workspace_accept(wid: int, request: Request,
     signed off by EVERY member — done is reached by consensus, never
     declared. Reaching done is announced on the response."""
     agent = _authed(authorization)
-    form = await request.form()
+    form = await read_bounded_form(request)
     criterion = (form.get("criterion") if isinstance(form.get("criterion"), str) else "").strip()
     if not criterion:
         raise HTTPException(status_code=400, detail="Acceptance criterion is required.")
@@ -291,7 +291,7 @@ async def workspace_invite(wid: int, request: Request,
     shows the pending invite to the agent its own way; countersign is the
     next build item."""
     agent = _authed(authorization)
-    form = await request.form()
+    form = await read_bounded_form(request)
     node = (form.get("node") if isinstance(form.get("node"), str) else "").strip().lower()
     agent_key = (form.get("agent_key") if isinstance(form.get("agent_key"), str) else "").strip().lower()
     if not node:
@@ -396,7 +396,7 @@ async def workspace_invite_countersign(wid: int, request: Request, authorization
     agent = _authed(authorization)
     if not isinstance(wid, int) or wid < 1:
         raise HTTPException(status_code=400, detail="bad workspace_id")
-    form = await request.form()
+    form = await read_bounded_form(request)
     node = (form.get("node") if isinstance(form.get("node"), str) else "").strip().lower()
     agent_key = (form.get("agent_key") if isinstance(form.get("agent_key"), str) else "").strip().lower()
     charter_hash = (form.get("charter_hash") if isinstance(form.get("charter_hash"), str) else "").strip().lower()
@@ -481,7 +481,7 @@ async def workspace_remote_remove(wid: int, request: Request,
     400 bad key / already-struck 409 / 404 unknown workspace or no such
     remote seat."""
     agent = _authed(authorization)
-    form = await request.form()
+    form = await read_bounded_form(request)
     agent_key = (form.get("agent_key") if isinstance(form.get("agent_key"), str) else "").strip().lower()
     if not all(c in "0123456789abcdef" for c in agent_key) or len(agent_key) != 64:
         raise HTTPException(status_code=400,
