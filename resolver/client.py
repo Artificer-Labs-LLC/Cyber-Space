@@ -114,6 +114,25 @@ def _server_host(server: str) -> str:
     return host
 
 
+def _check_port(port: int) -> int:
+    """Gate a caller-supplied port before any socket sees it.
+
+    Twin of wiring/smoke._check_port and answer._upstream_target's
+    port gate: only a real int (bool excluded) in 1..65535 is a port.
+    Before, _server_target returned True/False/0/-1/65536/a string/
+    a float/None verbatim in the sockaddr, so True aliased to port 1,
+    a string was handed to the transport as a service name, and an
+    out-of-range port escaped later as OverflowError/OSError — and
+    _query_tcp dialed the same values verbatim through
+    create_connection. resolve() gates its own port, but a direct
+    wire caller bypassed it. Anything else raises ValueError at the
+    source, which both wires read as ResolveError."""
+    if isinstance(port, bool) or not isinstance(port, int) \
+            or not 1 <= port <= 65535:
+        raise ValueError(f"bad port {port!r}")
+    return port
+
+
 def _server_target(host: str, port: int):
     """(family, sockaddr, expected source IP) the UDP wire dials.
 
@@ -141,6 +160,7 @@ def _server_target(host: str, port: int):
     # transport failure (ResolveError) like gaierror.
     if not isinstance(host, str):
         raise ValueError(f"bad server host {host!r}")
+    _check_port(port)
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -539,6 +559,7 @@ def _query_tcp(
     _check_timeout(timeout)
     s = sock
     try:
+        _check_port(port)
         if s is None:
             s = socket.create_connection((_server_host(server), port), timeout)
         s.settimeout(timeout)

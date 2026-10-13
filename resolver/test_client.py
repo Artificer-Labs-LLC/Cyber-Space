@@ -192,6 +192,33 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 client._server_target(bad, 5353)
 
+    def test_server_target_bad_port_raises_value_error_not_aliased(self):
+        """_server_target returned a malformed port verbatim in the
+        sockaddr: True aliased to port 1, a string reached the
+        transport as a service name, 0/-1/65536/float/None were
+        dialed or escaped later. Only a real int in 1..65535 is a
+        port (bool excluded, twin of smoke._check_port); boundary
+        ports keep their exact target."""
+        for bad in (True, False, 0, -1, 65536, "5353", 5353.0, None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._server_target("127.0.0.1", bad)
+        for good in (1, 65535):
+            _fam, target, _exp = client._server_target("127.0.0.1", good)
+            self.assertEqual(target, ("127.0.0.1", good))
+
+    def test_query_wires_bad_port_raises_resolve_error(self):
+        """Through the wires a bad port is a transport failure:
+        _query_udp (via _server_target) and _query_tcp promise
+        ResolveError, never a verbatim dial of the malformed port."""
+        packet = client._build_query(0x1234, "node.cyberspace",
+                                     client.QTYPE_A)
+        for bad in (True, 0, 65536, "5353", None):
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_udp(0x1234, packet, "127.0.0.1", bad, 1.0,
+                                  sock=_FakeUdpSock())
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_tcp(0x1234, packet, "127.0.0.1", bad, 1.0)
+
     def test_query_wires_nonstring_server_raises_resolve_error(self):
         """Through the wires a bad server is a transport failure:
         _query_udp/_query_tcp promise ResolveError, never a raw
