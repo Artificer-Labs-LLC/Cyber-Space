@@ -81,6 +81,11 @@ def _parse_ts(s: str, field: str) -> datetime:
     # verification and the "trust a name without trusting the mirror"
     # promise breaks.
     import re
+    # A binding JSON can carry a non-string stamp straight in (123/true/a
+    # list); re.match would leak TypeError past the caller's ValueError
+    # verdict seat. Refuse in-contract, twin of core._parse_claim_time.
+    if not isinstance(s, str):
+        raise ValueError(f"{field} is not canonical UTC timestamp: {s!r}")
     m = re.match(
         r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T"
         r"([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)\Z", s

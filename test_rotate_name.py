@@ -84,6 +84,24 @@ for bad in ("", "Foo", "a.b", "-a", "a-", "a" * 64):
         print(f"FAIL: _valid_label({bad!r}) no longer False")
         fails += 1
 
+# _parse_canonical_ts contract is ValueError on any non-canonical input:
+# a non-string stamp from a stored/JSON record must refuse as ValueError,
+# never leak TypeError from re.match.
+for bad in (123, 1.5, True, b"2026-01-01T00:00:00Z", ["x"], {"a": 1}, None):
+    try:
+        rotate_name._parse_canonical_ts(bad)
+    except ValueError:
+        continue
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _parse_canonical_ts({bad!r}) raised {type(e).__name__}, want ValueError")
+        fails += 1
+        continue
+    print(f"FAIL: _parse_canonical_ts({bad!r}) did not raise")
+    fails += 1
+if rotate_name._parse_canonical_ts("2026-01-01T00:00:00Z").year != 2026:
+    print("FAIL: _parse_canonical_ts canonical Z no longer parses")
+    fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

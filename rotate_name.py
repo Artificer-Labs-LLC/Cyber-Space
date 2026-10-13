@@ -102,6 +102,12 @@ def _parse_canonical_ts(s: str) -> datetime:
     resolve_chain) while every mirror read it as malformed. Raises
     ValueError on any non-canonical input."""
     import re
+    # A stored/JSON record can carry a non-string stamp straight in
+    # (123/true/a list); re.match would leak TypeError past seats that
+    # guard ValueError alone. Refuse in-contract, twin of
+    # core._parse_claim_time.
+    if not isinstance(s, str):
+        raise ValueError(f"issued_at is not canonical UTC timestamp: {s!r}")
     m = re.match(
         r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T"
         r"([0-9]{2}):([0-9]{2}):([0-9]{2})(Z|\+00:00)\Z", s)

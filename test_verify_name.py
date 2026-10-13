@@ -56,6 +56,24 @@ for bad in ("", "Foo", "a.b", "-a", "a-", "a" * 64):
         print(f"FAIL: _valid_label({bad!r}) no longer False")
         fails += 1
 
+# _parse_ts contract is ValueError on any unparseable input (its only
+# caller guards ValueError alone): a non-string stamp from a binding JSON
+# must refuse as ValueError, never leak TypeError from re.match.
+for bad in (123, 1.5, True, b"2026-01-01T00:00:00Z", ["x"], {"a": 1}, None):
+    try:
+        verify_name._parse_ts(bad, "issued_at")
+    except ValueError:
+        continue
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _parse_ts({bad!r}) raised {type(e).__name__}, want ValueError")
+        fails += 1
+        continue
+    print(f"FAIL: _parse_ts({bad!r}) did not raise")
+    fails += 1
+if verify_name._parse_ts("2026-01-01T00:00:00Z", "issued_at").year != 2026:
+    print("FAIL: _parse_ts canonical Z no longer parses")
+    fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)
