@@ -210,6 +210,11 @@ def _query(name: str, qtype: int, server: str, port: int,
     # opcode 0, so an opcode-set packet is not its word.
     if flags & 0x7800:
         raise ValueError("not a standard-query response (opcode set) — response is not ours")
+    # RD echo, twin of client._parse_response: this smoke always sends
+    # RD and build_response echoes RD on every zone reply it builds —
+    # an RD-clear packet is not the daemon's reply to THIS query.
+    if not flags & 0x0100:
+        raise ValueError("response does not echo RD — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -257,6 +262,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # reply to a standard query, hence not the daemon's answer.
     if flags & 0x7800:
         raise ValueError("not a standard-query response (opcode set) — response is not ours")
+    # RD echo, twin of _query above: an RD-clear packet is not the
+    # daemon's reply to this RD-set query.
+    if not flags & 0x0100:
+        raise ValueError("response does not echo RD — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
