@@ -1609,12 +1609,28 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             # as silence for the entry past the slice (fail-closed).
             directory = _resolve_get_json(mirror + "/api/v1/directory?limit=200")
             if isinstance(directory, dict):
-                for entry in directory.get("entries", []) or []:
+                # Only real strings are directory fields, and only a
+                # list can hold entries (twin of dial.plan's directory
+                # seat): str() here aliased a mirror-carried int
+                # node_pub into the digit-string form of a digit-only
+                # name key — the SAME entry the binding seats refuse
+                # on sight — and a non-list entries value escaped as
+                # TypeError into the outer swallow instead of reading
+                # locally as no entries. A non-string node_url on the
+                # matched entry contributes no address (fail-closed
+                # at the _valid_node_url gate below).
+                entries = directory.get("entries")
+                for entry in entries if isinstance(entries, list) else []:
                     if not isinstance(entry, dict):
                         continue
-                    if str(entry.get("node_pub", "")).lower() == node_pubkey:
-                        node_url = str(entry.get("node_url", ""))
-                        break
+                    entry_pub = entry.get("node_pub")
+                    if not isinstance(entry_pub, str) \
+                            or entry_pub.lower() != node_pubkey:
+                        continue
+                    entry_url = entry.get("node_url")
+                    node_url = entry_url if isinstance(
+                        entry_url, str) else ""
+                    break
         try:
             node_url = _valid_node_url(node_url)
         except HTTPException:
