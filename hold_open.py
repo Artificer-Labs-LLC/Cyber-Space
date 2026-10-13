@@ -191,7 +191,17 @@ def _name_pub_from_priv(name_priv_hex: str) -> str | None:
     the seed is unusable; the hold-open still works without rendezvous
     points (degraded, not broken)."""
     try:
-        return _fed_ed25519.publickey(bytes.fromhex(name_priv_hex)).hex()
+        raw = bytes.fromhex(name_priv_hex)
+        # Decoded-length gate, twin of rendezvous._name_pub_bytes:
+        # bytes.fromhex ignores embedded spaces, so a 64-char string
+        # with two spaces decoded to a 31-byte seed — and the key
+        # derivation silently accepted it, yielding a pubkey that is
+        # NOT the name's key. Rendezvous points registered under that
+        # wrong key are points no dialer will ever derive: the hoster
+        # reads as absent, silently. Only a 32-byte decode is a seed.
+        if len(raw) != 32:
+            return None
+        return _fed_ed25519.publickey(raw).hex()
     except Exception:
         return None
 
@@ -207,8 +217,16 @@ def _sign_challenge(challenge_hex: str, name_priv_hex: str) -> str | None:
         if not isinstance(name_priv_hex, str) or len(name_priv_hex) != 64:
             return None
         sk = bytes.fromhex(name_priv_hex)
+        chal = bytes.fromhex(challenge_hex)
+        # Decoded-length gates, twin of _name_pub_from_priv above:
+        # the string-length checks above admit a 64-char string whose
+        # decode is 31 bytes (embedded spaces) — signing that decode
+        # signs a challenge nobody minted, under a seed that is not
+        # the name key, and the dial side refuses both on sight.
+        if len(sk) != 32 or len(chal) != 32:
+            return None
         pk = _fed_ed25519.publickey(sk)
-        sig = _fed_ed25519.sign(bytes.fromhex(challenge_hex), sk, pk)
+        sig = _fed_ed25519.sign(chal, sk, pk)
         if len(sig) != 64:
             return None
         return sig.hex()
