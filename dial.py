@@ -48,6 +48,8 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # Step 0: label shape — an invalid label is a name-side failure, and
     # the plan never goes to the network for it.
     addr = (address or "").strip().lower()
+    if addr.endswith("."):
+        addr = addr[:-1]  # a single FQDN root dot, as the resolver client accepts
     if not addr.endswith(core.CYBERSPACE_SUFFIX):
         return 1, ["name-side: address is not in .cyberspace"]
     label = addr[: -len(core.CYBERSPACE_SUFFIX)]

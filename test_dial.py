@@ -93,6 +93,28 @@ class DialPlanTests(unittest.TestCase):
         code, _ = dial.plan("example.com", MIRROR)
         self.assertEqual(code, 1)
 
+    def test_fqdn_root_dot_is_accepted(self):
+        # The resolver client accepts one trailing dot (the FQDN root
+        # marker, resolver/client.py _build_query/resolve), so the
+        # planner previewing that dial must accept the same form —
+        # before, it read as "not in .cyberspace" for a valid name.
+        priv, pub = _name_key()
+        issued, expires = _live_times()
+        binding = _signed_binding(LABEL, priv, pub, issued, expires)
+        desc = core._reach_mint(
+            priv, pub, LABEL, [{"kind": "direct", "url": "https://93.184.216.34/"}],
+            issued, expires)
+        with _fixture(binding=binding, desc=desc):
+            code, lines = dial.plan(ADDR + ".", MIRROR)
+        self.assertEqual(code, 0)
+        self.assertTrue(any(l == f"name: {ADDR}" for l in lines), lines)
+
+    def test_double_root_dot_is_not_accepted(self):
+        # Only one root dot is stripped; a second leaves a trailing
+        # dot, so the address is still not in .cyberspace.
+        code, _ = dial.plan(ADDR + "..", MIRROR)
+        self.assertEqual(code, 1)
+
     def test_silent_mirror_is_exit_2(self):
         with _fixture(alive=False):
             code, lines = dial.plan(ADDR, MIRROR)
