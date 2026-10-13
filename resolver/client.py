@@ -133,6 +133,24 @@ def _check_port(port: int) -> int:
     return port
 
 
+def _check_packet(packet: bytes) -> bytes:
+    """Gate a caller-supplied query packet before any socket sees it.
+
+    Twin of _parse_response's non-bytes packet gate: the packet is
+    caller-supplied at both wire seats (resolve() builds a real one,
+    but a direct wire caller can pass anything) — a str/int/None
+    packet escaped _query_tcp as a raw TypeError from len()/the
+    frame concat and _query_udp as a raw TypeError from a real
+    socket's sendto, neither of them the ResolveError both wires
+    promise for a transport failure, and a fake/stub socket could
+    even carry a non-bytes object onto the wire verbatim. Only a
+    real bytes/bytearray packet can be a query; anything else is a
+    transport failure, refused here before the socket is touched."""
+    if not isinstance(packet, (bytes, bytearray)):
+        raise ResolveError(f"bad query packet {type(packet).__name__}")
+    return packet
+
+
 def _server_target(host: str, port: int):
     """(family, sockaddr, expected source IP) the UDP wire dials.
 
@@ -503,6 +521,7 @@ def _query_udp(
     is refused rather than parsed.
     """
     _check_timeout(timeout)
+    _check_packet(packet)
     s = sock
     try:
         host = _server_host(server)
@@ -557,6 +576,7 @@ def _query_tcp(
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One DNS-over-TCP round trip (RFC 7766): length-prefixed frames."""
     _check_timeout(timeout)
+    _check_packet(packet)
     s = sock
     try:
         _check_port(port)

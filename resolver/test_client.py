@@ -232,6 +232,57 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(client.ResolveError, msg=repr(bad)):
                 client._query_tcp(0x1234, packet, bad, 5353, 1.0)
 
+    def test_query_wires_bad_packet_raises_resolve_error(self):
+        """Through the wires a bad packet is a transport failure:
+        a str/int/None packet escaped _query_tcp as a raw TypeError
+        from len()/the frame concat and _query_udp as a raw TypeError
+        from a real socket's sendto — neither the ResolveError both
+        wires promise — and a stub socket could carry a non-bytes
+        object onto the wire verbatim. Both wires refuse it before
+        the socket is touched."""
+        class _FakeTcpSock:
+            def __init__(self):
+                self.sent = []
+
+            def settimeout(self, t):
+                pass
+
+            def sendall(self, data):
+                self.sent.append(data)
+
+            def recv(self, n):
+                return b""
+
+            def close(self):
+                pass
+
+        for bad in ("packet", 123, None, 1.5, True, [b"x"]):
+            udp_sock = _FakeUdpSock()
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_udp(0x1234, bad, "127.0.0.1", 5353, 1.0,
+                                  sock=udp_sock)
+            self.assertEqual(udp_sock.sent, [])
+            tcp_sock = _FakeTcpSock()
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_tcp(0x1234, bad, "127.0.0.1", 5353, 1.0,
+                                  sock=tcp_sock)
+            self.assertEqual(tcp_sock.sent, [])
+
+    def test_query_udp_bytearray_packet_still_round_trips(self):
+        """A bytearray packet is a real packet (twin of
+        _parse_response's bytes/bytearray gate): it goes on the wire
+        and its canned reply parses exactly as the bytes form's."""
+        packet = client._build_query(0x1234, "node.cyberspace",
+                                     client.QTYPE_A)
+        parsed = dns.parse_query(packet)
+        canned = dns.build_response(
+            parsed, [(1, 120, socket.inet_aton("10.9.8.7"))], rcode=0)
+        sock = _FakeUdpSock(canned=canned)
+        _flags, answers = client._query_udp(
+            0x1234, bytearray(packet), "127.0.0.1", 5353, 1.0,
+            sock=sock, qname="node.cyberspace", qtype=1)
+        self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
+
     def test_udp_bracketed_v6_server_dials_bare_literal(self):
         """server="[::1]" sends to ("::1", port) and accepts a reply
         sourced from ::1 — before, the bracketed form was compared
