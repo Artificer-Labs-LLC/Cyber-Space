@@ -740,6 +740,17 @@ async def fed_channel_push(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself): claim the envelope's
+    # sig after verify+recipient, before the sender_pub/name gates, the
+    # rate checks, the consent check, and the message write.
+    # verify_envelope already established a valid sig, so the claim's
+    # ValueError is unreachable. Named post-claim edges: sender_pub
+    # mismatch, bad names, and no-consent 403s all claim; genuine
+    # resends re-sign with a fresh ts (new sig).
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
