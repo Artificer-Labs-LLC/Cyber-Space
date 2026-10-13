@@ -102,6 +102,43 @@ if rotate_name._parse_canonical_ts("2026-01-01T00:00:00Z").year != 2026:
     print("FAIL: _parse_canonical_ts canonical Z no longer parses")
     fails += 1
 
+# promote/submit promise (False, reason) — never raises on input: a
+# non-string label must refuse in-contract, not leak AttributeError
+# from _normalize, and a non-int expiry_days must refuse, not leak
+# TypeError (or alias True to 1 day).
+import tempfile
+from pathlib import Path as _Path
+_home = _Path(tempfile.mkdtemp())
+for bad in (123, 1.5, True, ["foo"], {"a": 1}, None):
+    for fn, args in ((rotate_name.promote_rotation, (bad, _home)),
+                     (rotate_name.submit_rotation,
+                      (bad, "http://127.0.0.1:8471", _home))):
+        try:
+            ok, _msg = fn(*args)
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL: {fn.__name__}({bad!r}) raised {type(e).__name__}: {e}")
+            fails += 1
+            continue
+        if ok is not False:
+            print(f"FAIL: {fn.__name__}({bad!r}) -> ok={ok!r}, want False")
+            fails += 1
+for bad in ("364", 1.5, True, None, [364]):
+    try:
+        ok, _msg = rotate_name.submit_rotation(
+            "foo", "http://127.0.0.1:8471", _home, bad)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: submit_rotation expiry={bad!r} raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if ok is not False:
+        print(f"FAIL: submit_rotation expiry={bad!r} -> ok={ok!r}, want False")
+        fails += 1
+# A valid label still reaches the ordinary missing-rotation refusal.
+ok, _msg = rotate_name.promote_rotation("foo", _home)
+if ok is not False:
+    print("FAIL: promote_rotation('foo') on empty home no longer refuses")
+    fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

@@ -409,6 +409,13 @@ def promote_rotation(label: str, home: Path,
     is checked read-only and reported the same way — never written.
     Returns (True, summary) or (False, reason). Never raises on input.
     """
+    # The label is caller-supplied at this library seat (main() passes
+    # a validated string, but a direct caller can pass anything): a
+    # non-string escaped as AttributeError from _normalize's .strip()
+    # — a crash, not this function's (False, reason) refusal. Only a
+    # real string is a label to normalize; anything else refuses here.
+    if not isinstance(label, str):
+        return False, f"{label!r} is not a valid .cyberspace label"
     label = _normalize(label)
     if not _valid_label(label):
         return False, f"{label!r} is not a valid .cyberspace label"
@@ -523,9 +530,18 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
         refuses here with the ordering spelled out.
     Returns (True, summary) or (False, reason). Never raises on input.
     """
+    # Twin of promote_rotation's label gate: a non-string label escaped
+    # as AttributeError from _normalize's .strip(), and a non-int
+    # expiry_days escaped as TypeError from the range compares below
+    # (True aliased to a 1-day binding). Refuse both at the source.
+    if not isinstance(label, str):
+        return False, f"{label!r} is not a valid .cyberspace label"
     label = _normalize(label)
     if not _valid_label(label):
         return False, f"{label!r} is not a valid .cyberspace label"
+    if isinstance(expiry_days, bool) or not isinstance(expiry_days, int):
+        return False, (f"--expiry-days={expiry_days!r} is not a whole "
+                       f"number of days — nothing was sent")
     if not _valid_mirror(mirror_url):
         return False, ("mirror is not a dialable http(s) URL with a host "
                        "and a port in 1-65535 — bad argument, nothing "
