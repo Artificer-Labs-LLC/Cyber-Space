@@ -43,6 +43,31 @@ _check(mint_name._valid_label, "foo-bar1", True, "_valid_label('foo-bar1')")
 for bad in ("", "Foo", "a.b", "-a", "a-", "a" * 64):
     _check(mint_name._valid_label, bad, False, f"_valid_label({bad!r})")
 
+# _hostd_env_text: a non-string in any position must refuse as
+# ValueError, never an AttributeError from .rstrip() and never a
+# stringified literal (CYBERNET_NAME_PRIVKEY=None) written into the
+# key-bearing env body. Valid text keeps its exact active lines.
+_good_env = mint_name._hostd_env_text("foo", "ab" * 32, "http://x:8471/")
+for _line in ("CYBERNET_HOSTED_NAME=foo\n",
+              "CYBERNET_NAME_PRIVKEY=" + "ab" * 32 + "\n",
+              "CYBERNET_MIRROR_URL=http://x:8471\n"):
+    if _line not in _good_env:
+        print(f"FAIL: valid _hostd_env_text missing {_line!r}")
+        fails += 1
+for _args in ((123, "ab" * 32, "http://x"), ("foo", None, "http://x"),
+              ("foo", 123, "http://x"), ("foo", "ab" * 32, None),
+              ("foo", "ab" * 32, 123), (None, "ab" * 32, "http://x")):
+    try:
+        mint_name._hostd_env_text(*_args)
+        print(f"FAIL: _hostd_env_text{_args!r} did not refuse")
+        fails += 1
+    except ValueError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _hostd_env_text{_args!r} raised "
+              f"{type(e).__name__}, want ValueError")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)

@@ -95,6 +95,17 @@ def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
     operator who never sees the names cannot set them at all.
     Agreement with hostd is pinned by
     hidden_files/mint-env-hostd-agreement-belt-test.py."""
+    # Twin of the canonical-payload builders' gate (_claim_payload /
+    # core._reach_canonical): a non-string field has no env form — a
+    # non-string mirror crashed .rstrip() with AttributeError, and a
+    # None/non-string priv_hex was silently stringified INTO the
+    # key-bearing file as the literal CYBERNET_NAME_PRIVKEY=None (the
+    # clobber rotate_name._refresh_hostd_env_text was gated against).
+    # Only real strings are written; refuse as ValueError at the source.
+    for _field, _value in (("label", label), ("priv_hex", priv_hex),
+                           ("mirror", mirror)):
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
     return (
         f"# hostd env for {label}.cyberspace — install as /etc/cybernet-hostd/hostd.env (0600)\n"
         f"# Holds the NAME KEY only. Never the master identity. Guard this file.\n"
