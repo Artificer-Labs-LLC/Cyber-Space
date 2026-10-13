@@ -92,6 +92,27 @@ if "terminal key" not in verdict:
     print(f"FAIL: valid check_live changed: {verdict!r}")
     fails += 1
 
+# The terminal key compares in normalized form (twin of walk's pin and
+# the live key): the same key in uppercase or padded form must agree,
+# never read as a lineage break; a genuinely different key still fails.
+for term in (PK_B.upper(), f"  {PK_B}  "):
+    try:
+        v = resolve_chain.check_live("foo", "http://x:1", term)
+        if "terminal key" not in v or PK_B[:16] not in v:
+            print(f"FAIL: check_live terminal={term!r} verdict {v!r}")
+            fails += 1
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: check_live terminal={term!r} raised {type(e).__name__}: {e}")
+        fails += 1
+try:
+    resolve_chain.check_live("foo", "http://x:1", PK_A)
+    print("FAIL: check_live different terminal key returned")
+    fails += 1
+except resolve_chain.ChainError as e:
+    if "not the designated heir" not in str(e):
+        print(f"FAIL: check_live different key -> ChainError {e!r}")
+        fails += 1
+
 # _label rides verify_name._normalize_expected: a non-string name must
 # read as the "" no-name sentinel, never AttributeError from .strip()
 # or a bytes alias compared against str names downstream.

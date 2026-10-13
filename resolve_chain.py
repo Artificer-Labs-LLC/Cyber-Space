@@ -208,13 +208,21 @@ def check_live(name: str, mirror: str, terminal_key: str) -> str:
     if reason is not None:
         raise ChainError(f"live binding fails offline verification: {reason}")
     live_key = _normalize_expected(binding["node_pubkey"])
-    if live_key != terminal_key:
+    # The terminal key is compared in normalized form, like every other
+    # key comparison in this module (walk's pin, the live key above,
+    # verify_name's pins): the raw argument was compared against the
+    # normalized live key, so the SAME key passed in uppercase or with
+    # padding — the form a caller copied from a claim form — read as a
+    # lineage break ("not the designated heir") for a chain that walks
+    # clean to exactly that key.
+    terminal = _normalize_expected(terminal_key)
+    if live_key != terminal:
         raise ChainError(
             f"live binding names {live_key[:16]}..., but the chain walks "
-            f"to {terminal_key[:16]}... — the answering key is not the "
+            f"to {terminal[:16]}... — the answering key is not the "
             f"designated heir")
     return (f"live binding names the chain's terminal key "
-            f"{terminal_key[:16]}... (issued {binding['issued_at']})")
+            f"{terminal[:16]}... (issued {binding['issued_at']})")
 
 
 def main(argv: list[str]) -> int:
