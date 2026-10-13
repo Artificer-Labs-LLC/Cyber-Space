@@ -742,6 +742,87 @@ def _test_aa_bit():
           f"err={err}")
 
 
+# 5o. A reply must answer a STANDARD query: client._parse_response
+#     refuses a nonzero opcode (the daemon only ever answers opcode 0,
+#     and both its response builders emit opcode 0), but both smoke
+#     wires checked only QR+AA, so a QR|AA-set packet with opcode 1
+#     (flags=QR|AA|opcode1|RD) claiming an answer earned a PASS for a
+#     packet that is not a reply to a standard query at all. Both refuse.
+def _test_opcode():
+    import socket as _socket
+
+    canned = {}
+
+    class _FakeUdp:
+        def __init__(self, family, kind):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, packet, target):
+            txid = struct.unpack(">H", packet[:2])[0]
+            canned["resp"] = (
+                struct.pack(">HHHHHH", txid, 0x8D00, 1, 1, 0, 0)
+                + packet[12:]
+                + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                + _socket.inet_aton("10.9.8.7"))
+            return len(packet)
+
+        def recvfrom(self, n):
+            return canned["resp"], ("127.0.0.1", 5399)
+
+    real_socket = _socket.socket
+    _socket.socket = _FakeUdp
+    try:
+        smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399, timeout=1.0)
+        err = None
+    except Exception as exc:  # noqa: BLE001 - the refusal is the check
+        err = exc
+    finally:
+        _socket.socket = real_socket
+    check("UDP opcode-set packet -> _query refuses",
+          isinstance(err, ValueError) and "opcode set" in str(err),
+          f"err={err}")
+
+    import threading
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+
+    def _serve_once():
+        conn, _ = srv.accept()
+        with conn:
+            head = conn.recv(2)
+            (ln,) = struct.unpack(">H", head)
+            q = b""
+            while len(q) < ln:
+                q += conn.recv(ln - len(q))
+            (txid,) = struct.unpack(">H", q[:2])
+            resp = struct.pack(">HHHHHH", txid, 0x8D00, 1, 1, 0, 0) + q[12:]
+            conn.sendall(struct.pack(">H", len(resp)) + resp)
+        srv.close()
+
+    threading.Thread(target=_serve_once, daemon=True).start()
+    try:
+        smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                         timeout=2.0)
+        err = None
+    except Exception as exc:  # noqa: BLE001 - the refusal is the check
+        err = exc
+    check("TCP opcode-set packet -> _query_tcp refuses",
+          isinstance(err, ValueError) and "opcode set" in str(err),
+          f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -775,6 +856,7 @@ if __name__ == "__main__":
     _test_udp_reply_source()
     _test_qr_bit()
     _test_aa_bit()
+    _test_opcode()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

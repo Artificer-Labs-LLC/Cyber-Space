@@ -204,6 +204,12 @@ def _query(name: str, qtype: int, server: str, port: int,
     # the daemon's, and must not earn this smoke a PASS.
     if not flags & 0x0400:
         raise ValueError("not authoritative (AA bit clear) — response is not ours")
+    # Opcode, twin of client._parse_response: a packet with a nonzero
+    # opcode is not a reply to a standard query at all — the daemon
+    # only ever answers opcode 0 and both its response builders emit
+    # opcode 0, so an opcode-set packet is not its word.
+    if flags & 0x7800:
+        raise ValueError("not a standard-query response (opcode set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -247,6 +253,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # authoritative daemon's answer for this zone.
     if not flags & 0x0400:
         raise ValueError("not authoritative (AA bit clear) — response is not ours")
+    # Opcode, twin of _query above: an opcode-set packet is not a
+    # reply to a standard query, hence not the daemon's answer.
+    if flags & 0x7800:
+        raise ValueError("not a standard-query response (opcode set) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
