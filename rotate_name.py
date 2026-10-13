@@ -56,7 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign, checkvalid  # noqa: E402
-from mint_name import _write_secret  # noqa: E402  born-600 secret writes
+from mint_name import _write_secret, _valid_mirror  # noqa: E402
 
 _LABEL_MAX = 63
 _DEFAULT_MIRROR = "http://127.0.0.1:8471"
@@ -467,6 +467,10 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
     label = _normalize(label)
     if not _valid_label(label):
         return False, f"{label!r} is not a valid .cyberspace label"
+    if not _valid_mirror(mirror_url):
+        return False, ("mirror is not a dialable http(s) URL with a host "
+                       "and a port in 1-65535 — bad argument, nothing "
+                       "was sent")
     if expiry_days > _EXPIRY_DAYS_CAP:
         return False, (f"--expiry-days={expiry_days} exceeds the namespace's "
                        f"{_EXPIRY_DAYS_CAP}-day binding-lifetime cap — the "
@@ -595,6 +599,11 @@ def main(argv: list[str]) -> int:
         return 2
     home = Path.home() / ".cyberspace"
     if args.submit is not None:
+        if not _valid_mirror(args.submit):
+            print("refused: mirror is not a dialable http(s) URL with a "
+                  "host and a port in 1-65535 — bad argument, nothing "
+                  "was sent", file=sys.stderr)
+            return 2
         ok, msg = submit_rotation(label, args.submit, home, args.expiry_days)
         print(("submitted: " if ok else "refused: ") + msg,
               file=sys.stderr if not ok else sys.stdout)

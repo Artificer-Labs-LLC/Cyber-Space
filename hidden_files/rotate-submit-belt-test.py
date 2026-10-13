@@ -229,6 +229,17 @@ with tempfile.TemporaryDirectory() as td:
     check("at-cap expiry passes the local gate (mirror refusal only)",
           not ok and "did not answer" in msg, msg)
 
+# 12c. refusal: undialable/malformed mirror is a bad argument, refused
+# before any record read or network use (twin of mint 0e2d983)
+with tempfile.TemporaryDirectory() as td:
+    home = Path(td)
+    _stage(home, LABEL, OLD_SEED, NEW_SEED)
+    for bad in ("http://127.0.0.1:99999", "http://127.0.0.1:0",
+                "http://127.0.0.1:abc", "notaurl"):
+        ok, msg = rotate_name.submit_rotation(LABEL, bad, home)
+        check(f"refuses malformed mirror {bad!r} as bad argument",
+              not ok and "bad argument" in msg, msg)
+
 # 13-14. CLI exit codes: success rc=0, --submit+--promote together rc=2
 LABEL3 = "submitcli-" + secrets.token_hex(3)
 assert _claim(LABEL3, OLD_SEED), "setup: cli claim failed"
@@ -248,6 +259,10 @@ with tempfile.TemporaryDirectory() as td:
         with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
             rc2 = rotate_name.main(["--submit", MIRROR, "--promote", LABEL3])
         check("CLI --submit+--promote exits 2", rc2 == 2)
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            rc3 = rotate_name.main(
+                ["--submit", "http://127.0.0.1:99999", LABEL3])
+        check("CLI --submit malformed mirror exits 2", rc3 == 2)
 
 server.should_exit = True
 t.join(timeout=5)
