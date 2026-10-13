@@ -207,9 +207,14 @@ def hold_open_cycle_once(relay_url: str, token: str,
                  timeout=_HOLD_WAIT_TIMEOUT)
     if data is None:
         return (False, 0)
-    sessions = data.get("sessions") or []
+    # The wait answer is relay-controlled: a sessions value that is
+    # not a list (123, true) died in a TypeError on the iteration
+    # instead of reading as no pending sessions — this cycle promises
+    # never to raise across its boundary. Only a list can hold
+    # sessions; every other shape simply has none.
+    sessions = data.get("sessions")
     answered = 0
-    for sess in sessions:
+    for sess in sessions if isinstance(sessions, list) else []:
         if not isinstance(sess, dict):
             continue
         session_id = sess.get("session_id")
