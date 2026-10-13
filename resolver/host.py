@@ -561,4 +561,16 @@ if __name__ == "__main__":
     if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
         print(__doc__.strip())
         raise SystemExit(0)
+    if sys.argv[1:]:
+        # Hostd takes NO arguments — it is configured by env only
+        # (the systemd unit passes none). Any argument is a bad argument:
+        # silently ignoring one (a mistyped flag, a stray positional)
+        # started the daemon on the env configuration the operator never
+        # asked for, exactly the unknown-option hazard resolver.daemon
+        # and mint_name refuse.
+        print(f"hostd: refusing to start: unexpected argument(s) "
+              f"{' '.join(sys.argv[1:])!r} — this daemon is configured "
+              f"by environment only, no arguments are accepted",
+              file=sys.stderr)
+        raise SystemExit(2)
     raise SystemExit(run())
