@@ -491,8 +491,12 @@ def _push_to_peer(channel_id: int, node_pub: str, from_agent: str,
     except urllib.error.HTTPError as e:
         if e.code == 403:
             try:
-                detail = json.loads(
-                    e.read().decode("utf-8", "replace")).get("detail", "")
+                # The error body is a peer body too: read it under the
+                # same bound as every success-path peer read, and treat
+                # oversize as no detail (never a parsed document).
+                raw = e.read(_PEER_RESP_MAX + 1)
+                detail = "" if len(raw) > _PEER_RESP_MAX else json.loads(
+                    raw.decode("utf-8", "replace")).get("detail", "")
             except Exception:
                 detail = ""
             if isinstance(detail, str) and detail.startswith("no subscription"):
