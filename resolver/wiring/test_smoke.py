@@ -1820,6 +1820,35 @@ def _test_packet_shape():
     check("qtype=A qclass=IN", qtype == 1 and qclass == 1)
 
 
+# 7. _build_query refuses a malformed name/qtype instead of raising
+#    AttributeError/TypeError/struct.error or aliasing it (twin of
+#    client._build_query): True built qtype A, an empty label built a
+#    different name than the caller wrote, a 64-byte label wrote a
+#    corrupt length byte.
+def _test_build_query_malformed():
+    bad = [
+        (None, 1), (123, 1), (b"alice.cyberspace", 1),
+        ("alice.cyberspace", True), ("alice.cyberspace", 65536),
+        ("alice.cyberspace", -1), ("alice.cyberspace", "1"),
+        ("alice.cyberspace", None), ("alice.cyberspace", 1.0),
+        ("", 1), ("alice..cyberspace", 1), (".cyberspace", 1),
+        ("alice.cyberspace.", 1), ("éalice.cyberspace", 1),
+        ("a" * 64 + ".cyberspace", 1),
+        (".".join(["a" * 63] * 5), 1),
+    ]
+    for name, qtype in bad:
+        try:
+            smoke._build_query(name, qtype)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"_build_query({name!r}, {qtype!r}) -> ValueError",
+              isinstance(err, ValueError), f"err={err}")
+    pkt, _txid = smoke._build_query("genesis.cyberspace", 28)
+    qtype, _qclass = struct.unpack(">HH", pkt[-4:])
+    check("_build_query valid AAAA still builds", qtype == 28)
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1851,6 +1880,7 @@ if __name__ == "__main__":
     _test_answer_owner()
     _test_answer_type_class()
     _test_packet_shape()
+    _test_build_query_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)

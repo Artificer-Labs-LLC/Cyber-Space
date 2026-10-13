@@ -89,12 +89,46 @@ def _port_warnings() -> list[str]:
 
 
 def _build_query(name: str, qtype: int) -> tuple[bytes, int]:
+    """Build the one-question query, refusing a malformed name/qtype.
+
+    Twin of client._build_query's gates: both fields are caller-supplied
+    (main() normalizes its --name, but a direct caller can pass
+    anything). Before, a non-string name escaped as AttributeError from
+    .split() (None/int) or TypeError (bytes), a non-ASCII label died as
+    codec gibberish, True ALIASED to qtype A (bool is an int subclass)
+    and an out-of-range or non-int qtype escaped as struct.error —
+    none of them the ValueError this module's other gates raise. An
+    empty label was silently skipped into the length byte of the next,
+    so "alice..cyberspace" built a DIFFERENT name than the caller
+    wrote, "" built a root query, and a label over 63 bytes wrote a
+    length byte whose top bits the daemon's parser reads as a
+    compression pointer. Only a real string of non-empty ASCII labels
+    (each <=63 bytes, the whole wire name <=255 bytes) and a real int
+    qtype in the uint16 wire range (bool excluded) build a query;
+    anything else raises ValueError here, at the source. main()'s
+    normalized names and the A/AAAA qtypes are untouched."""
+    if not isinstance(name, str):
+        raise ValueError(f"bad name {name!r}")
+    if isinstance(qtype, bool) or not isinstance(qtype, int) \
+            or not 0 <= qtype <= 65535:
+        raise ValueError(f"bad qtype {qtype!r}")
+    encoded: list[bytes] = []
+    for part in name.split("."):
+        if not part:
+            raise ValueError(f"name has an empty label: {name!r}")
+        try:
+            raw = part.encode("ascii")
+        except UnicodeEncodeError:
+            raise ValueError(f"name label is not ASCII: {part!r}") from None
+        if len(raw) > 63:
+            raise ValueError("name label exceeds the 63-byte DNS limit")
+        encoded.append(raw)
+    qname = b"".join(bytes([len(r)]) + r for r in encoded) + b"\x00"
+    if len(qname) > 255:
+        raise ValueError("name exceeds the 255-byte DNS wire limit")
     txid = random.getrandbits(16)
     flags = 0x0100  # RD set
     header = struct.pack(">HHHHHH", txid, flags, 1, 0, 0, 0)
-    qname = b"".join(
-        bytes([len(part)]) + part.encode("ascii") for part in name.split(".")
-    ) + b"\x00"
     question = qname + struct.pack(">HH", qtype, _QCLASS_IN)
     return header + question, txid
 
