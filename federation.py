@@ -31,10 +31,22 @@ def _recv_attestation(delta, sender_pub: str, retire: bool):
     row = delta.get("row")
     if not isinstance(row, dict):
         return None, None
+    # Only real strings are row fields: str() at the owner pick and in
+    # _delta_payload aliased a delta-carried JSON number into the row
+    # -- a numeric name stringified to the valid label its owner
+    # signature genuinely covered (the payload builder coerces the
+    # same way) and was accepted as a valid attestation (twin of
+    # fed_directory_delta's row gate). Absent fields keep their
+    # payload defaults; present ones must be strings.
+    if any(k in row and not isinstance(row[k], str) for k in
+           ("node_pub", "name", "node_url", "network", "version")):
+        return None, None
     if str(row.get("node_pub", "")).lower() != sender_pub.lower():
         return None, None
     seq = delta.get("seq")
     if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        return None, None
+    if "sig" in delta and not isinstance(delta["sig"], str):
         return None, None
     sig_hex = str(delta.get("sig", ""))
     try:
