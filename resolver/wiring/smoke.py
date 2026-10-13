@@ -140,6 +140,16 @@ def main() -> int:
                     help="run the same checks over DNS-over-TCP (RFC 7766)")
     args = ap.parse_args()
 
+    # The port is part of the argument shape: a port outside 1..65535
+    # can never be dialed (sendto raises OverflowError, create_connection
+    # fails likewise), so without this check it read as "unreachable" —
+    # a healthy daemon merely down — when it is really a bad argument,
+    # exactly as dial.plan and the daemon mirror warning ruled.
+    if not 1 <= args.port <= 65535:
+        print(f"FAIL: --port {args.port} is not a dialable port "
+              f"(must be 1..65535) — bad argument, no query attempted")
+        return 1
+
     query_fn = _query_tcp if args.tcp else _query
     wire = "tcp" if args.tcp else "udp"
     ok = True

@@ -198,6 +198,36 @@ def _test_aaaa_fallback():
     check("NODATA on both families -> exit 1", rc == 1, f"got {rc}")
 
 
+# 5e. undialable --port is a bad argument, never "unreachable":
+#     no query is attempted for 99999 / 0 / -1, and 65535 still dials
+def _test_undialable_port():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    for bad in ("99999", "0", "-1"):
+        calls["n"] = 0
+        real = smoke._query
+        smoke._query = _counting
+        old_argv = sys.argv
+        sys.argv = ["smoke.py", "--server", "127.0.0.1", "--port", bad]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = smoke.main()
+        finally:
+            smoke._query = real
+            sys.argv = old_argv
+        out = buf.getvalue()
+        check(f"--port {bad} -> exit 1, no query, not 'unreachable'",
+              rc == 1 and calls["n"] == 0 and "not a dialable port" in out
+              and "unreachable" not in out, f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    rc, _ = _run_main_with_fake(_counting)
+    check("valid port 53599 still dials (control)", rc == 0)
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -221,6 +251,7 @@ if __name__ == "__main__":
     _test_tcp_flag_routes()
     _test_ipv6_server_forms()
     _test_aaaa_fallback()
+    _test_undialable_port()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
