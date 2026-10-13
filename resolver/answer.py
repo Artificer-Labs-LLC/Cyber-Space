@@ -161,6 +161,17 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             # answer.
             if len(reply) < 2 or bytes(reply[:2]) != raw[:2]:
                 return error_response(raw, 2)
+            # A reply must also BE a response: the QR bit (top bit of
+            # the flags word) is what makes a packet an answer at all
+            # (twin of client._parse_response's first check). Before,
+            # a right-source, right-txid packet with QR clear — a
+            # query, not an answer — was relayed byte-for-byte, and a
+            # txid-only stub with no flags word at all passed likewise.
+            # Unlike the daemon's own replies, an upstream's flags are
+            # NOT otherwise policed here: a recursive resolver
+            # legitimately sets RA and clears AA. Only QR is refused.
+            if len(reply) < 4 or not reply[2] & 0x80:
+                return error_response(raw, 2)
             return bytes(reply)
         finally:
             sock.close()

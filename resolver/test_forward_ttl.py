@@ -100,7 +100,7 @@ def _with_socket_factory(factory, fn):
 def test_forward_passthrough():
     """The query leaves byte-for-byte and the reply returns byte-for-byte."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">H", 0x4321) + b"\x00" * 10 + b"upstream says hi"
+    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"upstream says hi"
     resp = _with_socket_factory(
         lambda: _CannedSocket(canned),
         lambda: answer.handle_query(
@@ -113,7 +113,7 @@ def test_forward_v6_upstream_uses_inet6():
     """An IPv6-literal upstream is dialed on an AF_INET6 socket (an
     AF_INET sendto to it would raise and SERVFAIL every forward)."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">H", 0x4321) + b"\x00" * 10 + b"v6 upstream says hi"
+    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"v6 upstream says hi"
     seen = {}
 
     def factory(family, *a, **k):
@@ -139,7 +139,7 @@ def test_forward_hostname_upstream_resolves_family():
     was never reached and SERVFAILed. Now dials _upstream_target via
     getaddrinfo AF_UNSPEC: AF_INET6 socket to the resolved sockaddr."""
     raw = _query_packet("example.com")
-    canned = struct.pack(">H", 0x4321) + b"\x00" * 10 + b"v6-host upstream says hi"
+    canned = struct.pack(">HHHHHH", 0x4321, 0x8180, 0, 0, 0, 0) + b"v6-host upstream says hi"
     seen = {}
     sock_inst = _CannedSocket(canned, source=("::1", 53))
 
@@ -215,6 +215,26 @@ def test_forward_wrong_txid_servfail():
         check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
               _rcode(resp) == 2 and resp != canned,
               f"got rcode {_rcode(resp)} resp={resp!r}")
+
+
+def test_forward_qr_clear_servfail():
+    """A packet with the QR bit clear is a query, not an answer: before,
+    _forward checked source and txid but never QR, so a right-source,
+    right-txid query-shaped packet was relayed byte-for-byte as the
+    upstream's answer. QR-clear and a txid-only stub (no flags word at
+    all) both SERVFAIL; a QR-set reply (the passthrough tests) is the
+    control."""
+    raw = _query_packet("example.com")
+    qr_clear = struct.pack(">HHHHHH", 0x4321, 0x0100, 1, 0, 0, 0) + b"query, not answer"
+    for label, canned in [("QR-clear reply", qr_clear), ("txid-only reply", b"\x43\x21")]:
+        resp = _with_socket_factory(
+            lambda c=canned: _CannedSocket(c),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("8.8.8.8", 53)))
+        check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
+              resp != canned and len(resp) > 3 and _rcode(resp) == 2,
+              f"got resp={resp!r}")
 
 
 def test_forward_unresolvable_hostname_servfail():
@@ -326,6 +346,7 @@ def main():
     test_forward_hostname_upstream_resolves_family()
     test_forward_wrong_source_servfail()
     test_forward_wrong_txid_servfail()
+    test_forward_qr_clear_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()
