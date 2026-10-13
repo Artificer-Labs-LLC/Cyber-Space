@@ -332,7 +332,18 @@ def _reject_nonpublic_node_url(url: str) -> None:
 def _node_url_host(url: str) -> str:
     # Host extraction mirrors _reject_nonpublic_node_url: query strings
     # are not part of the host and are stripped before the shape match.
+    # The refusal contract is HTTPException(400), the same as the sibling
+    # gate _valid_node_url: a non-string escaped as AttributeError/
+    # TypeError from .split(), and a string with no shape match as
+    # AttributeError from a None match's .group(), at the peer-pin seats.
+    # Only a real string with a URL shape has a host; the two call sites
+    # run it after _reject_nonpublic_node_url has already matched, so
+    # valid URLs are untouched.
+    if not isinstance(url, str):
+        raise HTTPException(status_code=400, detail="bad node_url")
     m = _NODE_URL_RE.fullmatch(url.split("?", 1)[0])
+    if m is None:
+        raise HTTPException(status_code=400, detail="bad node_url")
     return m.group(1).strip("[]")
 
 # Peer-response read bound (wire-surface belt — outbound half): the urlopen
