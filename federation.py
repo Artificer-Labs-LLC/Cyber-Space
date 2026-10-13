@@ -11,7 +11,8 @@ from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _NODE_PUB, _NODE_URL_RE, _authed, _broadcast, _check_rate, _db,
                   _db_lock, _delta_payload, _countersign_payload, _hash_key,
                   _invite_payload, _leave_payload, _now, _pigeonhole_cutoff,
-                  _post_message, _read_peer_json, _removed_payload, _valid_name,
+                  _peer_urlopen, _post_message, _read_peer_json,
+                  _removed_payload, _valid_name,
                   _valid_node_url, ingest_reach_descriptor)
 
 router = APIRouter()
@@ -660,7 +661,7 @@ def fed_subscribe(inp: dict, authorization: str | None = Header(default=None)):
             peer["node_url"] + "/fed/channel/join",
             data=json.dumps(env).encode(),
             headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with _peer_urlopen(req, timeout=8) as resp:
             reply = _read_peer_json(resp)
         if not reply.get("ok"):
             raise ValueError("peer refused")
@@ -714,7 +715,7 @@ def fed_unsubscribe(inp: dict, authorization: str | None = Header(default=None))
                 peer["node_url"] + "/fed/channel/leave",
                 data=json.dumps(leave).encode(),
                 headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with _peer_urlopen(req, timeout=8) as resp:
                 peer_cleaned = bool(_read_peer_json(resp).get("removed"))
         except Exception:
             pass  # peer down/unknown: local consent already revoked, no loss

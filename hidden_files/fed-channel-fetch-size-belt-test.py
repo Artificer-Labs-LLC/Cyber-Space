@@ -14,6 +14,14 @@ failure (502, consent row rolled back) and unsubscribe reads it as
 peer_cleaned=False (its ordinary unreachable-peer outcome).
 Exactly-64KB still parses.
 
+Gate migration (later tick): both seats now ride core._peer_urlopen
+instead of raw urlopen, so the SSRF/rebind/redirect/IP-pin gate runs
+at fetch time like every other peer seat — core's own invariant is
+that every peer-side urlopen rides it. The fake transport below is
+therefore installed at federation._peer_urlopen, and the final
+checks pin the wiring plus the unmocked fail-closed outcome for a
+loopback peer URL the gate refuses.
+
 The fake response honors REAL read semantics — read(n) returns at
 most n bytes, and records the n it was asked for.
 
@@ -100,14 +108,14 @@ class FakeResp:
 
 def call(fn, body: bytes):
     resp = FakeResp(body)
-    orig = federation.urllib.request.urlopen
-    federation.urllib.request.urlopen = lambda req, timeout=None: resp
+    orig = federation._peer_urlopen
+    federation._peer_urlopen = lambda req, timeout=None: resp
     try:
         return fn(), resp, None
     except HTTPException as exc:
         return None, resp, exc
     finally:
-        federation.urllib.request.urlopen = orig
+        federation._peer_urlopen = orig
 
 
 def subs_count(channel):
@@ -181,6 +189,43 @@ out, _, err = call(lambda: federation.fed_unsubscribe(
 check("unsubscribe exactly-64KB answer reports peer_cleaned=True",
       err is None and out is not None and out.get("peer_cleaned") is True,
       f"err={err} out={out}")
+
+# 7. Gate wiring: both seats ride core._peer_urlopen; no raw urlopen
+#    remains in federation.py.
+src = (ROOT / "federation.py").read_text()
+check("federation._peer_urlopen is core._peer_urlopen",
+      federation._peer_urlopen is core._peer_urlopen)
+check("no raw urlopen seat remains in federation.py",
+      "urllib.request.urlopen" not in src and src.count("_peer_urlopen(req") == 2,
+      f"count={src.count('_peer_urlopen(req')}")
+
+# 8. Unmocked: a loopback peer URL is refused by the gate at fetch
+#    time — subscribe reads it as its ordinary 502 and rolls back.
+LOOP_SK = secrets.token_bytes(32).hex()
+LOOP_PK = ed25519.publickey(bytes.fromhex(LOOP_SK)).hex()
+with _db_lock, _db() as conn:
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(peers)").fetchall()]
+    row = {"node_pub": LOOP_PK, "name": "looppeer", "network": "cybernet",
+           "version": "0.1.0", "genesis": 0, "capabilities": "[]",
+           "announced_at": _now(), "first_seen": _now(), "retired_at": "",
+           "node_url": "http://127.0.0.1:9"}
+    keys = [k for k in row if k in cols]
+    conn.execute(
+        f"INSERT INTO peers ({','.join(keys)}) VALUES ({','.join('?' * len(keys))})",
+        tuple(row[k] for k in keys))
+try:
+    federation.fed_subscribe({"channel": "gatechan", "node_pub": LOOP_PK}, AUTH)
+    gate_err = None
+except HTTPException as exc:
+    gate_err = exc
+check("unmocked loopback subscribe refused as 502",
+      gate_err is not None and gate_err.status_code == 502,
+      f"err={gate_err!r}")
+with _db() as conn:
+    n = conn.execute(
+        "SELECT COUNT(*) FROM outbound_subs WHERE node_pub=? AND channel=?",
+        (LOOP_PK, "gatechan")).fetchone()[0]
+check("gate-refused subscribe consent row rolled back", n == 0)
 
 print(f"\nfed-channel-fetch-size belt: {PASSED}/{PASSED + FAILED}")
 sys.exit(1 if FAILED else 0)
