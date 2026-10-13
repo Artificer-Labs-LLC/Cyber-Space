@@ -400,6 +400,14 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.resolve("node.cyberspace", qtype="MX")
 
+    def test_nonstring_qtype_raises_value_error_not_attribute_error(self):
+        """A non-string qtype escaped as a raw AttributeError from
+        .upper() — not the ValueError an unsupported string raises.
+        Every malformed qtype must read as ValueError."""
+        for bad in (None, 1, True, 1.0, b"A"):
+            with self.assertRaises(ValueError, msg=f"qtype={bad!r}"):
+                client.resolve("node.cyberspace", qtype=bad)
+
     def test_query_wire_encoding(self):
         pkt = client._build_query(0x1234, "Node.Cyberspace.", 1)
         parsed = dns.parse_query(pkt)

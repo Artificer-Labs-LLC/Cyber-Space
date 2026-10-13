@@ -539,6 +539,13 @@ def resolve(
     first; any UDP failure falls back to the TCP wire (unless tcp_only).
     ``_udp_sock`` / ``_tcp_sock`` are test hooks, not public API.
     """
+    # qtype is caller-supplied text: a non-string (None, an int family
+    # code, True) escaped as a raw AttributeError from .upper() before
+    # this lookup — neither the ValueError an unsupported string raises
+    # here nor anything main() maps to exit 2. Gate the type first, the
+    # same fail-closed shape the txid/timeout gates apply.
+    if not isinstance(qtype, str):
+        raise ValueError(f"unsupported qtype {qtype!r}")
     qtype_n = _QTYPES.get(qtype.upper())
     if qtype_n is None:
         raise ValueError(f"unsupported qtype {qtype!r}")
