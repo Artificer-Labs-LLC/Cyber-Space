@@ -300,6 +300,14 @@ check("error: non-int rcode never raises, falls back to SERVFAIL",
       (int.from_bytes(dns.error_response(b"\x00\x01", "x")[2:4], "big") & 0xF) == 2)
 check("error: max valid rcode 15 passes through",
       (int.from_bytes(dns.error_response(b"\x00\x01", 15)[2:4], "big") & 0xF) == 15)
+# A float passes a range check but is not a wire rcode: 2.0 used to
+# raise TypeError from the flags OR, breaking never-raises.
+check("error: float rcode never raises, falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", 2.0)[2:4], "big") & 0xF) == 2)
+check("error: fractional float rcode never raises, falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", 2.5)[2:4], "big") & 0xF) == 2)
+check("error: None rcode never raises, falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", None)[2:4], "big") & 0xF) == 2)
 
 print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

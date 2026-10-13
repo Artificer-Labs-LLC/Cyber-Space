@@ -202,11 +202,12 @@ def error_response(raw: bytes, rcode: int = 2) -> bytes:
     # NOERROR — a refusal dressed as success — and -1/255 became 15.
     # This function never raises, so an rcode outside 0..15 (or not an
     # int at all) falls back to SERVFAIL: fail-closed, never aliased.
-    try:
-        valid_rcode = 0 <= rcode <= 15
-    except TypeError:
-        valid_rcode = False
-    if not valid_rcode:
+    # A range check alone is not a type check: a float rcode (2.0)
+    # passes 0 <= rcode <= 15 and then raised TypeError from the
+    # flags OR below — breaking this function's never-raises contract
+    # for exactly the hand-built callers the fallback exists for.
+    # Require a real int in range; anything else falls back.
+    if not isinstance(rcode, int) or not 0 <= rcode <= 15:
         rcode = 2
     flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode
     return struct.pack(">HHHHHH", qid, flags, 0, 0, 0, 0)
