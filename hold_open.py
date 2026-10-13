@@ -35,6 +35,7 @@ an unverified answer.
 Never raises across its boundary: every check returns False or a
 count; 429/5xx from the relay are silence, not crashes."""
 import json
+import math
 import os
 import threading
 import time
@@ -242,6 +243,17 @@ def hold_open_cycle_once(relay_url: str, token: str,
     return (True, answered)
 
 
+def _keepalive_every_ok(value) -> bool:
+    """A usable keepalive interval: a real, finite, positive number.
+    Bool is not a number here (True would alias to a 1-second spam),
+    and NaN/inf compare False against every elapsed time, which
+    would silently disable keepalives and let the relay reap the
+    hold-open — all of those fall back to the default instead."""
+    return (isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
 def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
                     stop: threading.Event,
                     keepalive_every: float = _KEEPALIVE_EVERY,
@@ -253,7 +265,7 @@ def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
     pubkey is derived from name_priv_hex unless name_pub_hex is given,
     and the point pair re-registers on every epoch roll (stale points
     fail closed silent at the relay). Never raises."""
-    if keepalive_every <= 0:
+    if not _keepalive_every_ok(keepalive_every):
         keepalive_every = _KEEPALIVE_EVERY
     if name_pub_hex is not None and (
             not isinstance(name_pub_hex, str) or len(name_pub_hex) != 64):
