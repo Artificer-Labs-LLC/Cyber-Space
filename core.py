@@ -705,6 +705,12 @@ def _valid_name_label(name: str) -> bool:
     ASCII) — claimable but never resolvable — and a grammar whose accept
     set depends on the host language's Unicode table cannot be
     deterministic across independent implementations."""
+    # Server seat of the twins gated in mint/verify/rotate: a non-string
+    # name escaped as TypeError from len()/the "." test (int/float/bool/
+    # bytes) or AttributeError from a list element's .lower — a crash,
+    # not this predicate's False (None alone happened to read as empty).
+    if not isinstance(name, str):
+        return False
     if not name or len(name) > NAME_LABEL_MAX:
         return False
     if name != name.lower() or "." in name:

@@ -66,6 +66,18 @@ def label_cases():
           _valid_name_label("génèrïs") is False)
     check("unicode single char refused",
           _valid_name_label("é") is False)
+    # Bool predicate: a non-string must come back False, never a
+    # TypeError/AttributeError (server seat of the mint/verify/rotate
+    # twins; None alone happened to read as empty before the gate).
+    for bad in (123, 1.5, True, b"foo", ["foo"], None):
+        try:
+            got = _valid_name_label(bad)
+        except Exception as e:  # noqa: BLE001
+            check(f"non-string {bad!r} refused without raising", False,
+                  f"raised {type(e).__name__}: {e}")
+            continue
+        check(f"non-string {bad!r} refused", got is False,
+              f"-> {got!r}")
 
 
 def conflict_cases():
