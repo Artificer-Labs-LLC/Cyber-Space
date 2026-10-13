@@ -1151,6 +1151,14 @@ def fed_workspace_invite(env: dict):
         raise HTTPException(status_code=400, detail="bad invitee_agent_key")
     _sg = body.get("inviter_sig")
     inviter_sig = _sg if isinstance(_sg, str) else ""
+    # String-length gate, twin of fed_directory_delta (0bcca64):
+    # bytes.fromhex ignores embedded spaces, so a 129-char sig with an
+    # inserted space (or an outer-padded spelling) decoded to the TRUE
+    # 64 bytes and checkvalid VERIFIED it -- a non-canonical spelling
+    # every binding seat refuses on sight (len(signature) != 128)
+    # accepted as proof at this seat. Only the exact 128-char spelling
+    # attests; case is left alone (uppercase verified before and still
+    # does). The decoded-length half is checkvalid's own gate.
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(inviter_sig),
@@ -1158,6 +1166,8 @@ def fed_workspace_invite(env: dict):
             bytes.fromhex(sender_pub))
     except Exception:
         sig_ok = False
+    if len(inviter_sig) != 128:
+        sig_ok = False  # string-length gate (see above): verdict only
     if not sig_ok:
         raise HTTPException(status_code=400, detail="inviter_sig does not verify")
     with _db_lock, _db() as conn:
@@ -1245,6 +1255,14 @@ def fed_workspace_countersign(env: dict):
                                    "is not this workspace's current charter.")
     _sg = body.get("countersign_sig")
     countersign_sig = _sg if isinstance(_sg, str) else ""
+    # String-length gate, twin of fed_directory_delta (0bcca64):
+    # bytes.fromhex ignores embedded spaces, so a 129-char sig with an
+    # inserted space (or an outer-padded spelling) decoded to the TRUE
+    # 64 bytes and checkvalid VERIFIED it -- a non-canonical spelling
+    # every binding seat refuses on sight (len(signature) != 128)
+    # accepted as proof at this seat. Only the exact 128-char spelling
+    # attests; case is left alone (uppercase verified before and still
+    # does). The decoded-length half is checkvalid's own gate.
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(countersign_sig),
@@ -1252,6 +1270,8 @@ def fed_workspace_countersign(env: dict):
             bytes.fromhex(sender_pub))
     except Exception:
         sig_ok = False
+    if len(countersign_sig) != 128:
+        sig_ok = False  # string-length gate (see above): verdict only
     if not sig_ok:
         raise HTTPException(status_code=400, detail="countersign_sig does not verify")
     with _db_lock, _db() as conn:
@@ -1340,6 +1360,14 @@ async def fed_workspace_leave(env: dict):
         raise HTTPException(status_code=400, detail="bad member_key")
     _sg = body.get("leave_sig")
     leave_sig = _sg if isinstance(_sg, str) else ""
+    # String-length gate, twin of fed_directory_delta (0bcca64):
+    # bytes.fromhex ignores embedded spaces, so a 129-char sig with an
+    # inserted space (or an outer-padded spelling) decoded to the TRUE
+    # 64 bytes and checkvalid VERIFIED it -- a non-canonical spelling
+    # every binding seat refuses on sight (len(signature) != 128)
+    # accepted as proof at this seat. Only the exact 128-char spelling
+    # attests; case is left alone (uppercase verified before and still
+    # does). The decoded-length half is checkvalid's own gate.
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(leave_sig),
@@ -1347,6 +1375,8 @@ async def fed_workspace_leave(env: dict):
             bytes.fromhex(sender_pub))
     except Exception:
         sig_ok = False
+    if len(leave_sig) != 128:
+        sig_ok = False  # string-length gate (see above): verdict only
     if not sig_ok:
         raise HTTPException(status_code=400, detail="leave_sig does not verify")
     with _db_lock, _db() as conn:
@@ -1432,6 +1462,14 @@ def fed_workspace_removed(env: dict):
         raise HTTPException(status_code=400, detail="bad member_key")
     _sg = body.get("removed_sig")
     removed_sig = _sg if isinstance(_sg, str) else ""
+    # String-length gate, twin of fed_directory_delta (0bcca64):
+    # bytes.fromhex ignores embedded spaces, so a 129-char sig with an
+    # inserted space (or an outer-padded spelling) decoded to the TRUE
+    # 64 bytes and checkvalid VERIFIED it -- a non-canonical spelling
+    # every binding seat refuses on sight (len(signature) != 128)
+    # accepted as proof at this seat. Only the exact 128-char spelling
+    # attests; case is left alone (uppercase verified before and still
+    # does). The decoded-length half is checkvalid's own gate.
     try:
         sig_ok = _fed_ed25519.checkvalid(
             bytes.fromhex(removed_sig),
@@ -1439,6 +1477,8 @@ def fed_workspace_removed(env: dict):
             bytes.fromhex(sender_pub))
     except Exception:
         sig_ok = False
+    if len(removed_sig) != 128:
+        sig_ok = False  # string-length gate (see above): verdict only
     if not sig_ok:
         raise HTTPException(status_code=400, detail="removed_sig does not verify")
     with _db_lock, _db() as conn:
