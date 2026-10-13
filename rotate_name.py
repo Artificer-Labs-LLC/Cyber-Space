@@ -604,6 +604,31 @@ def main(argv: list[str]) -> int:
               "submit first, promote only after the mirror accepts",
               file=sys.stderr)
         return 2
+    # The seed is an argument, not a verdict: it used to be parsed only
+    # in the offline-mint path, AFTER the existing-key read — so a
+    # malformed seed (not hex, or not 32 bytes) against a missing key
+    # read as exit 1 "no existing name key" (a verdict on local state)
+    # when the argument itself was at fault, and a seed passed with
+    # --submit/--promote was silently ignored entirely. Gate its shape
+    # (and its only meaningful combination) before any file is read or
+    # anything is sent, exit 2; the parsed seed is reused below.
+    new_priv: bytes | None = None
+    if args.new_key_seed is not None:
+        if args.submit is not None or args.promote:
+            print("refused: --new-key-seed only applies when minting a "
+                  "rotation — drop it for --submit/--promote",
+                  file=sys.stderr)
+            return 2
+        try:
+            new_priv = bytes.fromhex(_normalize(args.new_key_seed))
+        except ValueError:
+            print("refused: --new-key-seed is not hex — bad argument, "
+                  "nothing was minted", file=sys.stderr)
+            return 2
+        if len(new_priv) != 32:
+            print("refused: --new-key-seed is not a 32-byte seed — bad "
+                  "argument, nothing was minted", file=sys.stderr)
+            return 2
     home = Path.home() / ".cyberspace"
     if args.submit is not None:
         if not _valid_mirror(args.submit):
@@ -634,17 +659,7 @@ def main(argv: list[str]) -> int:
     if len(old_priv) != 32:
         print(f"refused: {key_path} is not a 32-byte seed", file=sys.stderr)
         return 1
-    if args.new_key_seed:
-        try:
-            new_priv = bytes.fromhex(_normalize(args.new_key_seed))
-        except ValueError:
-            print("refused: --new-key-seed is not hex", file=sys.stderr)
-            return 2
-        if len(new_priv) != 32:
-            print("refused: --new-key-seed is not a 32-byte seed",
-                  file=sys.stderr)
-            return 2
-    else:
+    if new_priv is None:
         new_priv = os.urandom(32)
     try:
         record = mint_rotation(label, old_priv, publickey(new_priv).hex())
