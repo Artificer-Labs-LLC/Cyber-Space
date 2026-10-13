@@ -198,6 +198,12 @@ def _query(name: str, qtype: int, server: str, port: int,
     # well-formed, and must not earn this smoke a PASS.
     if not flags & 0x8000:
         raise ValueError("not a response (QR bit clear) — response is not ours")
+    # AA bit, twin of client._parse_response: the daemon is authoritative
+    # for this zone and every reply it builds sets AA (answers, NXDOMAIN,
+    # SERVFAIL) — an AA-clear packet is some other responder's word, not
+    # the daemon's, and must not earn this smoke a PASS.
+    if not flags & 0x0400:
+        raise ValueError("not authoritative (AA bit clear) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -237,6 +243,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # QR-clear packet is a query, not the daemon's answer.
     if not flags & 0x8000:
         raise ValueError("not a response (QR bit clear) — response is not ours")
+    # AA bit, twin of _query above: an AA-clear packet is not the
+    # authoritative daemon's answer for this zone.
+    if not flags & 0x0400:
+        raise ValueError("not authoritative (AA bit clear) — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
