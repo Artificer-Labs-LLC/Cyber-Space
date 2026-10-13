@@ -139,6 +139,30 @@ def refused_leaf(name: str, node_pubkey: str, reason: str) -> bytes:
     return leaf.encode("utf-8")
 
 
+def _manifest_set(manifest_labels) -> set:
+    """The manifest as a set of string labels — fail-closed.
+
+    A malformed manifest must never grant a hold and never crash the
+    partition: a non-iterable manifest (None/int) escaped as TypeError
+    from ``in``/``set()``, a bare string manifest aliased in
+    classify_binding as a SUBSTRING test (``label in "goodname..."``
+    held a row snapshot_refused_bindings — which built ``set(str)``,
+    a set of characters — refused as not-in-manifest: the two seats
+    disagreed on the same row), and a bytes manifest crashed one seat
+    and byte-set the other. A string/bytes/non-iterable manifest
+    carries no labels: the empty set, so every otherwise-eligible
+    binding reads not-in-manifest. Non-string entries in a real
+    iterable are dropped (they can match no label); the string
+    entries are honored exactly.
+    """
+    if isinstance(manifest_labels, (str, bytes, bytearray)):
+        return set()
+    try:
+        return {x for x in manifest_labels if isinstance(x, str)}
+    except TypeError:
+        return set()
+
+
 def classify_binding(row: dict, manifest_labels) -> str | None:
     """Return the refusal reason for a name_bindings row, or None if the
     row is hold-eligible. ``row`` needs name/node_pubkey/expires_at;
@@ -172,7 +196,7 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
             return "expiry-cap"
     except (ValueError, OverflowError, TypeError):
         return "expiry-cap"
-    if label not in manifest_labels:
+    if label not in _manifest_set(manifest_labels):
         return "not-in-manifest"
     return None
 
@@ -189,7 +213,7 @@ def snapshot_refused_bindings(rows, manifest_labels):
     ``(leaf_bytes, reason)`` — exactly one leaf per refused binding,
     in input order. Deterministic: same inputs, same outputs.
     """
-    manifest = set(manifest_labels)
+    manifest = _manifest_set(manifest_labels)
     holds = []
     refused = []
     for row in rows:

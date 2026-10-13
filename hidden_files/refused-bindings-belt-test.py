@@ -148,5 +148,23 @@ check("non-dict grammar leaf uses the sha256 name form",
       all(leaf.split(b"\n")[1].startswith(b"name=sha256:")
           for leaf, _ in r))
 
+print("malformed manifest refuses as not-in-manifest, never crashes, never holds")
+_good = row("goodname")
+for bad_manifest in (None, 123, 1.5, True, b"goodname", "goodname",
+                     bytearray(b"goodname")):
+    check(f"classify malformed manifest {bad_manifest!r} -> not-in-manifest",
+          rb.classify_binding(_good, bad_manifest) == "not-in-manifest")
+    _h, _r = rb.snapshot_refused_bindings([_good], bad_manifest)
+    check(f"snapshot malformed manifest {bad_manifest!r} -> no hold, one leaf",
+          _h == [] and len(_r) == 1 and _r[0][1] == "not-in-manifest")
+check("classify and snapshot agree on a bare-string manifest",
+      rb.classify_binding(_good, "goodname")
+      == rb.snapshot_refused_bindings([_good], "goodname")[1][0][1])
+check("string entries in a mixed manifest are honored, junk dropped",
+      rb.classify_binding(_good, ["goodname", 123, ["x"], None]) is None)
+_h, _r = rb.snapshot_refused_bindings([_good], ["goodname", 123, ["x"]])
+check("snapshot mixed manifest: valid row still holds",
+      len(_h) == 1 and _r == [])
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)
