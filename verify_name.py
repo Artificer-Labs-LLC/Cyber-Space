@@ -63,6 +63,14 @@ def _valid_label(label: str) -> bool:
 def _claim_payload(name: str, node_pubkey: str, issued_at: str,
                    expires_at: str) -> bytes:
     """Byte-for-byte twin of core._name_claim_payload."""
+    # Twin of core's gate: a non-string field escaped as AttributeError
+    # from .encode()/.lower(); only real strings have a canonical form,
+    # refused as ValueError (the verdict language verify() already uses).
+    for _field, _value in (("name", name), ("node_pubkey", node_pubkey),
+                           ("issued_at", issued_at),
+                           ("expires_at", expires_at)):
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
     return (b"name-claim|" + name.encode() + b"|"
             + node_pubkey.lower().encode() + b"|"
             + issued_at.encode() + b"|" + expires_at.encode())

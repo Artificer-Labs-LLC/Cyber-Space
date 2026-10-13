@@ -720,6 +720,18 @@ def _name_claim_payload(name: str, node_pubkey: str, issued_at: str, expires_at:
     key being named vouches for the binding, so a lying registry can only
     withhold a name, never redirect one. Lowercase hex is the wire form;
     the name arrives already normalized lowercase via _valid_name_label."""
+    # The fields are caller-supplied at this library seat (the verify
+    # seats str()-coerce or wrap Exception, but direct callers — mint
+    # seats, tests, _log_name_conflict's neighbours — do not): a
+    # non-string field escaped as AttributeError from .encode()/.lower(),
+    # past the ValueError contract every sibling parser carries
+    # (_parse_claim_time, _name_claim_beats). Only real strings have a
+    # canonical form; refuse the rest as ValueError at the source.
+    for _field, _value in (("name", name), ("node_pubkey", node_pubkey),
+                           ("issued_at", issued_at),
+                           ("expires_at", expires_at)):
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
     return (b"name-claim|" + name.encode() + b"|"
             + node_pubkey.lower().encode() + b"|"
             + issued_at.encode() + b"|" + expires_at.encode())
@@ -774,6 +786,14 @@ def _reach_canonical(name: str, node_pubkey: str, reach, issued_at: str,
     bytes: a lying mirror can withhold a descriptor but can never
     redirect one, because the canonical form it verifies is the form
     the name key signed. `signature` is excluded by construction."""
+    # Twin of _name_claim_payload's gate: a non-string field escaped as
+    # AttributeError from .encode()/.lower() at the direct seats
+    # (_reach_mint); only real strings have a canonical form.
+    for _field, _value in (("name", name), ("node_pubkey", node_pubkey),
+                           ("issued_at", issued_at),
+                           ("expires_at", expires_at)):
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
     reach_json = json.dumps(reach, sort_keys=True, separators=(",", ":"))
     return (b"reach-descriptor|" + name.encode() + b"|"
             + node_pubkey.lower().encode() + b"|"

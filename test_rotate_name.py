@@ -156,6 +156,30 @@ if rotate_name._normalize("  Foo-Bar ") != "foo-bar":
     print("FAIL: _normalize valid value changed")
     fails += 1
 
+# _rotate_payload twin of core._name_claim_payload's gate: a non-string
+# field in any position must refuse as ValueError, never AttributeError
+# from .encode(); valid bytes stay exact.
+_good = ("foo", "ab" * 32, "cd" * 32, "2026-01-01T00:00:00Z")
+if rotate_name._rotate_payload(*_good) != (
+        b"name-rotate|foo|" + b"ab" * 32 + b"|" + b"cd" * 32
+        + b"|2026-01-01T00:00:00Z"):
+    print("FAIL: _rotate_payload valid bytes changed")
+    fails += 1
+for _i in range(4):
+    for _bad in (123, 1.5, True, None, b"foo", ["foo"]):
+        _args = list(_good)
+        _args[_i] = _bad
+        try:
+            rotate_name._rotate_payload(*_args)
+        except ValueError:
+            continue
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL: _rotate_payload field{_i} {_bad!r} raised {type(e).__name__}")
+            fails += 1
+            continue
+        print(f"FAIL: _rotate_payload field{_i} {_bad!r} built instead of ValueError")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

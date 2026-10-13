@@ -93,6 +93,30 @@ if verify_name._normalize_expected("  Foo-Bar ") != "foo-bar":
     print("FAIL: _normalize_expected valid value changed")
     fails += 1
 
+# _claim_payload is the byte-for-byte twin of core._name_claim_payload:
+# a non-string field in any position must refuse as ValueError, never
+# AttributeError from .encode()/.lower(); valid bytes stay exact.
+_good = ("foo", "ab" * 32, "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z")
+if verify_name._claim_payload(*_good) != (
+        b"name-claim|foo|" + b"ab" * 32
+        + b"|2026-01-01T00:00:00Z|2027-01-01T00:00:00Z"):
+    print("FAIL: _claim_payload valid bytes changed")
+    fails += 1
+for _i in range(4):
+    for _bad in (123, 1.5, True, None, b"foo", ["foo"]):
+        _args = list(_good)
+        _args[_i] = _bad
+        try:
+            verify_name._claim_payload(*_args)
+        except ValueError:
+            continue
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL: _claim_payload field{_i} {_bad!r} raised {type(e).__name__}")
+            fails += 1
+            continue
+        print(f"FAIL: _claim_payload field{_i} {_bad!r} built instead of ValueError")
+        fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)

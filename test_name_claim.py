@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _node_url_host, _old_binding_beaten, _parse_claim_time, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _name_claim_beats, _name_claim_payload, _node_url_host, _old_binding_beaten, _parse_claim_time, _reach_canonical, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -263,6 +263,37 @@ def claim_time_cases():
         check("garbage string still ValueError", True)
 
 
+def claim_payload_cases():
+    # The canonical payload builders are library seats: a non-string
+    # field escaped as AttributeError from .encode()/.lower(), past the
+    # ValueError contract their sibling parsers carry. Every field of
+    # both builders refuses as ValueError; valid bytes are exact.
+    good = ("foo", "AB" * 32, EARLY, LATER)
+    want_claim = (b"name-claim|foo|" + b"ab" * 32 + b"|"
+                  + EARLY.encode() + b"|" + LATER.encode())
+    check("claim payload bytes exact", _name_claim_payload(*good) == want_claim)
+    want_reach = (b"reach-descriptor|foo|" + b"ab" * 32 + b"|[]|"
+                  + EARLY.encode() + b"|" + LATER.encode())
+    check("reach canonical bytes exact",
+          _reach_canonical("foo", "AB" * 32, [], EARLY, LATER) == want_reach)
+    for i in range(4):
+        for bad in (123, 1.5, True, None, b"foo", ["foo"], {"f": 1}):
+            args = list(good)
+            args[i] = bad
+            for fn, nm in ((_name_claim_payload, "claim"),
+                           (lambda *a: _reach_canonical(a[0], a[1], [], a[2], a[3]), "reach")):
+                try:
+                    fn(*args)
+                except ValueError:
+                    check(f"{nm} field{i} {bad!r} refused as ValueError", True)
+                    continue
+                except Exception as e:  # noqa: BLE001
+                    check(f"{nm} field{i} {bad!r} refused as ValueError", False,
+                          f"raised {type(e).__name__}: {e}")
+                    continue
+                check(f"{nm} field{i} {bad!r} refused as ValueError", False, "built")
+
+
 def main():
     print("names-registry primitive tests (core.py):")
     label_cases()
@@ -272,6 +303,7 @@ def main():
     node_url_host_cases()
     reject_nonpublic_cases()
     claim_time_cases()
+    claim_payload_cases()
     print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

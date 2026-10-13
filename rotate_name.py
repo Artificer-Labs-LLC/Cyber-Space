@@ -134,6 +134,15 @@ def _rotate_payload(name: str, old_pub: str, new_pub: str,
     """The canonical bytes the OLD key signs. Distinct prefix from
     name-claim| so a claim payload can never verify as a rotation and
     vice versa (payload-prefix confusion is a signature-side attack)."""
+    # Twin of core._name_claim_payload's gate: a non-string field
+    # escaped as AttributeError from .encode() at the direct seats
+    # (mint_rotation's validated path aside); only real strings have a
+    # canonical form, refused as ValueError.
+    for _field, _value in (("name", name), ("old_pubkey", old_pub),
+                           ("new_pubkey", new_pub),
+                           ("issued_at", issued_at)):
+        if not isinstance(_value, str):
+            raise ValueError(f"{_field} must be a string: {_value!r}")
     return (b"name-rotate|" + name.encode() + b"|" + old_pub.encode()
             + b"|" + new_pub.encode() + b"|" + issued_at.encode())
 
