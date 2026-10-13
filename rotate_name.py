@@ -546,22 +546,44 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
         result = json.loads(body)
     except ValueError:
         return False, f"unparseable rotate response: {body[:120]!r}"
+    # The rotate response is mirror-controlled: valid JSON that is not
+    # an object ('[]', '123', '"ok"') has no status to read — result.get
+    # died in an AttributeError traceback instead of the refusal every
+    # other bad rotate response gets (twin of mint_name da6174b).
+    if not isinstance(result, dict):
+        return False, f"unparseable rotate response: {body[:120]!r}"
     if result.get("status") != "rotated":
         return False, f"mirror did not confirm rotation: {body[:120]!r}"
     # Verify the mirror moved the name, then trust it — never before.
+    # Same mirror-controlled shape: a non-string node_pubkey (123, null)
+    # died in .lower() with a traceback instead of reading as the
+    # did-not-move refusal below — _get_json only proves dict shape.
     resolved = _get_json(mirror_url.rstrip("/") + f"/api/v1/names/{label}")
-    if not resolved or resolved.get("node_pubkey", "").lower() != new_pub:
+    resolved_pub = resolved.get("node_pubkey") if resolved else None
+    if not isinstance(resolved_pub, str) or resolved_pub.lower() != new_pub:
         return False, ("mirror accepted the rotation but the name does not "
                        "resolve to the new key — investigate before "
                        "promoting")
     chain = _get_json(
         mirror_url.rstrip("/") + f"/api/v1/names/{label}/rotations")
     hop_seen = False
-    if isinstance(chain, dict):
-        for hop in chain.get("rotations") or []:
-            if (_normalize(hop.get("old_pubkey", "")) == old_pub
-                    and _normalize(hop.get("new_pubkey", "")) == new_pub
-                    and _normalize(hop.get("signature", ""))
+    # The served chain is mirror-controlled too: a rotations value that
+    # is not a list, a hop that is not an object, or a hop field that is
+    # not a string (123, null) died in .get/.strip tracebacks instead of
+    # reading as the hop-not-seen refusal below. Only a well-formed hop
+    # can match; every other shape simply is not the hop.
+    hops = chain.get("rotations") if isinstance(chain, dict) else None
+    if isinstance(hops, list):
+        for hop in hops:
+            if not isinstance(hop, dict):
+                continue
+            hop_fields = (hop.get("old_pubkey"), hop.get("new_pubkey"),
+                          hop.get("signature"))
+            if not all(isinstance(v, str) for v in hop_fields):
+                continue
+            if (_normalize(hop_fields[0]) == old_pub
+                    and _normalize(hop_fields[1]) == new_pub
+                    and _normalize(hop_fields[2])
                     == _normalize(record["signature"])):
                 hop_seen = True
                 break
