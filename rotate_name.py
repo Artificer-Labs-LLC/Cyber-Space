@@ -315,6 +315,20 @@ def _refresh_hostd_env_text(text: str, old_hex: str, new_hex: str,
     would make hostd sign that name with this name's key). Pure: the
     caller decides whether to write.
     """
+    # Every argument is caller-supplied at this library seat (promote
+    # passes file text and .hex() strings, but a direct caller can pass
+    # anything): a non-string body or old key crashed .splitlines()/
+    # .lower(), a non-string label crashed .lower() behind a hosted
+    # line, and — worse — a non-string NEW key (None) silently matched
+    # the old line and reported "updated" with the literal text
+    # CYBERNET_NAME_PRIVKEY=None, which promote would then write into
+    # the hostd env in place of the seed. Malformed arguments are a
+    # key we cannot account for: "foreign", text untouched ("" when
+    # there is no text to return), and the caller only ever writes
+    # on "updated".
+    if not (isinstance(text, str) and isinstance(old_hex, str)
+            and isinstance(new_hex, str) and isinstance(label, str)):
+        return (text if isinstance(text, str) else ""), "foreign"
     if label:
         for line in text.splitlines():
             if line.startswith("CYBERNET_HOSTED_NAME="):

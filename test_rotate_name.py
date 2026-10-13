@@ -180,6 +180,31 @@ for _i in range(4):
         print(f"FAIL: _rotate_payload field{_i} {_bad!r} built instead of ValueError")
         fails += 1
 
+# _refresh_hostd_env_text: a non-string in any position must read as
+# "foreign" (a key we cannot account for — text untouched, caller only
+# writes on "updated"), never AttributeError/TypeError from
+# .splitlines()/.lower(), and never an "updated" that writes a
+# non-string new key (None) into the env in place of the seed.
+_env = "CYBERNET_HOSTED_NAME=foo\nCYBERNET_NAME_PRIVKEY=" + "a" * 64 + "\n"
+for _args in ((123, "a" * 64, "b" * 64), (None, "a" * 64, "b" * 64),
+              (b"x", "a" * 64, "b" * 64),
+              (_env, 123, "b" * 64), (_env, None, "b" * 64),
+              (_env, "a" * 64, None), (_env, "a" * 64, 123),
+              (_env, "a" * 64, "b" * 64, 123)):
+    try:
+        _txt, _st = rotate_name._refresh_hostd_env_text(*_args)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: _refresh_hostd_env_text{_args!r} raised {type(e).__name__}: {e}")
+        fails += 1
+        continue
+    if _st != "foreign" or _txt != (_args[0] if isinstance(_args[0], str) else ""):
+        print(f"FAIL: _refresh_hostd_env_text{_args!r} -> {_st!r}, want 'foreign' + untouched text")
+        fails += 1
+_txt, _st = rotate_name._refresh_hostd_env_text(_env, "a" * 64, "b" * 64, "foo")
+if _st != "updated" or "b" * 64 not in _txt:
+    print("FAIL: _refresh_hostd_env_text valid update changed")
+    fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
