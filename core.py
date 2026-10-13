@@ -230,6 +230,14 @@ _HITS_CAP = 10_000  # max live rate-limit buckets. Federation buckets are keyed
 
 _NODE_KEY_PATH = os.path.join(_DB_DIR, ".node.key")
 
+# Node-key seed read bound, twin of mint_name/rotate_name's _SEED_MAX: a
+# seed file is 64 hex chars plus whitespace, yet _node_keypair loaded it
+# via f.read() unbounded before the hex-shape check ran. The cap is
+# generous (16x a real seed file) so padded/hand-copied seeds still read
+# byte-exact; anything larger is never a seed and reads as the same
+# RuntimeError the shape check already raises.
+_NODE_KEY_MAX = 1024
+
 def _node_keypair() -> tuple[str, str]:
     """Node's persistent Ed25519 federation identity -> (privkey_hex, pubkey_hex).
 
@@ -242,7 +250,10 @@ def _node_keypair() -> tuple[str, str]:
         priv = env_key
     elif os.path.exists(_NODE_KEY_PATH):
         with open(_NODE_KEY_PATH) as f:
-            priv = f.read().strip()
+            raw = f.read(_NODE_KEY_MAX + 1)
+        if len(raw) > _NODE_KEY_MAX:
+            raise RuntimeError("node key is not a 32-byte hex seed")
+        priv = raw.strip()
     else:
         priv = secrets.token_hex(32)
         fd = os.open(_NODE_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
