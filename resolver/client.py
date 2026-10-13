@@ -102,6 +102,34 @@ def _server_host(server: str) -> str:
     return host
 
 
+def _server_target(host: str, port: int):
+    """(family, sockaddr, expected source IP) the UDP wire dials.
+
+    A literal keeps its own family and (host, port) target, exactly as
+    before. A HOSTNAME is resolved first (getaddrinfo, AF_UNSPEC) and
+    the socket is created from the answer's family, dialing the
+    resolved sockaddr, with that address as the expected reply source
+    — the family can no longer be guessed from the string's shape.
+    Before, every hostname picked AF_INET, sendto carried the
+    unresolved string, and the source check used gethostbyname
+    (v4-only), so a daemon bound to ::1 and reached by a v6-only
+    hostname was never reached on the UDP wire and its reply could
+    never pass the source check; only the TCP fallback (whose
+    create_connection resolves the same way) masked it. First
+    getaddrinfo result wins, as create_connection tries them in
+    order. An unresolvable hostname raises gaierror here, which
+    _query_udp already reads as a transport failure."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                                   socket.SOCK_DGRAM)
+        family, _kind, _proto, _canon, sockaddr = infos[0]
+        return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
+    family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+    return family, (host, port), str(ip)
+
+
 class NameNotFound(NameError):
     """The daemon answered NXDOMAIN: the name does not resolve."""
 
@@ -348,18 +376,11 @@ def _query_udp(
     host = _server_host(server)
     s = sock
     try:
+        family, target, expected = _server_target(host, port)
         if s is None:
-            # A v6-literal server (a daemon bound to ::1, say) needs an
-            # AF_INET6 socket; gethostbyname below is v4-only, so the
-            # expected source for a literal is the literal itself.
-            try:
-                is_v6 = ipaddress.ip_address(host).version == 6
-            except ValueError:
-                is_v6 = False
-            family = socket.AF_INET6 if is_v6 else socket.AF_INET
             s = socket.socket(family, socket.SOCK_DGRAM)
         s.settimeout(timeout)
-        s.sendto(packet, (host, port))
+        s.sendto(packet, target)
         # The daemon's replies are whole on this wire (it never sets
         # TC) and can run past 4096 — a multi-answer binding, or a
         # forwarded upstream reply relayed byte-for-byte. recvfrom
@@ -370,10 +391,10 @@ def _query_udp(
         # and answer._forward.
         data, source = s.recvfrom(65535)
         try:
-            expected = str(ipaddress.ip_address(host))
+            source_ip = str(ipaddress.ip_address(source[0]))
         except ValueError:
-            expected = socket.gethostbyname(host)
-        if (source[0], source[1]) != (expected, port):
+            source_ip = source[0]
+        if (source_ip, source[1]) != (expected, port):
             raise ResolveError("udp response from an unexpected source")
     except ResolveError:
         raise

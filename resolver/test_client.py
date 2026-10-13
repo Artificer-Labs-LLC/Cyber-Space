@@ -191,6 +191,108 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(addrs, ["10.9.8.7"])
         self.assertEqual(sock.sent[0][1], ("::1", 5353))
 
+    def test_server_target_literals_keep_their_family(self):
+        """Literals: _server_target keeps the exact old family/target
+        and the literal itself (normalized) as expected source."""
+        fam, target, expected = client._server_target("::1", 5353)
+        self.assertEqual(fam, socket.AF_INET6)
+        self.assertEqual(target, ("::1", 5353))
+        self.assertEqual(expected, "::1")
+        fam, target, expected = client._server_target("127.0.0.1", 5353)
+        self.assertEqual(fam, socket.AF_INET)
+        self.assertEqual(target, ("127.0.0.1", 5353))
+        self.assertEqual(expected, "127.0.0.1")
+
+    def test_udp_v6only_hostname_dials_resolved_family(self):
+        """A v6-only hostname server: before, _query_udp guessed
+        AF_INET from the string, sent to the unresolved hostname, and
+        source-checked via v4-only gethostbyname — the UDP wire never
+        reached a ::1 daemon (masked only by the TCP fallback). Now
+        the socket is created from getaddrinfo's family and aimed at
+        its sockaddr. Fake socket + fake getaddrinfo (sandbox forbids
+        real UDP sendto, EPERM)."""
+        from unittest import mock
+
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind, *a):
+                canned["family"] = family
+
+            def settimeout(self, t):
+                pass
+
+            def close(self):
+                pass
+
+            def sendto(self, packet, target):
+                canned["target"] = target
+                parsed = dns.parse_query(packet)
+                canned["resp"] = dns.build_response(
+                    parsed, [(1, 120, socket.inet_aton("10.9.8.7"))],
+                    rcode=0)
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("::1", 5399)
+
+        def _fake_gai(host, port, family=0, type=0, *a, **k):
+            return [(socket.AF_INET6, socket.SOCK_DGRAM, 17, "",
+                     ("::1", port, 0, 0))]
+
+        packet = client._build_query(0x1234, "node.cyberspace",
+                                     client.QTYPE_A)
+        with mock.patch.object(socket, "socket", _FakeUdp), \
+                mock.patch.object(socket, "getaddrinfo", _fake_gai):
+            flags, answers = client._query_udp(
+                0x1234, packet, "v6only.example", 5399, 1.0,
+                qname="node.cyberspace", qtype=client.QTYPE_A)
+        self.assertEqual(answers, [(1, socket.inet_aton("10.9.8.7"))])
+        self.assertEqual(canned["family"], socket.AF_INET6)
+        self.assertEqual(canned["target"], ("::1", 5399, 0, 0))
+
+    def test_udp_hostname_injected_sock_dials_resolved_address(self):
+        """Injected-sock path: a hostname server is still dialed at
+        its resolved address, not the unresolved string, and a reply
+        from that address passes the source check."""
+        from unittest import mock
+
+        def _fake_gai(host, port, family=0, type=0, *a, **k):
+            return [(socket.AF_INET, socket.SOCK_DGRAM, 17, "",
+                     ("127.0.0.1", port))]
+
+        class _Echo(_FakeUdpSock):
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+                parsed = dns.parse_query(data)
+                self.canned = dns.build_response(
+                    parsed, [(1, 120, socket.inet_aton("10.9.8.7"))],
+                    rcode=0)
+                return len(data)
+
+        sock = _Echo()
+        with mock.patch.object(socket, "getaddrinfo", _fake_gai):
+            addrs = client.resolve("node.cyberspace",
+                                   server="daemon.example", _udp_sock=sock)
+        self.assertEqual(addrs, ["10.9.8.7"])
+        self.assertEqual(sock.sent[0][1], ("127.0.0.1", 5353))
+
+    def test_udp_unresolvable_hostname_raises_resolve_error(self):
+        """An unresolvable hostname is a transport failure
+        (ResolveError), honestly — never a parsed verdict."""
+        from unittest import mock
+
+        def _bad_gai(host, port, family=0, type=0, *a, **k):
+            raise socket.gaierror("no such host")
+
+        packet = client._build_query(0x1234, "node.cyberspace",
+                                     client.QTYPE_A)
+        with mock.patch.object(socket, "getaddrinfo", _bad_gai):
+            with self.assertRaises(client.ResolveError):
+                client._query_udp(0x1234, packet, "nope.example", 5399,
+                                  1.0, qname="node.cyberspace",
+                                  qtype=client.QTYPE_A)
+
     def test_tcp_bracketed_v6_server_dials_bare_literal(self):
         """TCP wire: create_connection receives the bare "::1", not
         "[::1]" (which it rejects as an unknown host)."""
