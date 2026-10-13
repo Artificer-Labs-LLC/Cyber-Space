@@ -119,16 +119,28 @@ def fed_announce(env: dict):
         return {"ok": True, "reach": outcome,
                 "name": str(desc.get("name", "")).lower(),
                 "node_pubkey": sender_pub.lower()}
-    name = str(body.get("name", ""))
-    if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+    # Only real strings are roster fields: str() aliased an
+    # announce-carried JSON number into the field -- a numeric name
+    # stringified to the valid label "12345" and was stored as that
+    # peer name, and int network/version were stored as their digit
+    # strings (twin of fed_gossip's roster gate). Absent fields keep
+    # their defaults; present ones must be strings.
+    name = body.get("name", "")
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
         raise HTTPException(status_code=400, detail="bad node name")
+    network = body.get("network", "cybernet")
+    if not isinstance(network, str):
+        raise HTTPException(status_code=400, detail="bad network")
+    version = body.get("version", "0.1.0")
+    if not isinstance(version, str):
+        raise HTTPException(status_code=400, detail="bad version")
     caps = body.get("capabilities", [])
     if not isinstance(caps, list):
         caps = []
     caps = [c for c in caps if isinstance(c, str) and CAP_RE.fullmatch(c)][:32]
     node_url = ""
     if body.get("node_url"):
-        node_url = _valid_node_url(str(body.get("node_url")))
+        node_url = _valid_node_url(body.get("node_url"))
     now = datetime.now(timezone.utc).isoformat()
     # A self-attestation (docs/FEDERATION.md: delta-sync send half) rides
     # along when present and verifiable; attestation-less or malformed
@@ -153,8 +165,8 @@ def fed_announce(env: dict):
                               THEN excluded.dir_seq ELSE peers.dir_seq END
             """,
             (
-                sender_pub, name, str(body.get("network", "cybernet")),
-                str(body.get("version", "0.1.0")), int(bool(body.get("genesis", False))),
+                sender_pub, name, network,
+                version, int(bool(body.get("genesis", False))),
                 json.dumps(caps), node_url, now, now,
                 att_sig or "", att_seq or 0,
             ),
