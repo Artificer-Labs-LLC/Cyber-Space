@@ -35,6 +35,13 @@ from fed.ed25519 import checkvalid  # noqa: E402
 
 _LABEL_MAX = 63
 
+# A binding is five short fields (label, 64-hex key, two timestamps, a
+# 128-hex signature) — a few hundred bytes. Cap the input read at the
+# sibling tools' 64KB mirror bound (resolve_chain._FETCH_MAX /
+# mint_name._MIRROR_RESP_MAX) instead of slurping a whole file/stdin
+# into memory before json.loads ever runs.
+_INPUT_MAX = 65536
+
 
 def _valid_label(label: str) -> bool:
     """Client-side mirror of core._valid_name_label (server decides)."""
@@ -202,9 +209,17 @@ def main(argv: list[str]) -> int:
             return 2
     src = args.source
     try:
-        raw = sys.stdin.read() if src == "-" else open(src, encoding="utf-8").read()
+        if src == "-":
+            raw = sys.stdin.read(_INPUT_MAX + 1)
+        else:
+            with open(src, encoding="utf-8") as f:
+                raw = f.read(_INPUT_MAX + 1)
     except OSError as e:
         print(f"refused: cannot read {src}: {e}", file=sys.stderr)
+        return 2
+    if len(raw) > _INPUT_MAX:
+        print(f"refused: input exceeds {_INPUT_MAX} bytes — a binding is "
+              "a few hundred bytes; no verdict", file=sys.stderr)
         return 2
     try:
         binding = json.loads(raw)
