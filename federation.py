@@ -287,8 +287,17 @@ def fed_gossip(env: dict):
             if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
                 ignored += 1
                 continue
+            # version joins the string gate above and node_url passes
+            # raw to _valid_node_url (which gates non-strings itself):
+            # str() aliased an int version into its digit string, stored
+            # as the peer's version (twin of fed_announce's body gate).
+            # Absent version keeps its default.
+            version = entry.get("version", "0.1.0")
+            if not isinstance(version, str):
+                ignored += 1
+                continue
             try:
-                node_url = _valid_node_url(str(entry.get("node_url", "")))
+                node_url = _valid_node_url(entry.get("node_url", ""))
             except HTTPException:
                 ignored += 1
                 continue
@@ -303,7 +312,7 @@ def fed_gossip(env: dict):
                    VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(node_pub) DO NOTHING""",
                 (ep.lower(), name, "cybernet",
-                 str(entry.get("version", "0.1.0")),
+                 version,
                  int(bool(entry.get("genesis", False))),
                  json.dumps(caps), node_url, "", now),
             )

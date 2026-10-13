@@ -69,7 +69,7 @@ def gossip(roster, ts):
 def row_for(pub):
     with _db() as conn:
         return conn.execute(
-            "SELECT node_pub, name FROM peers WHERE node_pub=?",
+            "SELECT node_pub, name, version, node_url FROM peers WHERE node_pub=?",
             (pub,)).fetchone()
 
 
@@ -100,6 +100,26 @@ r = gossip([entry(pk4.upper(), "upperpeer")], TS0 + 12)
 check("uppercase-hex string pub merged", r.get("merged") == 1, f"{r}")
 check("uppercase-hex string pub stored lowercased",
       row_for(pk4.lower()) is not None)
+
+pk5 = ed25519.publickey(secrets.token_bytes(32)).hex()
+e5 = entry(pk5, "intverpeer"); e5["version"] = 1
+r = gossip([e5], TS0 + 15)
+check("int version ignored", r.get("merged") == 0 and r.get("ignored") == 1, f"{r}")
+check("int version stores no row", row_for(pk5.lower()) is None)
+
+pk6 = ed25519.publickey(secrets.token_bytes(32)).hex()
+e6 = entry(pk6, "listurlpeer"); e6["node_url"] = [URL]
+r = gossip([e6], TS0 + 18)
+check("list node_url ignored", r.get("merged") == 0 and r.get("ignored") == 1, f"{r}")
+check("list node_url stores no row", row_for(pk6.lower()) is None)
+
+pk7 = ed25519.publickey(secrets.token_bytes(32)).hex()
+r = gossip([entry(pk7, "verpeer")], TS0 + 21)
+row = row_for(pk7.lower())
+check("valid version/node_url stored exact",
+      r.get("merged") == 1 and row is not None
+      and row["version"] == "0.1.0" and row["node_url"] == URL.rstrip("/"),
+      f"{r} {row}")
 
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)
