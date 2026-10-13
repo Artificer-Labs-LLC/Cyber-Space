@@ -66,6 +66,18 @@ def _label(label: str) -> str:
     return _normalize_expected(label or "")
 
 
+def _doc_name(doc) -> str:
+    """The document's top-level name, or "" — a rotations document from
+    stdin (or a mirror) is untrusted input: a non-object document, or a
+    non-string name field, has no name to read, never an AttributeError
+    crash on the way to walk()'s own shape verdicts."""
+    if isinstance(doc, dict):
+        value = doc.get("name", "")
+        if isinstance(value, str):
+            return _label(value)
+    return ""
+
+
 def _fetch(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
@@ -103,6 +115,12 @@ def walk(doc: dict, name: str, expect_original_key: str | None = None):
         # The mirror's row carries the name at the document top level;
         # verify_rotation expects it on the record — inject before checks.
         row.setdefault("name", want)
+        # verify_rotation guards every field's type, but the name
+        # pre-check below runs FIRST — a non-string name crashed it in
+        # _label before that guard was ever reached. Name the shape
+        # here, in verify_rotation's own wording.
+        if not isinstance(row["name"], str):
+            raise ChainError(f"hop {i}: field 'name' is not a string")
         # Name first, like verify_name's pins: a cross-label replay gets a
         # naming-the-sides reason, not a signature reason. The signature
         # would fail too (the name is inside the signed payload) — this
@@ -195,7 +213,7 @@ def main(argv: list[str]) -> int:
         except (ValueError, json.JSONDecodeError) as e:
             print(f"refused: stdin is not JSON: {e}", file=sys.stderr)
             return 2
-        name = _label(doc.get("name", ""))
+        name = _doc_name(doc)
     else:
         name = _label(args.source)
         if not name:
@@ -245,7 +263,7 @@ def main(argv: list[str]) -> int:
                 return 1
             live_note = "no live binding: name is dead, chain intact, label available"
 
-    nm = name or _label(doc.get("name", "")) or "?"
+    nm = name or _doc_name(doc) or "?"
     print(f"{nm}.cyberspace rotation chain: {len(hops)} hop(s), walks clean")
     for i, h in enumerate(hops):
         n = f" [{h['note']}]" if h["note"] else ""
