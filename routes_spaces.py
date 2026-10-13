@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from html import escape as html_escape
 import json
 import os
-from core import NAME_RE, NODE_TAGLINE, _DB_DIR, _authed, _db, _db_lock, _now
+from core import NAME_RE, NODE_TAGLINE, _DB_DIR, _authed, _db, _db_lock, _now, read_bounded_json
 
 router = APIRouter()
 
@@ -525,10 +525,18 @@ async def space_tone_tags_set(name: str, request: Request,
     """
     _space_owner(name, authorization)  # 403 unless the host sets their own door
     space = name.strip().lower()
+    # Read bounded before parsing: request.json() buffers the whole body,
+    # so only app.py's global 2MB cap stood in front of it while every
+    # sibling seat reads at FORM_BODY_LIMIT (64KB) -- and a tags body is
+    # a handful of short strings. read_bounded_json refuses oversize as
+    # 413 before a byte is parsed; its malformed-body 400 is re-worded to
+    # this route's own detail below.
     try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Body must be JSON with a 'tags' list.")
+        body = await read_bounded_json(request)
+    except HTTPException as e:
+        if e.status_code == 400:
+            raise HTTPException(status_code=400, detail="Body must be JSON with a 'tags' list.")
+        raise
     tags = body.get("tags") if isinstance(body, dict) else None
     if not isinstance(tags, list):
         raise HTTPException(status_code=400, detail="Body must be JSON with a 'tags' list.")
