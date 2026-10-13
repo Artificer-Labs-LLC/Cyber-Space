@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _node_url_host, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _name_claim_beats, _node_url_host, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -165,12 +165,47 @@ def node_url_host_cases():
           _node_url_host("http://[2001:db8::1]:8471/") == "2001:db8::1")
 
 
+def reject_nonpublic_cases():
+    print("node_url SSRF gate:")
+    # Refusal contract is HTTPException(400), same as _valid_node_url:
+    # a non-string must not leak AttributeError/TypeError from .split(),
+    # and a no-match string must not leak AttributeError from a None
+    # match's .group(), at the gate itself (not only via caller wraps).
+    for bad in (123, 1.5, True, b"http://x.example", ["http://x.example"], None,
+                "", "not a url", "ftp://x.example", "http://"):
+        try:
+            got = _reject_nonpublic_node_url(bad)
+        except HTTPException as e:
+            check(f"bad {bad!r} refused as 400",
+                  e.status_code == 400, f"-> {e.status_code}")
+            continue
+        except Exception as e:  # noqa: BLE001
+            check(f"bad {bad!r} refused as 400", False,
+                  f"raised {type(e).__name__}: {e}")
+            continue
+        check(f"bad {bad!r} refused as 400", False, f"-> {got!r}")
+    check("public IP pins exact",
+          _reject_nonpublic_node_url("http://185.143.228.228:8471")
+          == "185.143.228.228")
+    check("query stripped before pin",
+          _reject_nonpublic_node_url(
+              "http://185.143.228.228:8471/relay/hold_query?point_id=1")
+          == "185.143.228.228")
+    try:
+        got = _reject_nonpublic_node_url("http://127.0.0.1:8471")
+        check("loopback refused as 400", False, f"-> {got!r}")
+    except HTTPException as e:
+        check("loopback refused as 400", e.status_code == 400,
+              f"-> {e.status_code}")
+
+
 def main():
     print("names-registry primitive tests (core.py):")
     label_cases()
     conflict_cases()
     node_url_cases()
     node_url_host_cases()
+    reject_nonpublic_cases()
     print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

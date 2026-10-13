@@ -297,7 +297,18 @@ def _reject_nonpublic_node_url(url: str) -> None:
     lands, so they are stripped before the shape match. Stored node
     addresses themselves stay query-free — _valid_node_url matches the
     full string and still refuses them."""
+    # The refusal contract is HTTPException(400), the same as the sibling
+    # gates _valid_node_url/_node_url_host: a non-string escaped as
+    # AttributeError/TypeError from .split(), and a string with no shape
+    # match as AttributeError from a None match's .group(). The two raw
+    # call sites (_peer_urlopen, the redirect handler) catch the generic
+    # case too, but the gate itself must refuse in-contract — only a real
+    # string with a URL shape has a host to judge for publicness.
+    if not isinstance(url, str):
+        raise HTTPException(status_code=400, detail="bad node_url")
     m = _NODE_URL_RE.fullmatch(url.split("?", 1)[0])
+    if m is None:
+        raise HTTPException(status_code=400, detail="bad node_url")
     host = m.group(1).strip("[]")
     pinned = None
     try:
