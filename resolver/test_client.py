@@ -464,6 +464,24 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(parsed["id"], txid)
             self.assertEqual(parsed["qtype"], 65535)
 
+    def test_parse_response_bad_txid_raises_resolve_error_not_aliased(self):
+        """The expected txid was compared as txid & 0xFFFF: 65536 and
+        -65536 silently aliased to 0, so a packet for txid 0 was trusted
+        as the answer to a transaction it never belonged to, and a
+        float/str/None txid escaped as a raw TypeError. All must raise
+        ResolveError — this parser's malformed/mistransaction contract."""
+        resp = self._valid_response(txid=0)
+        for bad in (65536, -65536, 1.5, "0", None, True, False):
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._parse_response(resp, bad, "node.cyberspace", 1)
+
+    def test_parse_response_txid_wire_boundaries_ok(self):
+        for txid in (0, 65535):
+            resp = self._valid_response(txid=txid)
+            _flags, answers = client._parse_response(
+                resp, txid, "node.cyberspace", 1)
+            self.assertEqual(len(answers), 1)
+
     def _valid_response(self, txid=0x42):
         q = dns.parse_query(client._build_query(txid, "node.cyberspace", 1))
         return dns.build_response(

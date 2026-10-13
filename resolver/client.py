@@ -279,12 +279,25 @@ def _parse_response(
     from the daemon's verified answer for this question — trusting
     it would let a correct question carry a stranger's address.
     """
+    # The expected txid is caller-supplied too (resolve() passes the
+    # random 16-bit id _build_query already gated, but a direct caller
+    # could pass anything): it was compared as txid & 0xFFFF, so 65536
+    # and -65536 silently ALIASED to txid 0 — a packet was trusted as
+    # the answer to a transaction it never belonged to — True aliased
+    # to 1, and a float/str/None txid escaped as a raw TypeError from
+    # the & before this function's ResolveError contract ever ran.
+    # The expected id must be a real int (never bool) in the uint16
+    # wire range; anything else is a mistransaction, refused here —
+    # the same fail-closed gate _build_query applies at build time.
+    if isinstance(txid, bool) or not isinstance(txid, int) \
+            or not 0 <= txid <= 65535:
+        raise ResolveError(f"bad expected transaction id {txid!r}")
     if len(data) < 12:
         raise ResolveError("short response")
     resp_id, flags, qdcount, ancount, nscount, arcount = struct.unpack(
         ">HHHHHH", data[:12]
     )
-    if resp_id != (txid & 0xFFFF):
+    if resp_id != txid:
         raise ResolveError("transaction id mismatch")
     if not flags & 0x8000:
         raise ResolveError("not a response (QR bit clear)")
