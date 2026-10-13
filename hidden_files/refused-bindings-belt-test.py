@@ -180,5 +180,15 @@ check("snapshot int-name row: one grammar leaf, no str() alias hash",
       and _r[0][0].split(b"\n")[1]
       == b"name=sha256:" + hashlib.sha256(b"").hexdigest().encode())
 
+print("malformed rows container -> empty partition, never crashes, never holds")
+for bad_rows in (None, 123, 1.5, True, "goodname", b"goodname",
+                 bytearray(b"goodname"), row("goodname")):
+    _h, _r = rb.snapshot_refused_bindings(bad_rows, MANIFEST)
+    check(f"snapshot malformed rows {type(bad_rows).__name__} -> empty partition",
+          _h == [] and _r == [])
+_h, _r = rb.snapshot_refused_bindings((row("goodname"),), MANIFEST)
+check("snapshot tuple rows container: valid row still holds",
+      len(_h) == 1 and _r == [])
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)

@@ -221,6 +221,19 @@ def snapshot_refused_bindings(rows, manifest_labels):
     in input order. Deterministic: same inputs, same outputs.
     """
     manifest = _manifest_set(manifest_labels)
+    # The rows container itself is a seat: None/int/float/bool escaped
+    # as TypeError from the iteration, a bare string/bytes container
+    # aliased into one spurious grammar leaf per character, and a
+    # single dict row iterated its keys instead of its bindings. A
+    # malformed container carries no rows (twin of _manifest_set's
+    # fail-closed rule): empty partition, no hold granted, no leaf
+    # invented. A dict is one row, never a container of rows.
+    if isinstance(rows, (str, bytes, bytearray, dict)):
+        return [], []
+    try:
+        rows = list(rows)
+    except TypeError:
+        return [], []
     holds = []
     refused = []
     for row in rows:
