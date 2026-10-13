@@ -539,6 +539,17 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=f"server={bad!r}"):
                 client.resolve("node.cyberspace", server=bad)
 
+    def test_nonbool_tcp_only_raises_value_error_not_aliased(self):
+        """tcp_only was read by bare truthiness: "false"/1/1.0/[1]
+        silently forced the TCP-only wire and ""/0/None/[] silently
+        allowed UDP — a wire choice matching no flag anyone set.
+        Every non-bool tcp_only must read as ValueError at the
+        source, before any wire is touched; real True/False are
+        covered by the round-trip and UDP tests."""
+        for bad in ("false", "true", 1, 0, 1.0, None, [1], []):
+            with self.assertRaises(ValueError, msg=f"tcp_only={bad!r}"):
+                client.resolve("node.cyberspace", tcp_only=bad)
+
     def test_query_wire_encoding(self):
         pkt = client._build_query(0x1234, "Node.Cyberspace.", 1)
         parsed = dns.parse_query(pkt)

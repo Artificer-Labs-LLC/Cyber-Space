@@ -680,6 +680,15 @@ def resolve(
                               or not isinstance(port, int)
                               or not 1 <= port <= 65535):
         raise ValueError(f"bad port {port!r}")
+    # tcp_only is caller-supplied too, and it was the last parameter
+    # read ungated — by bare truthiness: "false"/1/1.0/[1] silently
+    # forced the TCP-only wire (skipping the UDP attempt entirely)
+    # and ""/0/None/[] silently allowed it, a wire choice matching
+    # no flag anyone set. name/qtype/server/port above are all
+    # type-gated to ValueError; only a real bool is a tcp_only flag
+    # (main()'s argparse store_true already yields one).
+    if not isinstance(tcp_only, bool):
+        raise ValueError(f"bad tcp_only {tcp_only!r}")
     if port is None:
         port = _default_port()
     txid = random.getrandbits(16)
