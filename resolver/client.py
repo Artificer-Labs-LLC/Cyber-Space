@@ -497,6 +497,10 @@ def main(argv: list[str] | None = None) -> int:
     1 name does not resolve (NXDOMAIN), 2 everything else (usage,
     transport, daemon SERVFAIL, malformed answer) — so a shell script
     can tell "no such name" apart from "resolution broke".
+
+    With no --qtype, A is asked first and AAAA is tried when A answers
+    NODATA, so a v6-only hosted name resolves through the default
+    invocation; an explicit --qtype asks exactly that family.
     """
     import argparse
 
@@ -509,7 +513,12 @@ def main(argv: list[str] | None = None) -> int:
         # type=str.upper before choices: resolve() itself uppercases
         # qtype, so 'a'/'aaaa' are valid library arguments — the CLI
         # refusing them as invalid choices contradicted its own library.
-        "--qtype", default="A", type=str.upper, choices=sorted(_QTYPES), help="record family (default A)"
+        # Default None (not "A") so main() can tell an explicit family
+        # from an unchosen one: an unchosen query falls back to AAAA
+        # when A answers NODATA (see below); an explicit one is strict.
+        "--qtype", default=None, type=str.upper, choices=sorted(_QTYPES),
+        help="record family (default: A, falling back to AAAA when the "
+             "name has no A record)",
     )
     parser.add_argument(
         "--server", default=DEFAULT_SERVER, help="daemon host (default 127.0.0.1)"
@@ -613,10 +622,42 @@ def main(argv: list[str] | None = None) -> int:
     else:
         port = args.port
     try:
-        answers = resolve(
-            args.name, qtype=args.qtype, server=args.server, port=port,
-            tcp_only=args.tcp_only,
-        )
+        if args.qtype is not None:
+            answers = resolve(
+                args.name, qtype=args.qtype, server=args.server, port=port,
+                tcp_only=args.tcp_only,
+            )
+        else:
+            # No family chosen: ask A first, and fall back to AAAA only
+            # on A-NODATA (NOERROR, no A record — the name lives, the
+            # family is absent), exactly as wiring/smoke's registered
+            # leg rules. A v6-only hosted node answers A that way
+            # (answer.py), so without the fallback the front door
+            # reported a live name as broken. NXDOMAIN (NameNotFound),
+            # SERVFAIL, and transport failures never fall back — they
+            # are verdicts on the name or the daemon, not on a family.
+            try:
+                answers = resolve(
+                    args.name, qtype="A", server=args.server, port=port,
+                    tcp_only=args.tcp_only,
+                )
+            except ResolveError as exc:
+                if "answered no A record" not in str(exc):
+                    raise
+                try:
+                    answers = resolve(
+                        args.name, qtype="AAAA", server=args.server,
+                        port=port, tcp_only=args.tcp_only,
+                    )
+                except ResolveError as exc6:
+                    if "answered no AAAA record" in str(exc6):
+                        print(
+                            f"error: daemon answered no A or AAAA record "
+                            f"for {args.name}",
+                            flush=True,
+                        )
+                        return 2
+                    raise
     except NameNotFound as exc:
         print(f"error: {exc}", flush=True)
         return 1
