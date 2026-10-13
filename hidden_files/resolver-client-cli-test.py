@@ -131,6 +131,15 @@ check("NXDOMAIN -> exit 1", r.returncode == 1 and "does not resolve" in r.stdout
 r = cli("broken.cyberspace")
 check("SERVFAIL -> exit 2", r.returncode == 2, repr((r.returncode, r.stdout, r.stderr)))
 
+r = cli("alice.cyberspace", "--qtype", "a")
+check("lowercase qtype 'a' -> exit 0 + address (library uppercases)", r.returncode == 0 and r.stdout.strip() == "93.184.216.34", repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("alice.cyberspace", "--qtype", "aaaa")
+check("lowercase qtype 'aaaa' -> exit 0 + v6", r.returncode == 0 and r.stdout.strip() == "fd00::1", repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("alice.cyberspace", "--qtype", "Aaaa")
+check("mixed-case qtype 'Aaaa' -> exit 0 + v6", r.returncode == 0 and r.stdout.strip() == "fd00::1", repr((r.returncode, r.stdout, r.stderr)))
+
 r = cli("alice.cyberspace", "--qtype", "MX")
 check("bad qtype -> exit 2 (argparse)", r.returncode == 2, repr((r.returncode, r.stderr)))
 

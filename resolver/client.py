@@ -493,7 +493,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("name", help="name to resolve, e.g. alice.cyberspace")
     parser.add_argument(
-        "--qtype", default="A", choices=sorted(_QTYPES), help="record family (default A)"
+        # type=str.upper before choices: resolve() itself uppercases
+        # qtype, so 'a'/'aaaa' are valid library arguments — the CLI
+        # refusing them as invalid choices contradicted its own library.
+        "--qtype", default="A", type=str.upper, choices=sorted(_QTYPES), help="record family (default A)"
     )
     parser.add_argument(
         "--server", default=DEFAULT_SERVER, help="daemon host (default 127.0.0.1)"
