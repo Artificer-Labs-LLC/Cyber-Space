@@ -258,6 +258,19 @@ rc, out, err = _cli(LABEL, "--mirror", MIRROR, "--expect-original-key", "zz")
 check("bad pin gate precedes mirror fetch (exit 2)",
       rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
 
+# malformed name: bad argument (exit 2), never a broken-chain verdict —
+# a name that is not exactly one valid label can never have a chain, yet
+# the live mirror would 404 it to exit 1, so exit 2 proves the gate
+# precedes the fetch; uppercase still normalizes and walks (control)
+for bad in ("bad_label", "alice.cyberspace", "trail-", "a" * 64, "nødé"):
+    rc, out, err = _cli(bad, "--mirror", MIRROR)
+    check(f"bad name {bad[:12]!r} refused as bad argument (exit 2)",
+          rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
+rc, out, err = _cli(LABEL.upper(), "--mirror", MIRROR,
+                    "--expect-original-key", PK_A)
+check("uppercase name normalizes and walks (exit 0)",
+      rc == 0 and PK_C.lower()[:16] in out, f"rc={rc} err={err}")
+
 # --- dead name: binding expired, chain intact ------------------------------
 SK_D, PK_D = _keypair()
 SK_E, PK_E = _keypair()

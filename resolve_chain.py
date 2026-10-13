@@ -53,7 +53,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mint_name import _valid_mirror  # noqa: E402
 from rotate_name import verify_rotation  # noqa: E402
-from verify_name import verify as verify_binding, _normalize_expected  # noqa: E402
+from verify_name import verify as verify_binding, _normalize_expected, _valid_label  # noqa: E402
 
 _LABEL_MAX = 63
 
@@ -200,6 +200,17 @@ def main(argv: list[str]) -> int:
         name = _label(args.source)
         if not name:
             print("refused: empty name", file=sys.stderr)
+            return 2
+        # The name is an argument, not a verdict: a name that is not
+        # exactly one valid label can never have a rotation chain, yet
+        # was fetched and read back as exit 1 "broken: mirror says no
+        # chain here" (or "mirror unreachable") — a verdict on the
+        # chain/mirror when the argument itself was at fault. Gate it
+        # (normalized first, twin of verify_name's --expect-name gate)
+        # before any mirror use, exit 2.
+        if not _valid_label(name):
+            print(f"refused: {name!r} is not a valid .cyberspace label "
+                  "— bad argument, no verdict", file=sys.stderr)
             return 2
         if not args.mirror:
             print("refused: fetching a chain needs --mirror (or - for stdin)",
