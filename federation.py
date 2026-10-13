@@ -127,6 +127,24 @@ def fed_announce(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") not in ("federation", _NODE_PUB):
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself): claim the envelope's
+    # sig after verify+recipient, before the sender_pub gate, the
+    # reach-descriptor rate bucket and ingest, the roster field gates,
+    # and the peers upsert, so a replay can never redo that work for
+    # free or burn fedreachannounce: quota. verify_envelope already
+    # established a valid sig, so the claim's ValueError is
+    # unreachable in production; it is converted to 400 anyway so the
+    # seat fails closed (never a 500) if verify is ever bypassed.
+    # Named post-claim edges: sender_pub mismatch claims;
+    # genuine re-announces re-sign with a fresh ts (new sig).
+    with _db_lock, _db() as conn:
+        try:
+            replayed = _claim_seen_sig(conn, env.get("sig"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid envelope")
+        if replayed:
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")

@@ -106,7 +106,11 @@ def attempt_desc(desc, stub=False, sender=None):
     pk = sender or ed25519.publickey(sk).hex()
     body = {"node_pub": pk, "reach_descriptor": desc}
     if stub:
-        env = {"sender_pub": pk, "recipient": core._NODE_PUB, "body": body}
+        # A verified envelope always carries a well-formed sig; the stub
+        # must present one or the replay-dedupe claim (which sits between
+        # verify and the descriptor gate) refuses it as invalid first.
+        env = {"sender_pub": pk, "recipient": core._NODE_PUB, "body": body,
+               "sig": "ab" * 64}
         orig = fenv.verify_envelope
         fenv.verify_envelope = lambda e: True
     else:

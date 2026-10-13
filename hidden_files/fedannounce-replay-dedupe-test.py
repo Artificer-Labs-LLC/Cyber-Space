@@ -23,6 +23,9 @@ Hostile/edge cases:
     "sender_pub mismatch" AND the sig is still claimed (named edge: the claim
     sits before the mismatch check, same family as the no-op-leave edge in
     the earlier receiver harnesses)
+ 7. reach-descriptor announce -> 200, byte-identical replay -> 400 "replay"
+    (the claim sits before the descriptor rate bucket and ingest too, so a
+    replay never burns fedreachannounce: quota or re-merges a descriptor)
 """
 import json
 import os
@@ -128,5 +131,19 @@ check("sender_pub mismatch 400", st == 400 and detail == "sender_pub mismatch")
 check("mismatch envelope sig still claimed", sig_seen(env7["sig"]))
 st, detail = deliver(env7)
 check("mismatch replay now 400 replay", st == 400 and detail == "replay")
+
+# 7. reach-descriptor announce -> 200, replay -> 400 "replay"
+SK3 = secrets.token_bytes(32); PK3 = ed25519.publickey(SK3).hex()
+desc = {"node_pubkey": PK3, "name": "somename", "reach": [],
+        "issued_at": "2026-01-01T00:00:00+00:00",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+        "signature": "00" * 32}
+env8 = make_announce(SK3.hex(), PK3,
+                     {"node_pub": PK3, "reach_descriptor": desc}, ts0 + 29)
+st, pl = deliver(env8)
+check("reach announce 200", st == 200 and pl.get("ok") is True)
+check("reach announce sig claimed", sig_seen(env8["sig"]))
+st, detail = deliver(env8)
+check("reach replay 400 replay", st == 400 and detail == "replay")
 
 print(f"{len(passed)}/{len(passed)} checks passed")
