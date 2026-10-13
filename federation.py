@@ -100,6 +100,19 @@ def _recv_attestation(delta, sender_pub: str, retire: bool):
     if "sig" in delta and not isinstance(delta["sig"], str):
         return None, None
     sig_hex = str(delta.get("sig", ""))
+    # String-length gate, twin of verify_envelope (2574fc2):
+    # bytes.fromhex ignores embedded spaces, so a 129-char sig with an
+    # inserted space (or an outer-padded spelling) decoded to the TRUE
+    # 64 bytes and checkvalid VERIFIED it -- and the callers store the
+    # returned sig_hex verbatim into peers.delta_sig, which _delta_out
+    # later forwards as this node's own delta: a non-canonical
+    # spelling every binding seat refuses on sight (len(signature)
+    # != 128) propagating through the directory. Only the exact
+    # 128-char spelling attests; case is left alone (uppercase
+    # verified before and still does). The decoded-length half is
+    # checkvalid's own gate (a 63-byte decode already reads False).
+    if len(sig_hex) != 128:
+        return None, None
     try:
         ok = _fed_ed25519.checkvalid(
             bytes.fromhex(sig_hex),
