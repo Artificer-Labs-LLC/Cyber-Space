@@ -97,6 +97,17 @@ def _server_host(server: str) -> str:
     bracketed form picked AF_INET, then died in transport, for a
     daemon that was listening fine. Brackets are stripped when they
     wrap the whole value; anything else is returned unchanged."""
+    # The server is caller-supplied at the library seats that call
+    # this directly (_query_udp/_query_tcp — resolve() gates its own
+    # argument, but a direct wire caller could pass anything): a
+    # non-string escaped as AttributeError from .strip() (None, an
+    # int, True) or TypeError from .startswith() (bytes) — neither
+    # the ValueError resolve() raises for a bad server nor the
+    # ResolveError the wires promise. Only a real string is a server
+    # to unwrap; anything else raises ValueError here, at the source,
+    # and both wires read it as a transport failure (ResolveError).
+    if not isinstance(server, str):
+        raise ValueError(f"bad server {server!r}")
     host = server.strip()
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1].strip()
@@ -120,6 +131,16 @@ def _server_target(host: str, port: int):
     getaddrinfo result wins, as create_connection tries them in
     order. An unresolvable hostname raises gaierror here, which
     _query_udp already reads as a transport failure."""
+    # The host is caller-supplied at this library seat too: ip_address()
+    # ALIASED a non-string host (123 -> 0.0.0.123, True -> 0.0.0.1, a
+    # 4-byte bytes host -> its dotted quad) and getaddrinfo ALIASED
+    # None to localhost — a daemon nobody named was dialed and its
+    # reply source-checked as expected. Only a real string is a host
+    # to dial (twin of answer._upstream_target's host gate); anything
+    # else raises ValueError here, which _query_udp reads as a
+    # transport failure (ResolveError) like gaierror.
+    if not isinstance(host, str):
+        raise ValueError(f"bad server host {host!r}")
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -452,9 +473,9 @@ def _query_udp(
     is refused rather than parsed.
     """
     _check_timeout(timeout)
-    host = _server_host(server)
     s = sock
     try:
+        host = _server_host(server)
         family, target, expected = _server_target(host, port)
         if s is None:
             s = socket.socket(family, socket.SOCK_DGRAM)
@@ -477,11 +498,14 @@ def _query_udp(
             raise ResolveError("udp response from an unexpected source")
     except ResolveError:
         raise
-    except (OSError, OverflowError) as exc:
+    except (OSError, OverflowError, ValueError) as exc:
         # OverflowError rides along: a port above 65535 (honored from
         # CYBERNET_RESOLVER_PORT, see _client_port_warnings) makes
         # sendto raise OverflowError, NOT OSError — uncaught it would
         # escape resolve() as a raw crash instead of a ResolveError.
+        # ValueError rides along for the _server_host/_server_target
+        # bad-server gates above: a malformed server is a transport
+        # failure on this wire, never a raw bad-argument escape.
         raise ResolveError(f"udp transport failed: {exc}") from exc
     finally:
         if sock is None and s is not None:
@@ -511,11 +535,13 @@ def _query_tcp(
         s.sendall(struct.pack(">H", len(packet)) + packet)
         (body_len,) = struct.unpack(">H", _read_exact(s, 2))
         data = _read_exact(s, body_len)
-    except (OSError, OverflowError) as exc:
+    except (OSError, OverflowError, ValueError) as exc:
         # OverflowError for parity with the UDP wire: create_connection
         # itself wraps an oversize port through getaddrinfo (OSError),
         # but a caller-supplied socket's send/recv path can still raise
         # OverflowError for one — a transport failure either way.
+        # ValueError rides along for the _server_host bad-server gate:
+        # a malformed server is a transport failure on this wire too.
         raise ResolveError(f"tcp transport failed: {exc}") from exc
     finally:
         if sock is None and s is not None:

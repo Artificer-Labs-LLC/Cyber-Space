@@ -170,6 +170,41 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client._server_host("[127.0.0.1]"), "127.0.0.1")
         self.assertEqual(client._server_host("localhost"), "localhost")
 
+    def test_server_host_nonstring_raises_value_error(self):
+        """resolve() gates its server, but a direct _server_host caller
+        passing a non-string escaped as AttributeError from .strip()
+        (None, an int, True) or TypeError from .startswith() (bytes)
+        — neither the ValueError resolve() raises for a bad server
+        nor the ResolveError the wires promise. All must raise
+        ValueError at the source; valid strings untouched (above)."""
+        for bad in (None, 123, 1.5, True, b"[::1]", ["::1"]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._server_host(bad)
+
+    def test_server_target_nonstring_host_raises_value_error_not_aliased(self):
+        """ip_address() aliased a non-string host (123 -> 0.0.0.123,
+        True -> 0.0.0.1, a 4-byte bytes host -> its dotted quad) and
+        getaddrinfo aliased None to localhost — a daemon nobody named
+        was dialed and source-checked as expected. Every non-string
+        host must raise ValueError at the source; literals and
+        hostnames untouched (below)."""
+        for bad in (None, 123, True, b"\x7f\x00\x00\x01", 1.5):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client._server_target(bad, 5353)
+
+    def test_query_wires_nonstring_server_raises_resolve_error(self):
+        """Through the wires a bad server is a transport failure:
+        _query_udp/_query_tcp promise ResolveError, never a raw
+        AttributeError/TypeError/ValueError escape."""
+        packet = client._build_query(0x1234, "node.cyberspace",
+                                     client.QTYPE_A)
+        for bad in (None, 123, True, b"127.0.0.1"):
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_udp(0x1234, packet, bad, 5353, 1.0,
+                                  sock=_FakeUdpSock())
+            with self.assertRaises(client.ResolveError, msg=repr(bad)):
+                client._query_tcp(0x1234, packet, bad, 5353, 1.0)
+
     def test_udp_bracketed_v6_server_dials_bare_literal(self):
         """server="[::1]" sends to ("::1", port) and accepts a reply
         sourced from ::1 — before, the bracketed form was compared
