@@ -125,7 +125,19 @@ def _valid_mirror(mirror: str) -> bool:
     last two), is a bad argument, not an unreachable mirror. Without
     this gate main() wrote the name key first and then read the failure
     as a claim refusal (exit 1) — or, for a scheme-less value, crashed
-    raw in Request construction — leaving half-written state behind."""
+    raw in Request construction — leaving half-written state behind.
+
+    Whitespace/control characters are refused on the RAW string first:
+    urlsplit silently strips \\t\\r\\n before parsing, so a mirror like
+    "http://host:8471/\\nCYBERNET_MIRROR_URL=http://evil" passes every
+    check below — but _hostd_env_text writes the ORIGINAL string
+    verbatim into the key-bearing hostd env file, where the newline
+    injects whole env lines (a second MIRROR_URL, a forged NAME_PRIVKEY)
+    into a 0600 file installed under /etc. A leading space / trailing
+    tab passed the same way and wrote a value hostd never reads back
+    as written. No honest mirror contains whitespace; refuse it."""
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in mirror):
+        return False
     try:
         parts = urllib.parse.urlsplit(mirror)
         port = parts.port

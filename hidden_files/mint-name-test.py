@@ -200,6 +200,23 @@ for label, bad_mirror in (("badportmint", "http://127.0.0.1:99999"),
     check(f"mirror {bad_mirror!r} wrote no key",
           not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
 
+# --- whitespace/control mirror refused locally, before any key -------
+# urlsplit strips \t\r\n before parsing, so a newline riding in the
+# path/fragment passed _valid_mirror's shape checks — but the env
+# writer emits the raw string, injecting whole env lines into the
+# key-bearing hostd env (a second CYBERNET_MIRROR_URL, a forged
+# CYBERNET_NAME_PRIVKEY). Leading space / trailing tab passed too and
+# wrote a value hostd never reads back as written.
+for label, bad_mirror in (
+        ("newlineinjmint", MIRROR + "/\nCYBERNET_MIRROR_URL=http://evil.example"),
+        ("fraginjmint", MIRROR + "#\nCYBERNET_NAME_PRIVKEY=00"),
+        ("leadspacemint", " " + MIRROR),
+        ("trailtabmint", MIRROR + "\t")):
+    rc = mint_name.main([label, bad_mirror])
+    check(f"mirror {bad_mirror!r} exits 2 locally", rc == 2, f"rc={rc}")
+    check(f"mirror {bad_mirror!r} wrote no key",
+          not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
+
 # --- corrupt existing key file refused locally, never overwritten ----
 # Every other key reader (rotate_name's three seats) guards its
 # bytes.fromhex read; mint's existing-key load did not, so a key file
