@@ -1,11 +1,15 @@
 #!/bin/bash
 # Full test suite entrypoint (Examiner gate 2, ART-29).
 # Runs every test file in the repo, reports per-file results and a summary.
-# Usage: ./run_tests.sh [venv-python]
-# Defaults to ./venv/bin/python. Uses a throwaway DB dir via CYBERNET_DB_DIR.
+# Usage: ./run_tests.sh [python]   (or PYTHON=... ./run_tests.sh)
+# Defaults to ${PYTHON:-.venv/bin/python}; fails loudly if missing. Uses a throwaway DB dir via CYBERNET_DB_DIR.
 set -u
 
-PY="${1:-./venv/bin/python}"
+PY="${1:-${PYTHON:-.venv/bin/python}}"
+if [ ! -x "$PY" ] && ! command -v "$PY" >/dev/null 2>&1; then
+  echo "FAIL: python interpreter not found: $PY (pass it as \$1 or set PYTHON)" >&2
+  exit 2
+fi
 export CYBERNET_DB_DIR="$(mktemp -d)"
 trap 'rm -rf "$CYBERNET_DB_DIR"' EXIT
 

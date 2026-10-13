@@ -498,30 +498,102 @@ mutant("fallback to weak_reason when PyNaCl is missing",
        "bindings stubbed: refused, weak_reason 0 calls", real, mut)
 
 
-def run_version(ver):
+def admit_once():
     nm = f"vv{secrets.token_hex(3)}"
     kA = seed()
     claim_gate_pin(nm, kA)
     c = cert_next(nm, kA, pub(seed()))
     nf._weak_ok_cache.clear()
-    with patched(_ed, "sodium_version", lambda: ver):
-        r = ingest([c], now=next_round())
-    return r["outcomes"] == ["refused-invalid"] and head(nm)[0] == pub(kA), r["outcomes"]
+    r = ingest([c], now=next_round())
+    return r["outcomes"]
 
 
-print("libsodium version at runtime (explicit binding, no PyNaCl inference):",
-      _ed.sodium_version(), flush=True)
-assert _ed.sodium_version() is not None, "runtime must read a real sodium_version_string"
-real, info = run_version((1, 0, 17))
-check("libsodium version stubbed to 1.0.17: admission refused", real, info)
-ok18, info18 = run_version((1, 0, 18))
-check("libsodium 1.0.18 (control): admission not refused by the gate", not ok18, info18)
-# Unreadable version string (Cipher: no inference) also refuses closed.
-real_none, info_none = run_version(None)
-check("libsodium version unreadable (None): admission refused", real_none, info_none)
-with patched(_ed, "sodium_version_ok", lambda: True):
-    mut, _ = run_version((1, 0, 17))
-mutant("drop the libsodium version gate", "version 1.0.17 -> admission refused",
+import ctypes  # noqa: E402
+import ctypes.util  # noqa: E402
+
+_ed.reset_probe()
+check("bundled libsodium probe passes on this box (real result, not None-check)",
+      _ed.bundled_probe() is None and _ed.bundled_probe_ok(), _ed.bundled_probe())
+
+
+class _FakeLib:
+    class _F:
+        restype = None
+
+        def __call__(self):
+            return b"99.9.9"
+    sodium_version_string = _F()
+
+
+def gate_under_system_lib():
+    """Gate result with the system library (a) missing, (b) reporting a fake
+    higher version. Must equal the plain result: the system lib is never read."""
+    results = []
+    real_cdll = ctypes.CDLL
+    for fl, cdll in ((lambda n: None, real_cdll),
+                     (lambda n: "libsodium-fake.so",
+                      lambda p, *a, **k: _FakeLib() if "fake" in str(p) else real_cdll(p, *a, **k))):
+        _ed.reset_probe()
+        with patched(ctypes.util, "find_library", fl), patched(ctypes, "CDLL", cdll):
+            results.append((_ed.bundled_probe_ok(), admit_once()))
+    _ed.reset_probe()
+    base = (_ed.bundled_probe_ok(), admit_once())
+    return all(r == base for r in results) and base[0], (base, results)
+
+
+real, info = gate_under_system_lib()
+check("gate unchanged with the system libsodium missing or faking 99.9.9", real, info)
+
+
+def find_library_fallback():
+    """MUTANT: the removed system-library version read, restored."""
+    name = ctypes.util.find_library("sodium")
+    if not name:
+        return "no system libsodium"
+    try:
+        f = ctypes.CDLL(name).sodium_version_string
+        f.restype = ctypes.c_char_p
+        v = tuple(int(x) for x in f().decode().split(".")[:3])
+    except Exception:
+        return "unreadable"
+    return None if v >= (1, 0, 18) else "old"
+
+
+with patched(_ed, "_run_probe", find_library_fallback):
+    mut, minfo = gate_under_system_lib()
+_ed.reset_probe()
+print("   find_library mutant:", minfo, flush=True)
+mutant("find_library fallback restored", "gate unchanged under system lib missing/fake",
        real, mut)
+
+
+def broken_bundle_row():
+    """A bundled library that accepts the mixed-order point, or S+L, must make
+    startup refuse (and admission refuse)."""
+    ok = True
+    for attr, bad in (("_sodium_valid_point", lambda p: True),
+                      ("_sodium_verify", lambda s, m, p: None)):
+        _ed.reset_probe()
+        with patched(_ed, attr, bad):
+            try:
+                _ed.require_bundled_sodium()
+                started = True
+            except _ed.SodiumProbeFailed:
+                started = False
+            refused = admit_once() == ["refused-invalid"]
+        ok = ok and not started and refused
+    _ed.reset_probe()
+    return ok
+
+
+real = broken_bundle_row()
+check("bundled lib accepting a mixed-order point or an S+L signature: node "
+      "refuses to start; admission refused", real)
+with patched(_ed, "_run_probe", lambda: None):
+    mut = broken_bundle_row()
+mutant("probe made to pass", "broken bundle -> refuse to start", real, mut)
+_ed.reset_probe()
+check("startup probe is wired into app startup",
+      "require_bundled_sodium" in inspect.getsource(appmod._startup))
 
 finish()

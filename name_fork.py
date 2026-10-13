@@ -490,8 +490,8 @@ def _verify(rec: dict, tag: bytes) -> bool:
                            rec["issued_at"], rec["seq"], rec["prev_hash"],
                            tag=tag)
     # Runtime libsodium gate (Villhaze b9f64f88): binding present AND
-    # sodium_version_string readable and >= 1.0.18. No inference.
-    if _ed.SODIUM_ERROR is not None or not _ed.sodium_version_ok():
+    # bundled-library probe passed at startup (no version-number gate).
+    if _ed.SODIUM_ERROR is not None or not _ed.bundled_probe_ok():
         import logging
         logging.getLogger("name_fork").error(
             _ed.SODIUM_ERROR or "libsodium version gate refused")
@@ -592,7 +592,7 @@ def _verify_v1(v1: dict) -> bool:
     import hop_certs
     from fed import ed25519 as _ed
     _verify_calls += 1
-    if _ed.SODIUM_ERROR is not None or not _ed.sodium_version_ok():
+    if _ed.SODIUM_ERROR is not None or not _ed.bundled_probe_ok():
         return False
     return _ed.checkvalid_sodium(
         bytes.fromhex(v1["signature"]),

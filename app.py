@@ -158,6 +158,10 @@ app.include_router(routes_legacy_witness.router)
 
 @app.on_event("startup")
 def _startup():
+    # Cipher: probe PyNaCl's BUNDLED libsodium (mixed-order point, S+L
+    # signature); if it accepts either, the node refuses to start.
+    from fed import ed25519 as _ed
+    _ed.require_bundled_sodium()
     init_db()
     threading.Thread(target=_gossip_loop, daemon=True).start()
     threading.Thread(target=_reannounce_loop, daemon=True).start()

@@ -183,7 +183,7 @@ except Exception:  # pragma: no cover - exercised by the fail-closed row
 def checkvalid_sodium(s: bytes, m: bytes, pk: bytes) -> bool:
     """Strict checks (as checkvalid steps 1-3), then libsodium's verify.
     Returns False on any failure, including libsodium being missing."""
-    if _sodium_verify is None:
+    if _sodium_verify is None or not bundled_probe_ok():
         return False
     try:
         if len(s) != _B // 4 or len(pk) != _B // 8:
@@ -208,51 +208,83 @@ except Exception:  # pragma: no cover - exercised by the fail-closed row
     _sodium_valid_point = None
 
 
-SODIUM_MIN_VERSION = (1, 0, 18)
+# Cipher (BLOCK-class on 0dadc92): no version-number gate. A version read
+# via ctypes.find_library describes the SYSTEM libsodium, while verify and
+# is_valid_point run in PyNaCl's BUNDLED copy. So the gate probes the
+# bundled functions themselves, once at startup: is_valid_point must refuse
+# a known mixed-order point, and crypto_sign_open must refuse a known
+# non-canonical (S + L) signature. No find_library, no fallback.
+_PROBE_SEED = bytes(range(32))
+_PROBE_MSG = b"cyberspace-sodium-probe/v1"
+# Base point + an order-8 torsion point: on the curve, canonical, not in
+# the prime-order subgroup.
+_PROBE_MIXED_HEX = None
 
 
-def sodium_version():
-    """libsodium version as a tuple, or None when it cannot be told.
+class SodiumProbeFailed(RuntimeError):
+    pass
 
-    Villhaze ART-42 b9f64f88 / Cipher 7f00584a: the gate is a RUNTIME check
-    of the libsodium binding, never an inference from the PyNaCl release.
-    We read sodium_version_string from (1) the PyNaCl-bundled .so when it
-    exports the symbol, then (2) the system libsodium found by
-    ctypes.util.find_library. If neither yields a version string, return
-    None and admission refuses closed. No PyNaCl.__version__ fallback.
-    """
-    import ctypes
-    import ctypes.util
 
-    def _read(path_or_name):
-        lib = ctypes.CDLL(path_or_name)
-        f = lib.sodium_version_string
-        f.restype = ctypes.c_char_p
-        raw = f()
-        if not raw:
-            return None
-        return tuple(int(x) for x in raw.decode().split(".")[:3])
+def _probe_vectors():
+    """(mixed_point, valid_point, sig, noncanonical_sig, pk, msg)."""
+    base = _encodepoint(_BPOINT)
+    t8 = _decodepoint_strict(bytes.fromhex(
+        "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"))
+    mixed = _encodepoint(_edwards(_BPOINT, t8))
+    pk = publickey(_PROBE_SEED)
+    sig = sign(_PROBE_MSG, _PROBE_SEED, pk)
+    S = int.from_bytes(sig[32:], "little") + _L
+    bad = sig[:32] + S.to_bytes(32, "little")
+    return mixed, base, sig, bad, pk, _PROBE_MSG
 
+
+def _run_probe() -> str | None:
+    """None when the bundled library behaves; else why not."""
+    if _sodium_valid_point is None or _sodium_verify is None:
+        return SODIUM_MISSING
+    mixed, base, sig, bad, pk, msg = _probe_vectors()
     try:
-        import nacl._sodium as _s
-        v = _read(_s.__file__)
-        if v is not None:
-            return v
-    except Exception:
-        pass
+        if not _sodium_valid_point(base):
+            return "bundled is_valid_point refuses the base point"
+        if _sodium_valid_point(mixed):
+            return "bundled is_valid_point ACCEPTS a mixed-order point"
+    except Exception as e:
+        return f"bundled is_valid_point raised: {e!r}"
     try:
-        name = ctypes.util.find_library("sodium")
-        if name:
-            return _read(name)
+        _sodium_verify(sig, msg, pk)
     except Exception:
-        pass
-    return None
+        return "bundled crypto_sign_open refuses a valid signature"
+    try:
+        _sodium_verify(bad, msg, pk)
+        return "bundled crypto_sign_open ACCEPTS a non-canonical (S+L) signature"
+    except Exception:
+        return None
 
 
-def sodium_version_ok() -> bool:
-    """Startup/admission gate: refuse below libsodium 1.0.18."""
-    v = sodium_version()
-    return v is not None and tuple(v) >= SODIUM_MIN_VERSION
+_PROBE_RESULT: list = []
+
+
+def bundled_probe() -> str | None:
+    """Cached startup probe result (None = OK)."""
+    if not _PROBE_RESULT:
+        _PROBE_RESULT.append(_run_probe())
+    return _PROBE_RESULT[0]
+
+
+def reset_probe() -> None:
+    _PROBE_RESULT.clear()
+
+
+def bundled_probe_ok() -> bool:
+    return bundled_probe() is None
+
+
+def require_bundled_sodium() -> None:
+    """Startup: if the bundled library ACCEPTS either probe vector, refuse to
+    start. (Missing PyNaCl is not a start refusal: admission refuses.)"""
+    why = bundled_probe()
+    if why is not None and why != SODIUM_MISSING:
+        raise SodiumProbeFailed(f"refusing to start: {why}")
 
 
 def sodium_key_ok(pk: bytes):
@@ -261,7 +293,7 @@ def sodium_key_ok(pk: bytes):
     mixed-order keys refuse). Returns None when libsodium is missing; the
     caller must refuse, never fall back. Equivalent to window_open.
     weak_reason on Cipher's key corpus with zero disagreements (belt row)."""
-    if _sodium_valid_point is None or not sodium_version_ok():
+    if _sodium_valid_point is None or not bundled_probe_ok():
         return None
     try:
         return bool(_sodium_valid_point(bytes(pk)))
