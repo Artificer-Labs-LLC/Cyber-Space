@@ -23,7 +23,12 @@ Env (mirrors daemon defaults):
                          daemon 1), so the client queried a port no
                          daemon was listening on, in silence. main()
                          warns on set-but-ineffective values (see
-                         _client_port_warnings)
+                         _client_port_warnings). main() also accepts
+                         --port as an explicit override, gated to
+                         1..65535 exactly as wiring/smoke gates its own
+                         --port; without it an operator whose daemon
+                         listens on a non-default port could not point
+                         the CLI at it at all.
 """
 
 import ipaddress
@@ -478,7 +483,7 @@ def resolve(
 def main(argv: list[str] | None = None) -> int:
     """CLI front door for the resolver client.
 
-    ``python -m resolver.client alice.cyberspace [--qtype AAAA] [--tcp-only]``
+    ``python -m resolver.client alice.cyberspace [--qtype AAAA] [--port N] [--tcp-only]``
 
     Prints one address per line on success. Exit codes: 0 resolved,
     1 name does not resolve (NXDOMAIN), 2 everything else (usage,
@@ -500,6 +505,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--server", default=DEFAULT_SERVER, help="daemon host (default 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=None,
+        help="daemon port (default: CYBERNET_RESOLVER_PORT or 5353, "
+             "as the daemon derives it)",
     )
     parser.add_argument(
         "--tcp-only", action="store_true", help="skip UDP, speak DNS-over-TCP only"
@@ -574,9 +584,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    for warn in _client_port_warnings():
-        print(f"resolver-client: config: {warn}", file=sys.stderr)
-    port = _default_port()
+    # An explicit --port is part of the argument shape too: a port
+    # outside 1..65535 can never be dialed (sendto/create_connection
+    # die on it), so without this gate it read as a transport failure
+    # — a verdict on the daemon — when the argument itself was at
+    # fault, exactly as wiring/smoke's --port gate ruled. A valid
+    # --port wins over the env derivation, and the env warnings (which
+    # describe the port the env WOULD have derived) stay silent: that
+    # port is not the one about to be queried.
+    if args.port is not None and not 1 <= args.port <= 65535:
+        print(
+            "error: --port is not a dialable port (must be 1..65535)",
+            flush=True,
+        )
+        return 2
+    if args.port is None:
+        for warn in _client_port_warnings():
+            print(f"resolver-client: config: {warn}", file=sys.stderr)
+        port = _default_port()
+    else:
+        port = args.port
     try:
         answers = resolve(
             args.name, qtype=args.qtype, server=args.server, port=port,
