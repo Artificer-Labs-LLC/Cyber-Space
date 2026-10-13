@@ -255,6 +255,32 @@ def _test_malformed_name():
           f"rc={rc} out={out[:80]!r}")
 
 
+# 5g. undialable --server is a bad argument, never "unreachable":
+#     no query is attempted for a bad-hostname / dotted-non-IPv4 /
+#     empty server (each otherwise dies in resolution and reads as a
+#     verdict on the daemon); hostname + bracketed v6 still smoke
+def _test_undialable_server():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    for bad in ("bad host!", "999.999.1.1", "", "-bad-.example"):
+        calls["n"] = 0
+        rc, out = _run_main_with_fake(_counting, ["--server=" + bad])
+        check(f"--server {bad!r} -> exit 1, no query, bad argument",
+              rc == 1 and calls["n"] == 0 and "bad argument" in out
+              and "unreachable" not in out,
+              f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    rc, out = _run_main_with_fake(_counting, ["--server", "localhost"])
+    check("hostname server still smokes (control)", rc == 0,
+          f"rc={rc} out={out[:80]!r}")
+    rc, out = _run_main_with_fake(_counting, ["--server", "[::1]"])
+    check("bracketed v6 server still smokes (control)", rc == 0,
+          f"rc={rc} out={out[:80]!r}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -280,6 +306,7 @@ if __name__ == "__main__":
     _test_aaaa_fallback()
     _test_undialable_port()
     _test_malformed_name()
+    _test_undialable_server()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

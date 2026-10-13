@@ -150,6 +150,39 @@ def main() -> int:
               f"(must be 1..65535) — bad argument, no query attempted")
         return 1
 
+    # The server is part of the argument shape too: a value that is
+    # not an IP literal or a syntactically valid hostname can never
+    # be dialed (sendto/create_connection die in name resolution),
+    # so without this check it read as "unreachable" — a verdict on
+    # the daemon — when the argument itself was at fault, exactly as
+    # the --port gate above ruled. Shape only, offline (twin of the
+    # daemon's BIND shape check): an IPv4/IPv6 literal (bracketed v6
+    # unwrapped by _server_host) or a valid hostname passes; a dotted
+    # all-numeric value that is not an IPv4 literal can never resolve
+    # as written. A valid-but-unresolvable hostname is beyond what an
+    # offline check can prove and still reads as unreachable, honestly.
+    host = _server_host(args.server)
+    server_ok = bool(host)
+    if server_ok:
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            labels = host.split(".")
+            server_ok = (
+                not all(p.isdigit() for p in labels)
+                and len(host) <= 253
+                and all(
+                    1 <= len(p) <= 63
+                    and not p.startswith("-") and not p.endswith("-")
+                    and all((c.isascii() and c.isalnum()) or c == "-"
+                            for c in p)
+                    for p in labels)
+            )
+    if not server_ok:
+        print("FAIL: --server is not a dialable address (an IP literal "
+              "or a valid hostname) — bad argument, no query attempted")
+        return 1
+
     # The name is part of the argument shape too: a name that is not
     # exactly one valid label under .cyberspace can never be claimed
     # (the resolver client's label grammar), so querying it could only
