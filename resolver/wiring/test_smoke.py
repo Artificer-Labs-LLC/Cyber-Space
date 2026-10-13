@@ -407,6 +407,55 @@ def _test_udp_hostname_family():
           f"target={canned.get('target')}")
 
 
+# 5j. UDP wire reads a WHOLE datagram, not the classic 512: recvfrom
+#     discards whatever it is not handed room for, so a multi-answer
+#     reply past 512 was silently amputated mid-record while the
+#     header counts still claimed the answers never delivered — every
+#     sibling wire (daemon._serve_udp, client._query_udp,
+#     answer._forward) already reads 65535. Fake socket honors the
+#     requested size like a real one (truncates to n) and records it.
+def _test_udp_whole_datagram():
+    import socket as _socket
+
+    canned = {}
+
+    class _FakeUdp:
+        def __init__(self, family, kind):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def settimeout(self, t):
+            pass
+
+        def sendto(self, packet, target):
+            txid = struct.unpack(">H", packet[:2])[0]
+            canned["resp"] = (
+                struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                + packet[12:] + b"\x00" * 600)
+            return len(packet)
+
+        def recvfrom(self, n):
+            canned["n"] = n
+            return canned["resp"][:n], ("127.0.0.1", 5399)
+
+    real_socket = _socket.socket
+    _socket.socket = _FakeUdp
+    try:
+        rcode, an, _ = smoke._query("alice.cyberspace", 1,
+                                    "127.0.0.1", 5399, timeout=1.0)
+    finally:
+        _socket.socket = real_socket
+    check("oversize reply -> _query answers", rcode == 0 and an == 1,
+          f"rcode={rcode} an={an}")
+    check("oversize reply -> recvfrom asked for a whole datagram (65535)",
+          canned.get("n") == 65535, f"n={canned.get('n')}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -435,6 +484,7 @@ if __name__ == "__main__":
     _test_undialable_server()
     _test_env_port_default()
     _test_udp_hostname_family()
+    _test_udp_whole_datagram()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

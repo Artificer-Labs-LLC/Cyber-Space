@@ -135,7 +135,13 @@ def _query(name: str, qtype: int, server: str, port: int,
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
         sock.sendto(packet, target)
-        resp, _ = sock.recvfrom(512)
+        # Read a whole datagram (65535, the UDP maximum — twin of
+        # daemon._serve_udp, client._query_udp and answer._forward):
+        # recvfrom discards whatever it is not handed room for, so the
+        # classic 512 silently amputated a multi-answer reply
+        # mid-record and the header counts below still claimed the
+        # answers that were never delivered.
+        resp, _ = sock.recvfrom(65535)
     if len(resp) < 12:
         raise ValueError("truncated DNS response")
     (rtxid, flags, qd, an, ns, ar) = struct.unpack(">HHHHHH", resp[:12])
