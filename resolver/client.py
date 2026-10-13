@@ -503,6 +503,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # A name that is not exactly one valid label under .cyberspace can
+    # never be claimed (core._valid_name_label's grammar), so querying
+    # it could only ever read back NXDOMAIN — exit 1, a verdict on the
+    # name — when the argument itself was at fault. Gate the shape here,
+    # before any wire use, as a bad argument (exit 2). Normalized first
+    # (strip, one FQDN root dot, lowercase — the same normalization
+    # resolve()/_build_query apply), and the label check is a local
+    # twin of core._valid_name_label: this module is dependency-free by
+    # design and does not import core. resolve() library semantics are
+    # unchanged; only the CLI front door gates.
+    asked = args.name.strip()
+    if asked.endswith("."):
+        asked = asked[:-1]
+    asked = asked.lower()
+    label = asked[: -len(".cyberspace")] if asked.endswith(".cyberspace") else ""
+    if (
+        not label
+        or len(label) > 63
+        or "." in label
+        or label.startswith("-")
+        or label.endswith("-")
+        or not all((c.isascii() and c.isalnum()) or c == "-" for c in label)
+    ):
+        print(
+            "error: not a valid .cyberspace name "
+            "(one label of ASCII letters/digits/hyphens under .cyberspace)",
+            flush=True,
+        )
+        return 2
+
     for warn in _client_port_warnings():
         print(f"resolver-client: config: {warn}", file=sys.stderr)
     port = _default_port()

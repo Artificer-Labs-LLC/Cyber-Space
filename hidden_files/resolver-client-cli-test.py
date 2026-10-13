@@ -140,6 +140,25 @@ check("no name -> exit 2 (argparse)", r.returncode == 2, repr((r.returncode, r.s
 r = cli("alice.cyberspace", env_port=1)  # nothing listening: UDP EPERM->TCP refused
 check("dead daemon -> exit 2", r.returncode == 2, repr((r.returncode, r.stdout, r.stderr)))
 
+# Malformed-name gate: these can never be claimed (not .cyberspace, or a
+# label outside core._valid_name_label's grammar), so the fake daemon
+# would NXDOMAIN them to exit 1 — exit 2 here proves the CLI refused
+# the argument before any wire use.
+for bad in ("example.com", "bad_name.cyberspace",
+            "bad-.cyberspace", ".cyberspace", "a.b.cyberspace", ""):
+    r = cli(bad)
+    check(f"malformed name {bad!r} -> exit 2 (gate, not NXDOMAIN)",
+          r.returncode == 2 and "valid .cyberspace name" in r.stdout + r.stderr,
+          repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("--", "-bad.cyberspace")  # after --, argparse hands the leading-hyphen name to the gate
+check("malformed name '-bad.cyberspace' -> exit 2 (gate, not NXDOMAIN)",
+      r.returncode == 2 and "valid .cyberspace name" in r.stdout + r.stderr,
+      repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("ALICE.cyberspace.")
+check("uppercase + FQDN dot normalize -> exit 0", r.returncode == 0 and r.stdout.strip() == "93.184.216.34", repr((r.returncode, r.stdout, r.stderr)))
+
 stop.set()
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
