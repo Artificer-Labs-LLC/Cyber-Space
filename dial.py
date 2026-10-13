@@ -106,11 +106,22 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # Step 3: binding re-verify — shape, signature, expiry. The mirror's
     # word alone is never enough; the signature must verify against the
     # name key the mirror claims.
-    name = str(binding.get("name", "")).lower()
-    node_pubkey = str(binding.get("node_pubkey", "")).lower()
-    issued_at = str(binding.get("issued_at", ""))
-    expires_at = str(binding.get("expires_at", ""))
-    signature = str(binding.get("signature", "")).lower()
+    # The binding fields are mirror-carried JSON: str() aliased a
+    # non-string field into the string it merely resembles — a JSON
+    # true served as the name verified as the label "true" (str(True)
+    # .lower()) against a signature genuinely signed for "true", and a
+    # digit-only pubkey served as a number stringified to its own hex.
+    # Only real strings are binding fields (twin of the canonical
+    # payload builders' gate in core); anything else is malformed.
+    _raw = [binding.get(k, "") for k in
+            ("name", "node_pubkey", "issued_at", "expires_at", "signature")]
+    if not all(isinstance(v, str) for v in _raw):
+        return 1, ["name-side: malformed binding"]
+    name = _raw[0].lower()
+    node_pubkey = _raw[1].lower()
+    issued_at = _raw[2]
+    expires_at = _raw[3]
+    signature = _raw[4].lower()
     if name != label or len(node_pubkey) != 64 or len(signature) != 128:
         return 1, ["name-side: malformed binding"]
     try:

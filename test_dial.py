@@ -105,6 +105,37 @@ class DialPlanTests(unittest.TestCase):
             self.assertEqual(code, 4, bad)
             self.assertIn("not a string", lines[0])
 
+    def test_nonstring_binding_field_is_malformed_not_aliased(self):
+        # str() aliased a non-string binding field into the string it
+        # resembles: a JSON true served as the name verified as the
+        # label "true" against a signature genuinely signed for
+        # "true", and the plan read the binding as live (exit 3).
+        # Only real strings are binding fields; anything else is a
+        # malformed binding (exit 1), however well it stringifies.
+        priv, pub = _name_key()
+        issued, expires = _live_times()
+        good = _signed_binding("true", priv, pub, issued, expires)
+        addr = "true.cyberspace"
+        for field, bad in (("name", True), ("node_pubkey", 123),
+                           ("issued_at", None), ("expires_at", 1.5),
+                           ("signature", b"x")):
+            binding = dict(good, **{field: bad})
+            routes = {MIRROR + "/api/v1/node": {"ok": True},
+                      MIRROR + "/api/v1/names/true": binding}
+            saved = core._resolve_get_json
+            core._resolve_get_json = lambda u, r=routes: r.get(u)
+            try:
+                code, lines = dial.plan(addr, MIRROR)
+            finally:
+                core._resolve_get_json = saved
+            self.assertEqual(code, 1, (field, bad, lines))
+            self.assertIn("malformed binding", lines[0])
+        # Control: the all-string binding still reads as live.
+        with _fixture(binding=_signed_binding(LABEL, priv, pub,
+                                              issued, expires)):
+            code, _ = dial.plan(ADDR, MIRROR)
+        self.assertEqual(code, 3)
+
     def test_fqdn_root_dot_is_accepted(self):
         # The resolver client accepts one trailing dot (the FQDN root
         # marker, resolver/client.py _build_query/resolve), so the
