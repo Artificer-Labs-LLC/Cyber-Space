@@ -183,6 +183,32 @@ def main():
     check("clean EOF with no frames -> 0 served", served == 0,
           f"served={served}")
 
+    # Phase 7: _read_exact refuses a malformed length instead of raising
+    # or aliasing it — its contract is None on a read that cannot happen.
+    class _StubConn:
+        def __init__(self):
+            self.calls = 0
+
+        def recv(self, n):
+            self.calls += 1
+            return b"x" * n
+
+    for bad in ("2", None, 2.5, True, -1, [2]):
+        stub = _StubConn()
+        try:
+            got = daemon._read_exact(stub, bad)
+            raised = False
+        except Exception:
+            got, raised = "raised", True
+        check(f"_read_exact({bad!r}) -> None, never raises, never reads",
+              got is None and not raised and stub.calls == 0,
+              f"got={got!r} raised={raised} calls={stub.calls}")
+    stub = _StubConn()
+    check("_read_exact valid length still reads exactly",
+          daemon._read_exact(stub, 3) == b"xxx", f"calls={stub.calls}")
+    check("_read_exact zero length still returns b''",
+          daemon._read_exact(_StubConn(), 0) == b"")
+
     daemon.handle_query = real_handle
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     return 1 if CASES["failed"] else 0

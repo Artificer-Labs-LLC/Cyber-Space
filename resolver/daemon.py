@@ -411,6 +411,16 @@ def _serve_tcp_accept(tsock, mirror_url, upstream, ttl_cap) -> None:
 
 def _read_exact(conn, n: int):
     """Read exactly n bytes, or None on EOF/short close. Never raises."""
+    # n is caller-supplied (the TCP loop passes a real int, but the
+    # library seat is public): a non-int escaped as TypeError from
+    # the comparison/recv, True aliased to a 1-byte read, and a
+    # negative length silently returned b"" as if a frame had been
+    # read — none of them the None this function promises for a
+    # read that cannot happen. Only a real non-negative int (bool
+    # excluded, twin of dns._is_int) is a length; anything else is
+    # a short close.
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        return None
     buf = b""
     while len(buf) < n:
         try:
