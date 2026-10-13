@@ -13,6 +13,7 @@ TESTS=(
   "test_dial.py"
   "test_name_claim.py"
   "test_verify_name.py"
+  "test_resolve_chain.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"

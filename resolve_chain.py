@@ -111,6 +111,16 @@ def walk(doc: dict, name: str, expect_original_key: str | None = None):
     hops is a list of dicts: {old_pubkey, new_pubkey, issued_at, note}.
     Raises ChainError if the chain does not walk clean.
     """
+    # The queried name and the pin are arguments, not verdicts: gate
+    # their shape before _label/_normalize_expected touches them — a
+    # non-string name or pin leaked AttributeError from .strip(), and
+    # a bytes one produced a garbage naming-the-sides verdict (the
+    # twin of verify_name's pin gate). ChainError is walk()'s contract.
+    if not isinstance(name, str):
+        raise ChainError("queried name is not a string")
+    if expect_original_key is not None and not isinstance(
+            expect_original_key, str):
+        raise ChainError("pinned original key is not a string")
     if not isinstance(doc, dict):
         raise ChainError("rotations document is not a JSON object")
     rots = doc.get("rotations")
