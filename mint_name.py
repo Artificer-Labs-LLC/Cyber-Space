@@ -302,10 +302,21 @@ def main(argv: list[str]) -> int:
     except Exception:
         print(f"refused: unparseable claim response: {body[:120]!r}", file=sys.stderr)
         return 1
+    # The claim response is mirror-controlled: valid JSON that is not
+    # an object ('[]', '123', '"ok"') has no status to read — result.get
+    # died in an AttributeError traceback instead of the refused verdict
+    # every other bad claim response gets.
+    if not isinstance(result, dict):
+        print(f"refused: unparseable claim response: {body[:120]!r}", file=sys.stderr)
+        return 1
     print(f"Claimed: {result.get('status')}")
 
     resolved = _get_json(mirror.rstrip("/") + f"/api/v1/names/{label}")
-    if not resolved or resolved.get("node_pubkey", "").lower() != pub_hex:
+    # Same mirror-controlled shape: a non-string node_pubkey (123, null)
+    # died in .lower() with a traceback instead of reading as the
+    # did-not-store refusal below — _get_json only proves dict shape.
+    resolved_pub = resolved.get("node_pubkey") if resolved else None
+    if not isinstance(resolved_pub, str) or resolved_pub.lower() != pub_hex:
         print("refused: name does not resolve back to the name key — "
               "mirror accepted but did not store; investigate before hosting",
               file=sys.stderr)
