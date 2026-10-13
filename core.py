@@ -1368,7 +1368,16 @@ def _relay_route(desc):
             if len(relay_pub) != 64:
                 continue
             try:
-                bytes.fromhex(relay_pub)
+                # The string-length gate alone is not the byte-length
+                # gate: bytes.fromhex ignores embedded spaces, so a
+                # 64-char string carrying two spaces decoded to a
+                # 31-byte key and was still returned as the relay's
+                # 32-byte node identity. Only a decode of exactly 32
+                # bytes is a relay key (twin of rendezvous
+                # ._name_pub_bytes and the verify_name/resolve_chain
+                # pin gates).
+                if len(bytes.fromhex(relay_pub)) != 32:
+                    continue
             except ValueError:
                 continue
             try:
