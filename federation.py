@@ -928,18 +928,32 @@ def fed_pigeonholes_proxy(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself, plus the rate gate and
+    # the visitor touch below): claim the envelope's sig after
+    # verify+recipient, before the sender_pub gate, the rate bucket,
+    # the known-peer gate, the lazy TTL prune, the visitor touch, and
+    # the board read, so a replay can never redo that work for free or
+    # cost fedpigeonhole: quota. Named post-claim edges: sender_pub
+    # mismatch and unknown peer both claim; genuine re-asks re-sign
+    # with a fresh ts (new sig).
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     sender_pub = env.get("sender_pub")
     if body.get("from_node_pub") != sender_pub:
         raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    _check_rate(f"fedpigeonhole:{sender_pub}")
     with _db_lock, _db() as conn:
-        known = conn.execute(
-            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
+        peer = conn.execute(
+            "SELECT name FROM peers WHERE node_pub=? AND retired_at=''",
             (sender_pub,)).fetchone()
-    if not known:
+    if not peer:
         raise HTTPException(status_code=404, detail="unknown peer")
+    peer_name = peer["name"]
     limit = body.get("limit", 20)
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise HTTPException(status_code=400, detail="bad limit")
@@ -952,6 +966,13 @@ def fed_pigeonholes_proxy(env: dict):
                FROM pigeonholes p JOIN agents a ON a.id = p.agent_id
                ORDER BY p.created_at DESC LIMIT ?""",
             (limit,)).fetchall()
+        # Visitors v1 (restored with the claim above): a proxied read
+        # is a visit — the guest stood at the board. Key is the peer's
+        # roster name at this node (verified identity, never a raw
+        # address); the room walked is the board, never its contents.
+        # Inside this transaction: the touch and the read commit
+        # together or not at all.
+        _touch_visitor(conn, f"{peer_name}@{NODE_NAME}", peer_name, "boards")
     items = [{"agent": r["agent"], "body": r["body"], "created_at": r["created_at"]}
              for r in rows]
     reply = {"origin_node": NODE_NAME, "origin_pub": _NODE_PUB,
