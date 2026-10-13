@@ -159,6 +159,32 @@ check("malformed name '-bad.cyberspace' -> exit 2 (gate, not NXDOMAIN)",
 r = cli("ALICE.cyberspace.")
 check("uppercase + FQDN dot normalize -> exit 0", r.returncode == 0 and r.stdout.strip() == "93.184.216.34", repr((r.returncode, r.stdout, r.stderr)))
 
+# Malformed-server gate: a --server that is not an IP literal or valid
+# hostname can never be dialed, so without the gate it died in name
+# resolution and read as a transport failure — the gate wording (and
+# not "transport failed") proves refusal before any wire use. Exit is
+# 2 either way by the CLI contract; the message is the distinction.
+for bad_server in ("bad host!", "", "999.1.1.1"):
+    r = cli("alice.cyberspace", "--server", bad_server)
+    check(f"malformed server {bad_server!r} -> exit 2 (gate, not transport)",
+          r.returncode == 2 and "not a dialable address" in r.stdout + r.stderr
+          and "transport failed" not in r.stdout + r.stderr,
+          repr((r.returncode, r.stdout, r.stderr)))
+
+# Leading-hyphen value via =-form: argparse eats the space form as an
+# option token (same contract the verify-name belt documented).
+r = cli("alice.cyberspace", "--server=-bad-.example")
+check("malformed server '-bad-.example' (=-form) -> exit 2 (gate, not transport)",
+      r.returncode == 2 and "not a dialable address" in r.stdout + r.stderr
+      and "transport failed" not in r.stdout + r.stderr,
+      repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("alice.cyberspace", "--server", "localhost")
+check("hostname server 'localhost' -> exit 0", r.returncode == 0 and r.stdout.strip() == "93.184.216.34", repr((r.returncode, r.stdout, r.stderr)))
+
+r = cli("alice.cyberspace", "--server", "[127.0.0.1]")
+check("bracketed literal server -> exit 0", r.returncode == 0 and r.stdout.strip() == "93.184.216.34", repr((r.returncode, r.stdout, r.stderr)))
+
 stop.set()
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -533,6 +533,44 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # The server is part of the argument shape too: a value that is
+    # not an IP literal or a syntactically valid hostname can never
+    # be dialed (sendto/create_connection die in name resolution), so
+    # without this check it read as a transport failure — a verdict
+    # on the daemon — when the argument itself was at fault, exactly
+    # as wiring/smoke's --server gate ruled. Shape only, offline
+    # (twin of the daemon's BIND shape check): an IPv4/IPv6 literal
+    # (bracketed v6 unwrapped by _server_host) or a valid hostname
+    # passes; a dotted all-numeric value that is not an IPv4 literal
+    # can never resolve as written. A valid-but-unresolvable hostname
+    # is beyond what an offline check can prove and still reads as a
+    # transport failure, honestly. resolve() library semantics are
+    # unchanged; only the CLI front door gates.
+    host = _server_host(args.server)
+    server_ok = bool(host)
+    if server_ok:
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            labels = host.split(".")
+            server_ok = (
+                not all(p.isdigit() for p in labels)
+                and len(host) <= 253
+                and all(
+                    1 <= len(p) <= 63
+                    and not p.startswith("-") and not p.endswith("-")
+                    and all((c.isascii() and c.isalnum()) or c == "-"
+                            for c in p)
+                    for p in labels)
+            )
+    if not server_ok:
+        print(
+            "error: --server is not a dialable address "
+            "(an IP literal or a valid hostname)",
+            flush=True,
+        )
+        return 2
+
     for warn in _client_port_warnings():
         print(f"resolver-client: config: {warn}", file=sys.stderr)
     port = _default_port()
