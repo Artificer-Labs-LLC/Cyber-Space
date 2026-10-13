@@ -18,7 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _valid_name_label  # noqa: E402
+from core import _name_claim_beats, _valid_name_label, _valid_node_url  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
 
@@ -101,10 +102,44 @@ def conflict_cases():
                             _b("x", PUB_A, EARLY)) is True)
 
 
+def node_url_cases():
+    print("node_url gate:")
+    # The refusal contract is HTTPException(400); every caller catches
+    # exactly that. A non-string must read as 400, never leak
+    # AttributeError/TypeError from .strip() (None already read as 400
+    # via the empty-string path and still does).
+    for bad in (123, 1.5, True, b"http://x.example", ["http://x.example"], None):
+        try:
+            got = _valid_node_url(bad)
+        except HTTPException as e:
+            check(f"non-string {bad!r} refused as 400",
+                  e.status_code == 400, f"-> {e.status_code}")
+            continue
+        except Exception as e:  # noqa: BLE001
+            check(f"non-string {bad!r} refused as 400", False,
+                  f"raised {type(e).__name__}: {e}")
+            continue
+        check(f"non-string {bad!r} refused as 400", False, f"-> {got!r}")
+    check("valid public URL passes verbatim",
+          _valid_node_url("http://185.143.228.228:8471")
+          == "http://185.143.228.228:8471")
+    check("trailing slash normalized",
+          _valid_node_url("http://185.143.228.228:8471/")
+          == "http://185.143.228.228:8471")
+    for bad in ("", "not a url", "http://185.143.228.228:99999"):
+        try:
+            got = _valid_node_url(bad)
+            check(f"bad string {bad!r} refused as 400", False, f"-> {got!r}")
+        except HTTPException as e:
+            check(f"bad string {bad!r} refused as 400",
+                  e.status_code == 400, f"-> {e.status_code}")
+
+
 def main():
     print("names-registry primitive tests (core.py):")
     label_cases()
     conflict_cases()
+    node_url_cases()
     print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

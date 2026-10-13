@@ -260,6 +260,14 @@ _NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::(\
 
 def _valid_node_url(url: str) -> str:
     """Validate a peer's announced node_url (where to POST /fed/* to it)."""
+    # The refusal contract is HTTPException(400) — every caller catches
+    # exactly that. A non-string URL (a JSON body can carry 123/true/a
+    # list straight to the raw seats: seeds, hostd env, resolve step 5)
+    # escaped as AttributeError/TypeError from .strip() instead. Only a
+    # real string has a URL shape; None already read as 400 via the
+    # empty-string path and still does.
+    if not isinstance(url, str):
+        raise HTTPException(status_code=400, detail="bad node_url")
     url = (url or "").strip()[:256].rstrip("/")
     m = _NODE_URL_RE.fullmatch(url) if url else None
     if not m:
