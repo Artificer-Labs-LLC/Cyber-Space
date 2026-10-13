@@ -116,6 +116,25 @@ def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
         f"# CYBERNET_HOSTD_REFRESH=600\n")
 
 
+def _valid_mirror(mirror: str) -> bool:
+    """Mirror shape check; mirrors dial.plan (server decides).
+
+    A mirror that is not an http(s) URL with a host, or that names a
+    port no dial can ever attempt (0, >65535, or non-numeric — urlsplit
+    does not validate it, so parts.port must be read and raises for the
+    last two), is a bad argument, not an unreachable mirror. Without
+    this gate main() wrote the name key first and then read the failure
+    as a claim refusal (exit 1) — or, for a scheme-less value, crashed
+    raw in Request construction — leaving half-written state behind."""
+    try:
+        parts = urllib.parse.urlsplit(mirror)
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme in ("http", "https") and bool(parts.hostname)
+            and (port is None or 1 <= port <= 65535))
+
+
 def _valid_label(label: str) -> bool:
     """Client-side fast check; mirrors core._valid_name_label (server decides)."""
     if not label or len(label) > _LABEL_MAX:
@@ -184,6 +203,11 @@ def main(argv: list[str]) -> int:
               f"{_EXPIRY_DAYS_CAP}-day binding-lifetime cap — the claim "
               f"route refuses any binding signed for longer, so nothing "
               f"was minted", file=sys.stderr)
+        return 2
+    if not _valid_mirror(mirror):
+        print("refused: mirror is not a dialable http(s) URL with a host "
+              "and a port in 1-65535 — bad argument, nothing was minted",
+              file=sys.stderr)
         return 2
 
     home = Path.home() / ".cyberspace"

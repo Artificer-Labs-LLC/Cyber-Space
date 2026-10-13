@@ -157,6 +157,19 @@ check("over-cap --expiry-days exits 2 locally", rc == 2, f"rc={rc}")
 check("over-cap mint wrote no key",
       not os.path.exists(os.path.join(HOME, ".cyberspace", "overcapmint-name.key")))
 
+# --- undialable / malformed mirror refused locally, before any key ----
+# Twin of dial.plan's mirror gate: a port no dial can attempt (99999,
+# non-numeric, 0) or a scheme-less value read as a claim refusal (exit 1,
+# key already written) or a raw crash, not the bad argument it is.
+for label, bad_mirror in (("badportmint", "http://127.0.0.1:99999"),
+                          ("badalphamint", "http://127.0.0.1:abc"),
+                          ("badzeromint", "http://127.0.0.1:0"),
+                          ("badschememint", "notaurl")):
+    rc = mint_name.main([label, bad_mirror])
+    check(f"mirror {bad_mirror!r} exits 2 locally", rc == 2, f"rc={rc}")
+    check(f"mirror {bad_mirror!r} wrote no key",
+          not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
+
 server.should_exit = True
 t.join(5)
 print(f"\n{passed} passed, {failed} failed")
