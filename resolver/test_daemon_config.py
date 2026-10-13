@@ -131,6 +131,52 @@ check("bind_family: bracketed v6 -> AF_INET6 unbracketed",
 check("bind_family: malformed -> AF_INET passthrough",
       daemon._bind_family("bad host!") == (_socket.AF_INET, "bad host!"))
 
+# --- _bind_target: literals keep family/target, hostnames resolve ---
+
+from unittest import mock as _mock  # noqa: E402
+
+check("bind_target: ipv4 literal -> AF_INET + literal target",
+      daemon._bind_target("127.0.0.1", 5353)
+      == (_socket.AF_INET, ("127.0.0.1", 5353)))
+check("bind_target: bare v6 literal -> AF_INET6 + literal target",
+      daemon._bind_target("::1", 5353)
+      == (_socket.AF_INET6, ("::1", 5353)))
+check("bind_target: bracketed v6 literal -> AF_INET6 unbracketed",
+      daemon._bind_target("[::1]", 5353)
+      == (_socket.AF_INET6, ("::1", 5353)))
+
+
+def _fake_gai_v6(host, port, family=0, type=0, *a, **k):
+    return [(_socket.AF_INET6, _socket.SOCK_DGRAM, 17, "",
+             ("::1", port, 0, 0))]
+
+
+def _fake_gai_v4(host, port, family=0, type=0, *a, **k):
+    return [(_socket.AF_INET, _socket.SOCK_DGRAM, 17, "",
+             ("127.0.0.1", port))]
+
+
+with _mock.patch.object(_socket, "getaddrinfo", _fake_gai_v6):
+    check("bind_target: v6-only hostname -> AF_INET6 + resolved sockaddr",
+          daemon._bind_target("v6only.example", 5353)
+          == (_socket.AF_INET6, ("::1", 5353, 0, 0)))
+with _mock.patch.object(_socket, "getaddrinfo", _fake_gai_v4):
+    check("bind_target: v4 hostname -> AF_INET + resolved sockaddr",
+          daemon._bind_target("daemon.example", 5353)
+          == (_socket.AF_INET, ("127.0.0.1", 5353)))
+
+
+def _bad_gai(host, port, family=0, type=0, *a, **k):
+    raise _socket.gaierror("no such host")
+
+
+with _mock.patch.object(_socket, "getaddrinfo", _bad_gai):
+    try:
+        daemon._bind_target("nope.example", 5353)
+        check("bind_target: unresolvable hostname -> gaierror", False)
+    except _socket.gaierror:
+        check("bind_target: unresolvable hostname -> gaierror", True)
+
 # --- restore caller's env ---
 
 for k, v in SAVED.items():

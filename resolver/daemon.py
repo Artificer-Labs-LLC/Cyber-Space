@@ -33,7 +33,8 @@ Config (environment, bad values fall back to defaults):
                          everything outside .cyberspace (default 1.1.1.1:53)
   CYBERNET_RESOLVER_BIND listen address (default 127.0.0.1; an IPv6
                          literal, bare or bracketed, binds an AF_INET6
-                         socket — see _bind_family)
+                         socket, and a hostname binds the family it
+                         resolves to — see _bind_target)
                          — set but not a bindable address or
                          hostname -> _env_str passes it through
                          verbatim and the bind in run()
@@ -133,6 +134,34 @@ def _bind_family(bind_host: str) -> tuple[int, str]:
     except ValueError:
         pass
     return (socket.AF_INET, host)
+
+
+def _bind_target(bind_host: str, port: int):
+    """(family, sockaddr) the daemon binds for a RESOLVER_BIND value.
+
+    A literal keeps _bind_family + the literal itself, exactly as
+    before. A HOSTNAME is resolved first (getaddrinfo, AF_UNSPEC) and
+    both sockets are created from the answer's family, bound to its
+    sockaddr — the family can no longer be guessed from the string's
+    shape. Before, every hostname kept AF_INET (via _bind_family) and
+    bind() carried the unresolved string, so a v6-only hostname bind
+    landed on the wrong family/address (or refused outright where no
+    v4 answer exists) while the config warnings called the value
+    valid — and the client/smoke wires, which resolve AF_UNSPEC,
+    dialed the v6 address the daemon never bound. First getaddrinfo
+    result wins, as in client._server_target. An unresolvable
+    hostname raises gaierror here; run() calls this inside its bind
+    try, so it reads as the existing loud refusal, never a crash."""
+    family, host = _bind_family(bind_host)
+    try:
+        ipaddress.ip_address(host)
+        return family, (host, port)
+    except ValueError:
+        pass
+    infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
+                               socket.SOCK_DGRAM)
+    family, _kind, _proto, _canon, sockaddr = infos[0]
+    return family, sockaddr
 
 
 def _daemon_config_warnings() -> list[str]:
@@ -269,14 +298,14 @@ def run() -> None:
     bind_host, port, mirror_url, upstream, ttl_cap = _config()
     for warn in _daemon_config_warnings():
         print(f"resolverd: config: {warn}", file=sys.stderr)
-    family, bind_host = _bind_family(bind_host)
     usock = tsock = None
     try:
+        family, target = _bind_target(bind_host, port)
         usock = socket.socket(family, socket.SOCK_DGRAM)
-        usock.bind((bind_host, port))
+        usock.bind(target)
         tsock = socket.socket(family, socket.SOCK_STREAM)
         tsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tsock.bind((bind_host, port))
+        tsock.bind(target)
         tsock.listen(_TCP_BACKLOG)
     except (OSError, OverflowError) as exc:
         # The bind is the one step run() cannot degrade past: the port
