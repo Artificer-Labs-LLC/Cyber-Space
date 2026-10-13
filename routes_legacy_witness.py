@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -34,6 +35,11 @@ import window_open
 from fed import ed25519 as _ed
 
 router = APIRouter()
+# READ deploy (oracle/legacy-log-read-only): the mounted router carries ONLY
+# GET /legacy-log/head and GET /legacy-log/proof. /witnessed, /observe and
+# /agents/import-legacy stay in the code on write_router, which app.py does
+# NOT include; tests that exercise them mount it on their own app.
+write_router = APIRouter()
 
 # Per-IP caps follow 73a08c2's read/auth limits. Globals are ceilings only.
 HEAD_PER_IP = 240
@@ -58,7 +64,6 @@ assert IMPORT_GLOBAL >= 10 * IMPORT_PER_SOURCE
 assert IMPORT_GLOBAL >= 10 * IMPORT_PER_LOG
 
 IMPORT_FORMAT = "cyberspace-legacy-import/v1"
-_proof_cache: dict = {}
 
 
 def charge_head(src: str) -> None:
@@ -145,23 +150,46 @@ def _window_fields(entries: list) -> tuple:
     return o, c, state
 
 
-def _signed_view(name: str | None):
-    """Signed head plus span for the local log, or None when it cannot
-    answer (empty log, or no hold for `name`). Cached per (log, seq, name)
-    so a proof poll does not re-sign every hit."""
-    with core._db_lock, core._db() as conn:
+_view_lock = threading.Lock()      # single-flight: one builder per log seq
+_view_cache: dict = {}             # top seq -> (log_id, entries, body-without-name)
+
+
+def _read_conn():
+    """A plain SQLite read connection, NOT under core._db_lock: a read takes
+    only SQLite's shared lock for the ~15 ms row copy, so GET /head and
+    /proof never hold the process-wide write lock (writers wait on SQLite's
+    busy timeout for at most that copy)."""
+    return core._db()
+
+
+def _top_seq():
+    conn = _read_conn()
+    try:
+        row = conn.execute("SELECT MAX(seq) FROM legacy_migration_log").fetchone()
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def _build(top):
+    """Raw rows are copied in one read transaction (no core._db_lock); the proof walk (entry dicts,
+    roots, full(), signing) runs outside it. Built once per log seq."""
+    conn = _read_conn()
+    try:
+        conn.execute("BEGIN")                       # one consistent snapshot
         log_id, entries = window_open.export_log(conn)
         hop_rows = window_open.export_hop_rows(conn)
         leaves = window_open.export_bound_leaves(conn)
-        roots = window_open.head_roots(conn)
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
     if not entries:
         return None
-    if name is not None and not any(e["kind"] == "hold" and e.get("name") == name for e in entries):
-        return None
-    key = (log_id, entries[-1]["seq"], name)
-    cached = _proof_cache.get(key)
-    if cached is not None:
-        return cached
+    import hop_certs
+    roots = {"hops_root": lw.hops_root(hop_rows), "bound_root": hop_certs.bound_root(leaves),
+             "v1_frozen_root": hop_certs.v1_frozen_root(hop_rows)}
     pub = core._NODE_PUB.lower()
     wset = lw.WitnessSet(1, [pub])
     o, c, state = _window_fields(entries)
@@ -179,9 +207,31 @@ def _signed_view(name: str | None):
     def _sign(msg, sk=core._NODE_PRIV, pk=pub):
         return pk, _ed.sign(msg, bytes.fromhex(sk), bytes.fromhex(pk)).hex()
 
-    body = {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
-            "hops": hop_rows, "bound": leaves}
-    _proof_cache[key] = body
+    holds = {e.get("name") for e in entries if e["kind"] == "hold"}
+    return holds, {"head": lw.sign_head(head, [_sign]), "span": [lw.full(e) for e in entries],
+                   "hops": hop_rows, "bound": leaves}
+
+
+def _signed_view(name: str | None):
+    """Signed head plus span for the local log, or None when it cannot
+    answer (empty log, or no hold for `name`). Built once per log seq
+    (single-flight), shared across names; core._db_lock is never taken."""
+    top = _top_seq()
+    if top is None:
+        return None
+    built = _view_cache.get(top)
+    if built is None:
+        with _view_lock:
+            built = _view_cache.get(top)
+            if built is None:
+                built = _build(top)
+                if built is None:
+                    return None
+                _view_cache.clear()
+                _view_cache[top] = built
+    holds, body = built
+    if name is not None and name not in holds:
+        return None
     return body
 
 
@@ -198,25 +248,61 @@ def _import_log_id(data: dict) -> str:
     return "missing"
 
 
+_abuild = None
+
+
+async def _view(name):
+    """Event-loop side: cached views answer without a worker thread; a miss
+    runs ONE build at a time in the threadpool while other requests await
+    (holding no thread), so a /proof burst cannot starve other routes."""
+    global _abuild
+    import asyncio
+    from starlette.concurrency import run_in_threadpool
+    loop = asyncio.get_running_loop()
+    if _abuild is None or _abuild[0] is not loop:
+        _abuild = (loop, asyncio.Lock())
+    top = await run_in_threadpool(_top_seq)
+    built = _view_cache.get(top)
+    if built is not None:
+        holds, body = built
+        return None if (name is not None and name not in holds) else body
+    async with _abuild[1]:
+        return await run_in_threadpool(_signed_view, name)
+
+
 @router.get("/api/v1/legacy-log/head")
-def legacy_log_head(request: Request):
+async def legacy_log_head(request: Request):
     charge_head(ratesrc.source(request))
-    body = _signed_view(None)
+    body = await _view(None)
     if body is None:
         raise HTTPException(status_code=404, detail="legacy log is empty")
-    return body["head"]
+    return unwitnessed_head(body["head"])
+
+
+def unwitnessed_head(signed: dict) -> dict:
+    """Genesis-only signed head, explicitly unwitnessed: no cosign and no
+    threshold fields. Node B's import refuses it (no threshold cosign)."""
+    return {"head": signed["head"], "signatures": signed["signatures"],
+            "witnessed": False, "status": "unwitnessed"}
+
+
+def unwitnessed_proof(body: dict) -> dict:
+    """The /proof body: span, hops, bound and the unwitnessed head; nothing
+    else from the cached view (no cosign / threshold fields)."""
+    return {"head": unwitnessed_head(body["head"]), "span": body["span"], "hops": body["hops"],
+            "bound": body["bound"], "witnessed": False, "status": "unwitnessed"}
 
 
 @router.get("/api/v1/legacy-log/proof")
-def legacy_log_proof(request: Request, name: str = Query(max_length=32)):
+async def legacy_log_proof(request: Request, name: str = Query(max_length=32)):
     charge_proof(ratesrc.source(request))
-    body = _signed_view((name or "").strip().lower())
+    body = await _view((name or "").strip().lower())
     if body is None:
-        raise HTTPException(status_code=404, detail="no witnessed hold for this name")
-    return body
+        raise HTTPException(status_code=404, detail="no hold for this name in the legacy log")
+    return unwitnessed_proof(body)
 
 
-@router.get("/api/v1/legacy-log/witnessed")
+@write_router.get("/api/v1/legacy-log/witnessed")
 def legacy_log_witnessed(request: Request):
     """Marks this node has stored. 200 with an empty list when nothing has
     been observed yet, including when the witness set is not pinned: the
@@ -230,7 +316,7 @@ def legacy_log_witnessed(request: Request):
     return {"marks": [{"log_id": r[0], "seq": r[1], "head_hash": r[2], "seen_at": r[3]} for r in rows]}
 
 
-@router.post("/api/v1/legacy-log/observe")
+@write_router.post("/api/v1/legacy-log/observe")
 async def legacy_log_observe(request: Request):
     src = ratesrc.source(request)
     charge_observe_source(src)
@@ -285,7 +371,7 @@ async def legacy_log_observe(request: Request):
     return window_open.run_admission(verify, write)
 
 
-@router.post("/api/v1/agents/import-legacy")
+@write_router.post("/api/v1/agents/import-legacy")
 async def import_legacy(request: Request):
     src = ratesrc.source(request)
     # Per-source bucket before the body is parsed. Not src:auth:{src}: that

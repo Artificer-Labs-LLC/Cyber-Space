@@ -31,6 +31,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 import core  # noqa: E402
 core.init_db()
 import app as appmod  # noqa: E402
+import routes_legacy_witness as _rlw  # noqa: E402
+# READ deploy: app.py mounts only the two GETs; this belt still covers the
+# write routes, so it mounts write_router on its own copy of the app.
+appmod.app.include_router(_rlw.write_router)
 import hop_certs  # noqa: E402
 import legacy_witness as lw  # noqa: E402
 import ratesrc  # noqa: E402
