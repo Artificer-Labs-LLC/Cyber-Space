@@ -213,25 +213,40 @@ SODIUM_MIN_VERSION = (1, 0, 18)
 
 def sodium_version():
     """libsodium version as a tuple, or None when it cannot be told.
-    PyNaCl's bundled build exports no sodium_version_string symbol, so the
-    version is read in this order: the shared library's own
-    sodium_version_string (system builds), else the floor that the PyNaCl
-    release bundles (PyNaCl >= 1.4.0 bundles libsodium 1.0.18 or later,
-    per its changelog). Unknown -> None -> admission refused."""
+
+    Villhaze ART-42 b9f64f88 / Cipher 7f00584a: the gate is a RUNTIME check
+    of the libsodium binding, never an inference from the PyNaCl release.
+    We read sodium_version_string from (1) the PyNaCl-bundled .so when it
+    exports the symbol, then (2) the system libsodium found by
+    ctypes.util.find_library. If neither yields a version string, return
+    None and admission refuses closed. No PyNaCl.__version__ fallback.
+    """
     import ctypes
+    import ctypes.util
+
+    def _read(path_or_name):
+        lib = ctypes.CDLL(path_or_name)
+        f = lib.sodium_version_string
+        f.restype = ctypes.c_char_p
+        raw = f()
+        if not raw:
+            return None
+        return tuple(int(x) for x in raw.decode().split(".")[:3])
+
     try:
         import nacl._sodium as _s
-        f = ctypes.CDLL(_s.__file__).sodium_version_string
-        f.restype = ctypes.c_char_p
-        return tuple(int(x) for x in f().decode().split(".")[:3])
+        v = _read(_s.__file__)
+        if v is not None:
+            return v
     except Exception:
         pass
     try:
-        import nacl
-        nv = tuple(int(x) for x in nacl.__version__.split(".")[:2])
-        return (1, 0, 18) if nv >= (1, 4) else None
+        name = ctypes.util.find_library("sodium")
+        if name:
+            return _read(name)
     except Exception:
-        return None
+        pass
+    return None
 
 
 def sodium_version_ok() -> bool:

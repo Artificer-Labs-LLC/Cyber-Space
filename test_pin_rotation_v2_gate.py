@@ -509,11 +509,16 @@ def run_version(ver):
     return r["outcomes"] == ["refused-invalid"] and head(nm)[0] == pub(kA), r["outcomes"]
 
 
-print("libsodium version at runtime:", _ed.sodium_version(), flush=True)
+print("libsodium version at runtime (explicit binding, no PyNaCl inference):",
+      _ed.sodium_version(), flush=True)
+assert _ed.sodium_version() is not None, "runtime must read a real sodium_version_string"
 real, info = run_version((1, 0, 17))
 check("libsodium version stubbed to 1.0.17: admission refused", real, info)
 ok18, info18 = run_version((1, 0, 18))
 check("libsodium 1.0.18 (control): admission not refused by the gate", not ok18, info18)
+# Unreadable version string (Cipher: no inference) also refuses closed.
+real_none, info_none = run_version(None)
+check("libsodium version unreadable (None): admission refused", real_none, info_none)
 with patched(_ed, "sodium_version_ok", lambda: True):
     mut, _ = run_version((1, 0, 17))
 mutant("drop the libsodium version gate", "version 1.0.17 -> admission refused",
