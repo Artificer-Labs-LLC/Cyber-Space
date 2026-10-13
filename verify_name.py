@@ -129,10 +129,14 @@ def verify(binding: dict, expect_name: str | None = None,
     pub = _normalize_expected(pub)
     sig = _normalize_expected(sig)
     if expect_name is not None:
+        if not isinstance(expect_name, str):
+            return "expected name pin is not a string"
         exp = _normalize_expected(expect_name)
         if name != exp:
             return f"binding is for {name!r}, not the expected {exp!r}"
     if expect_pubkey is not None:
+        if not isinstance(expect_pubkey, str):
+            return "expected pubkey pin is not a string"
         exp = _normalize_expected(expect_pubkey)
         if pub != exp:
             return (f"binding is keyed to {pub[:16]}..., not the expected "

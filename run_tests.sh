@@ -12,6 +12,7 @@ trap 'rm -rf "$CYBERNET_DB_DIR"' EXIT
 TESTS=(
   "test_dial.py"
   "test_name_claim.py"
+  "test_verify_name.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
