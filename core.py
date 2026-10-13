@@ -2560,6 +2560,21 @@ def _names_gossip_out() -> int:
             _parse_claim_time(str(r["issued_at"]))  # validates; unparseable skips
         except ValueError:
             continue
+        # String-length gate at the sender seat, twin of
+        # _name_binding_verify (b5f5943) / _provable_deltas (836917e):
+        # this seat forwards stored rows VERBATIM with no re-verify,
+        # and bytes.fromhex ignores embedded spaces, so a legacy row
+        # with a 129-char inserted-space sig (or a 65-char spaced
+        # pubkey) decoded to the TRUE bytes yet was gossiped in a
+        # non-canonical spelling every receiver seat refuses on
+        # sight. Only exact 128/64-char spellings are gossiped; case
+        # is left alone (uppercase gossiped before and still does).
+        if not isinstance(r["signature"], str) \
+                or len(r["signature"]) != 128:
+            continue
+        if not isinstance(r["node_pubkey"], str) \
+                or len(r["node_pubkey"]) != 64:
+            continue
         payloads.append(
             {"name": r["name"], "node_pubkey": r["node_pubkey"],
              "issued_at": r["issued_at"], "expires_at": r["expires_at"],
