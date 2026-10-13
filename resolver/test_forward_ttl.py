@@ -54,8 +54,9 @@ def _ancount(resp):
 class _CannedSocket:
     """sendto/recvfrom are a fixed round trip; anything else is an error."""
 
-    def __init__(self, reply: bytes):
+    def __init__(self, reply: bytes, source=("8.8.8.8", 53)):
         self.reply = reply
+        self.source = source
         self.sent_to = None
 
     def settimeout(self, _):
@@ -65,7 +66,7 @@ class _CannedSocket:
         self.sent_to = (bytes(data), addr)
 
     def recvfrom(self, _n):
-        return self.reply, ("upstream", 53)
+        return self.reply, self.source
 
     def close(self):
         pass
@@ -117,7 +118,7 @@ def test_forward_v6_upstream_uses_inet6():
 
     def factory(family, *a, **k):
         seen["family"] = family
-        return _CannedSocket(canned)
+        return _CannedSocket(canned, source=("::1", 5353))
 
     real = answer.socket.socket
     answer.socket.socket = factory
@@ -140,7 +141,7 @@ def test_forward_hostname_upstream_resolves_family():
     raw = _query_packet("example.com")
     canned = b"\x00" * 12 + b"v6-host upstream says hi"
     seen = {}
-    sock_inst = _CannedSocket(canned)
+    sock_inst = _CannedSocket(canned, source=("::1", 53))
 
     def factory(family, *a, **k):
         seen["family"] = family
@@ -169,10 +170,30 @@ def test_forward_hostname_upstream_resolves_family():
           and sock_inst.sent_to[1] == ("::1", 53, 0, 0),
           f"got {sock_inst.sent_to}")
     check("forward: v6-host reply passthrough", resp == canned)
-    check("forward: literals keep exact family+target",
-          lit_v4 == (answer.socket.AF_INET, ("8.8.8.8", 53))
-          and lit_v6 == (answer.socket.AF_INET6, ("::1", 5353)),
+    check("forward: literals keep exact family+target+expected source",
+          lit_v4 == (answer.socket.AF_INET, ("8.8.8.8", 53), "8.8.8.8")
+          and lit_v6 == (answer.socket.AF_INET6, ("::1", 5353), "::1"),
           f"got {lit_v4} {lit_v6}")
+
+
+def test_forward_wrong_source_servfail():
+    """A reply from an unexpected source is not the upstream's word:
+    before, _forward discarded recvfrom's source and relayed any
+    packet that reached the ephemeral port byte-for-byte. Wrong IP
+    and wrong port both SERVFAIL; the exact source (the passthrough
+    test above) is the control."""
+    raw = _query_packet("example.com")
+    canned = b"\x00" * 12 + b"stranger says hi"
+    for label, source in [("wrong IP", ("10.0.0.99", 53)),
+                          ("wrong port", ("8.8.8.8", 12345))]:
+        resp = _with_socket_factory(
+            lambda src=source: _CannedSocket(canned, source=src),
+            lambda: answer.handle_query(
+                raw, mirror_url="http://mirror.invalid",
+                upstream=("8.8.8.8", 53)))
+        check(f"forward: {label} -> SERVFAIL (rcode 2), not relayed",
+              _rcode(resp) == 2 and resp != canned,
+              f"got rcode {_rcode(resp)} resp={resp!r}")
 
 
 def test_forward_unresolvable_hostname_servfail():
@@ -282,6 +303,7 @@ def main():
     test_forward_passthrough()
     test_forward_v6_upstream_uses_inet6()
     test_forward_hostname_upstream_resolves_family()
+    test_forward_wrong_source_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()

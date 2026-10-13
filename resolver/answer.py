@@ -82,21 +82,22 @@ def _family_addresses(node_url: str, qtype: int) -> list[bytes]:
 
 
 def _upstream_target(upstream: tuple[str, int]):
-    """(family, sockaddr) the forward wire dials for an upstream.
+    """(family, sockaddr, expected source IP) the forward wire dials.
 
     A literal keeps its own family and (host, port) target, exactly as
     before (an IPv6 literal — daemon._parse_upstream's "[v6]:port"
     form, stored unbracketed — needs AF_INET6; an AF_INET sendto to it
     raises and every forward would SERVFAIL). A HOSTNAME is resolved
     first (getaddrinfo, AF_UNSPEC) and the socket is created from the
-    answer's family, dialing the resolved sockaddr — the family can
-    no longer be guessed from the string's shape. Before, every
-    hostname picked AF_INET and sendto carried the unresolved string,
-    so an upstream reached by a v6-only hostname (a host:port form
-    _parse_upstream explicitly accepts) was never reached on the UDP
-    wire and every forward SERVFAILed. First getaddrinfo result wins.
-    An unresolvable hostname raises gaierror here, which _forward
-    already reads as SERVFAIL, honestly."""
+    answer's family, dialing the resolved sockaddr, with that address
+    as the expected reply source — the family can no longer be guessed
+    from the string's shape. Before, every hostname picked AF_INET
+    and sendto carried the unresolved string, so an upstream reached
+    by a v6-only hostname (a host:port form _parse_upstream explicitly
+    accepts) was never reached on the UDP wire and every forward
+    SERVFAILed. First getaddrinfo result wins. An unresolvable
+    hostname raises gaierror here, which _forward already reads as
+    SERVFAIL, honestly."""
     host, port = upstream
     try:
         ip = ipaddress.ip_address(host)
@@ -104,9 +105,9 @@ def _upstream_target(upstream: tuple[str, int]):
         infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
                                    socket.SOCK_DGRAM)
         family, _kind, _proto, _canon, sockaddr = infos[0]
-        return family, sockaddr
+        return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
     family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
-    return family, (host, port)
+    return family, (host, port), str(ip)
 
 
 def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
@@ -120,7 +121,7 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
     the monkeypatched-socket harness instead. Exercise the real wire path
     on the HQ node when wiring it up."""
     try:
-        family, target = _upstream_target(upstream)
+        family, target, expected = _upstream_target(upstream)
         sock = socket.socket(family, socket.SOCK_DGRAM)
         try:
             sock.settimeout(UPSTREAM_TIMEOUT)
@@ -132,7 +133,22 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             # amputated it mid-record — the header counts still claimed
             # the bytes that were never delivered, breaking this
             # function's byte-for-byte contract.
-            reply, _ = sock.recvfrom(65535)
+            reply, source = sock.recvfrom(65535)
+            # The datagram's SOURCE is part of the transaction (twin
+            # of client._query_udp and wiring/smoke._query): UDP has
+            # no connection, so a reply is only the upstream's if it
+            # arrives from the exact (address, port) the query was
+            # sent to. Before, the source was discarded, so any
+            # perfectly formed packet that reached the ephemeral port
+            # was relayed to the asker byte-for-byte as the upstream's
+            # word. A stranger's packet is a failed forward: SERVFAIL,
+            # never an invented (or borrowed) answer.
+            try:
+                source_ip = str(ipaddress.ip_address(source[0]))
+            except ValueError:
+                source_ip = source[0]
+            if (source_ip, source[1]) != (expected, target[1]):
+                return error_response(raw, 2)
             return bytes(reply)
         finally:
             sock.close()
