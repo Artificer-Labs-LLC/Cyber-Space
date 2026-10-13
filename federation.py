@@ -45,8 +45,17 @@ def _claim_seen_sig(conn, sig_hex: str, now: float = None) -> bool:
     if not isinstance(sig_hex, str) or len(sig_hex) != 128:
         raise ValueError("bad signature shape")
     try:
-        bytes.fromhex(sig_hex)
+        raw_sig = bytes.fromhex(sig_hex)
     except ValueError:
+        raise ValueError("bad signature shape")
+    # Decoded-length gate, twin of relay_answer/hold_open: bytes.fromhex
+    # ignores embedded spaces, so a spaced 128-char sig decoded to 63
+    # bytes, was INSERTED into the store, and returned False — a
+    # malformed sig touched the store this contract says it never
+    # touches, and the spaced respelling of a claimed sig keyed as a
+    # first sight instead of the replay it is. Only a 64-byte decode
+    # is a signature.
+    if len(raw_sig) != 64:
         raise ValueError("bad signature shape")
     t = now if now is not None else time.time()
     # Prune BEFORE the check: an expired signature is not a replay, and an
