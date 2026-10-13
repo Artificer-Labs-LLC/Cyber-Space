@@ -2200,7 +2200,16 @@ def _gossip_loop() -> None:
     synchronize gossip rounds. Daemon; never raises."""
     while True:
         try:
-            base = max(60, int(os.environ.get("CYBERNET_GOSSIP_INTERVAL", "600")))
+            # The parse must never reach the bare except below without
+            # a sleep: a non-integer interval (an operator's "10m", or
+            # a set-but-empty value) raised ValueError here every pass,
+            # and the except just loops — the daemon spun at full CPU
+            # and gossip never ran. Fall back to the 600 default, the
+            # resolver _env_int semantics: bad values degrade, never spin.
+            try:
+                base = max(60, int(os.environ.get("CYBERNET_GOSSIP_INTERVAL", "600")))
+            except (ValueError, TypeError):
+                base = 600
             time.sleep(base * random.uniform(0.8, 1.2))
             _gossip_out()
             _gutter_hearths()  # guttering rides the gossip cadence — no new daemon
