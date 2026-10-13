@@ -51,6 +51,14 @@ _HOLD_WAIT_TIMEOUT = 40.0
 _KEEPALIVE_EVERY = 240.0
 # Backoff when the relay is silent before retrying the register.
 _BACKOFF_S = 10.0
+# Relay-response read bound, twin of core._PEER_RESP_MAX and
+# resolve_chain._FETCH_MAX: the relay is untrusted for every other
+# shape this daemon checks, so its body gets the same 64KB cap (legit
+# relay answers — register/wait/answer/keepalive — are a few hundred
+# bytes). read() unbounded let a relay stream an endless body into
+# memory before any shape check ran; oversize reads as silence (None),
+# exactly like every other bad relay answer.
+_RELAY_RESP_MAX = 65536
 
 
 def _rendezvous_epoch_len() -> int:
@@ -82,7 +90,10 @@ def _post(relay_url: str, path: str, payload: dict,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
                 return None
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read(_RELAY_RESP_MAX + 1)
+            if len(raw) > _RELAY_RESP_MAX:
+                return None
+            data = json.loads(raw.decode("utf-8"))
             return data if isinstance(data, dict) else None
     except Exception:
         return None
