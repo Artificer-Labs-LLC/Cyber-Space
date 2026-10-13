@@ -165,7 +165,10 @@ def _test_ipv6_server_forms():
             while len(q) < ln:
                 q += conn.recv(ln - len(q))
             (txid,) = struct.unpack(">H", q[:2])
-            resp = struct.pack(">HHHHHH", txid, 0x8503, 0, 0, 0, 0)
+            # conforming daemon reply: build_response echoes the one
+            # question (qd=1 + question bytes) — a bare qd=0 header is
+            # error_response shape, which smoke refuses (RD/qd checks)
+            resp = struct.pack(">HHHHHH", txid, 0x8503, 1, 0, 0, 0) + q[12:]
             conn.sendall(struct.pack(">H", len(resp)) + resp)
         srv.close()
 
@@ -1315,6 +1318,87 @@ def _test_ns_ar_counts():
               f"err={err}")
 
 
+# 5v. A reply must echo exactly one question: client._parse_response
+#     refuses qdcount != 1 when a qname was asked (this smoke always
+#     asks one — _build_query emits QDCOUNT=1 and both daemon response
+#     builders echo exactly that one question), but both smoke wires
+#     unpacked qd and ignored it, so a QR|AA|RD-set packet with qd=0
+#     or qd=2 claiming an answer earned a PASS for a reply to no
+#     question, or to a different batch. Both wires refuse either.
+def _test_qd_count():
+    import socket as _socket
+    import threading
+
+    for label, counts in (("QD0", (0, 1, 0, 0)), ("QD2", (2, 1, 0, 0))):
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, *counts)
+                    + packet[12:])
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399, timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP {label} packet -> _query refuses",
+              isinstance(err, ValueError) and "exactly one question" in str(err),
+              f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, counts=counts):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                resp = struct.pack(">HHHHHH", txid, 0x8500, *counts) + q[12:]
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        check(f"TCP {label} packet -> _query_tcp refuses",
+              isinstance(err, ValueError) and "exactly one question" in str(err),
+              f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1355,6 +1439,7 @@ if __name__ == "__main__":
     _test_z_bit()
     _test_ad_cd_bits()
     _test_ns_ar_counts()
+    _test_qd_count()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

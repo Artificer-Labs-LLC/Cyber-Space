@@ -247,6 +247,13 @@ def _query(name: str, qtype: int, server: str, port: int,
     # error_response sends 0/0/0/0), and this smoke never reads them.
     if ns or ar:
         raise ValueError("response carries authority/additional sections the daemon never sends — response is not ours")
+    # Question count, twin of client._parse_response: this smoke
+    # always asks exactly one question (_build_query emits QDCOUNT=1)
+    # and both daemon response builders echo exactly that one — a
+    # packet with qd != 1 answers no question, or a different batch,
+    # and is not the daemon's reply to THIS query.
+    if qd != 1:
+        raise ValueError("response does not echo exactly one question — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -321,6 +328,11 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # neither response builder ever emits any.
     if ns or ar:
         raise ValueError("response carries authority/additional sections the daemon never sends — response is not ours")
+    # Question count, twin of _query above: a packet with qd != 1
+    # does not echo this smoke's single question and is not the
+    # daemon's reply to it.
+    if qd != 1:
+        raise ValueError("response does not echo exactly one question — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
