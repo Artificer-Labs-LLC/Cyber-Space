@@ -48,6 +48,16 @@ def _ttl_for(expires_at: str, cap: int = DEFAULT_TTL_CAP) -> int:
     at 0 here too — fromisoformat accepted all of those, and a naive
     stamp was silently read as UTC.
     """
+    # The cap is caller-supplied (daemon env derives a real int, but
+    # hand-built callers can pass anything): a bool aliased through
+    # min/max (True -> a 1-second TTL, False -> 0), a float returned a
+    # float TTL build_response then refused inside handle_query, and a
+    # string/None raised TypeError from the comparison — all breaking
+    # handle_query's never-raises path. A cap that is not a real int
+    # (bool excluded, twin of dns._is_int) falls back to the default,
+    # exactly as daemon._env_int falls back on a bad env value.
+    if isinstance(cap, bool) or not isinstance(cap, int):
+        cap = DEFAULT_TTL_CAP
     try:
         exp = _parse_claim_time(expires_at)
         seconds = int((exp - datetime.now(timezone.utc)).total_seconds())
