@@ -587,9 +587,9 @@ def main(argv: list[str]) -> int:
                          "mirror's /api/v1/names/rotate (default: "
                          f"{_DEFAULT_MIRROR}), then verify the mirror moved "
                          "the name")
-    ap.add_argument("--expiry-days", type=int, default=_DEFAULT_EXPIRY_DAYS,
+    ap.add_argument("--expiry-days", type=int, default=None,
                     help="liveness window of the new binding on submit "
-                         f"(default {_DEFAULT_EXPIRY_DAYS})")
+                         f"(default {_DEFAULT_EXPIRY_DAYS}; submit only)")
     ap.add_argument("--promote", action="store_true",
                     help="promote <label>-name.key.next to the name key "
                          "after the record is seen in the wild")
@@ -629,6 +629,31 @@ def main(argv: list[str]) -> int:
             print("refused: --new-key-seed is not a 32-byte seed — bad "
                   "argument, nothing was minted", file=sys.stderr)
             return 2
+    # Expiry is an argument, not a verdict — twin of the seed gate
+    # above: it only applies on submit (rotation records carry no
+    # expiry), yet was silently ignored on the mint/promote paths, and
+    # on submit an out-of-range value came back from submit_rotation
+    # as exit 1 (a state verdict) after the mirror gate. Gate its
+    # combination and range here, before any file or wire use, exit 2.
+    expiry_days = _DEFAULT_EXPIRY_DAYS
+    if args.expiry_days is not None:
+        if args.submit is None:
+            print("refused: --expiry-days only applies with --submit — "
+                  "bad argument, nothing was minted or promoted",
+                  file=sys.stderr)
+            return 2
+        if args.expiry_days < 1:
+            print(f"refused: --expiry-days={args.expiry_days} is below "
+                  f"the 1-day floor — bad argument, nothing was sent",
+                  file=sys.stderr)
+            return 2
+        if args.expiry_days > _EXPIRY_DAYS_CAP:
+            print(f"refused: --expiry-days={args.expiry_days} exceeds "
+                  f"the namespace's {_EXPIRY_DAYS_CAP}-day "
+                  f"binding-lifetime cap — bad argument, nothing was sent",
+                  file=sys.stderr)
+            return 2
+        expiry_days = args.expiry_days
     home = Path.home() / ".cyberspace"
     if args.submit is not None:
         if not _valid_mirror(args.submit):
@@ -636,7 +661,7 @@ def main(argv: list[str]) -> int:
                   "host and a port in 1-65535 — bad argument, nothing "
                   "was sent", file=sys.stderr)
             return 2
-        ok, msg = submit_rotation(label, args.submit, home, args.expiry_days)
+        ok, msg = submit_rotation(label, args.submit, home, expiry_days)
         print(("submitted: " if ok else "refused: ") + msg,
               file=sys.stderr if not ok else sys.stdout)
         return 0 if ok else 1
