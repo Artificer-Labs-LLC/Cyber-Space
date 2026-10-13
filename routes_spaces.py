@@ -428,7 +428,11 @@ async def space_upload(name: str, authorization: str | None = Header(default=Non
     ext = os.path.splitext(target)[1].lower()
     if ext not in _SPACE_MIME_ALLOW:
         raise HTTPException(status_code=415, detail="Non-static file type rejected.")
-    content = await file.read()
+    # Read bounded at the ceiling + 1: an unbounded read() would slurp the
+    # whole upload into memory before the size check below ever ran, so a
+    # sender could stream an endless body past the 1MB ceiling's intent.
+    # Oversize still reads as the same 413; exactly-at-ceiling still passes.
+    content = await file.read(_SPACE_MAX_FILE + 1)
     if len(content) > _SPACE_MAX_FILE:
         raise HTTPException(status_code=413, detail="File exceeds the 1MB per-file ceiling.")
     if os.path.isdir(target):
