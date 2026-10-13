@@ -2007,6 +2007,20 @@ def ingest_gossiped_binding(binding: dict) -> str:
                 or len(signature) != 128 or not issued_at
                 or not expires_at):
             return "dropped-malformed"
+        # Decoded-length gate, twin of verify_name's binding seats:
+        # bytes.fromhex ignores embedded spaces, so a spaced 64-char
+        # pubkey decodes to 31 bytes (a spaced signature to 63) and
+        # checkvalid's length gate read it as merely unverifiable —
+        # but a key/sig that is not 32/64 bytes is malformed, and the
+        # merge's return code is how mirrors tell the two apart.
+        # Non-hex still falls through to verify (unverifiable), as
+        # before.
+        try:
+            if (len(bytes.fromhex(node_pubkey)) != 32
+                    or len(bytes.fromhex(signature)) != 64):
+                return "dropped-malformed"
+        except ValueError:
+            pass
         if not _name_binding_verify(name, node_pubkey, issued_at,
                                     expires_at, signature):
             return "dropped-unverifiable"
