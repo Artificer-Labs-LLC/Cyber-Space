@@ -244,6 +244,20 @@ for bad in ("http://127.0.0.1:99999", "http://127.0.0.1:abc",
     check(f"bad mirror {bad!r} refused as bad argument (exit 2)",
           rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
 
+# malformed pin: bad argument (exit 2), never a broken-chain verdict —
+# and the gate precedes any input read/fetch (bad stdin still reads pin-first)
+for bad in ("zz", "ab" * 10, "g" * 64, ""):
+    rc, out, err = _cli("-", "--expect-original-key", bad,
+                        stdin_text=json.dumps(doc))
+    check(f"bad pin {bad[:12]!r} refused as bad argument (exit 2)",
+          rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
+rc, out, err = _cli("-", "--expect-original-key", "zz", stdin_text="not json")
+check("bad pin gate precedes stdin read (exit 2)",
+      rc == 2 and "--expect-original-key" in err, f"rc={rc} err={err}")
+rc, out, err = _cli(LABEL, "--mirror", MIRROR, "--expect-original-key", "zz")
+check("bad pin gate precedes mirror fetch (exit 2)",
+      rc == 2 and "bad argument" in err, f"rc={rc} err={err}")
+
 # --- dead name: binding expired, chain intact ------------------------------
 SK_D, PK_D = _keypair()
 SK_E, PK_E = _keypair()

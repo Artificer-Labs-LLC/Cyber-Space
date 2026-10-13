@@ -168,6 +168,22 @@ def main(argv: list[str]) -> int:
                     help="also fetch the live binding and demand agreement")
     args = ap.parse_args(argv)
 
+    # The pin is an argument, not a verdict: a pin that is not 64 hex
+    # can never match any chain head, yet read as exit 1 "broken: hop 0
+    # old key is not the pinned original" — a verdict on the chain —
+    # after a fetch/walk. Gate it (normalized first, twin of
+    # verify_name's pin gate) before any input is read or fetched, exit 2.
+    if args.expect_original_key is not None:
+        exp = _normalize_expected(args.expect_original_key)
+        try:
+            pin_ok = len(exp) == 64 and len(bytes.fromhex(exp)) == 32
+        except ValueError:
+            pin_ok = False
+        if not pin_ok:
+            print("refused: --expect-original-key is not a 64-hex name key "
+                  "— bad argument, no verdict", file=sys.stderr)
+            return 2
+
     if args.source == "-":
         if args.with_live or args.mirror:
             print("refused: stdin mode is fully offline; drop --mirror/--with-live",
