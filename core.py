@@ -838,8 +838,19 @@ def _reach_descriptor_verify(desc) -> bool:
         reach = desc["reach"]
         if not isinstance(reach, list):
             return False
-        issued_at = str(desc["issued_at"])
-        expires_at = str(desc["expires_at"])
+        # Only real strings are descriptor times: str() here aliased a
+        # non-string issued_at/expires_at whose string form is a valid
+        # ISO stamp — it passed the parse, the floors below, and the
+        # signature check (the canonical form is built from the alias,
+        # and the signer genuinely signed that string), so the
+        # descriptor verified for a claim nobody served in that form.
+        # Every descriptor seat trusts this verify instead of gating
+        # times itself (resolve step 5, dial step 4, the merge), and
+        # the binding seats refuse the same alias on sight.
+        issued_at = desc["issued_at"]
+        expires_at = desc["expires_at"]
+        if not isinstance(issued_at, str) or not isinstance(expires_at, str):
+            return False
         # The issued_at floor the binding seats carry applies here
         # too: it must parse (a signer can sign a garbage string and
         # pass the signature check below), it must not be in the
