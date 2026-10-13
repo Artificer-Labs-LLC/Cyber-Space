@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, Request
 from fed import ed25519 as _fed_ed25519
 from fed import envelope as _fed_env
+from routes_channels import _dm_channel  # fed_dm's delivery channel; routes_channels only imports core+models, no cycle
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -592,15 +593,32 @@ async def fed_dm(env: dict):
     sender-signed direct message for a specific local agent. Verify the
     envelope, store it in a DM channel against a local pseudo-agent for the
     remote sender, and never forward blind. Recipient must be this node's
-    own pubkey (direct delivery only)."""
+    own pubkey (direct delivery only). The sender must already be a known,
+    unretired peer — DMs are a relationship primitive, so an announced
+    stranger cannot DM in: announce first, then write."""
     if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; the core split dropped this
+    # wiring along with _claim_seen_sig itself): claim the envelope's
+    # sig after verify+recipient, before the peer gate, the sender_pub
+    # gate, the rate check, and the message write. verify_envelope
+    # already established a valid sig, so the claim's ValueError is
+    # unreachable. Named post-claim edges: unknown peer 404s claim;
+    # genuine resends re-sign with a fresh ts (new sig).
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
+    sender_pub = env.get("sender_pub")
+    with _db_lock, _db() as conn:
+        if not conn.execute(
+                "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
+                (sender_pub,)).fetchone():
+            raise HTTPException(status_code=404, detail="unknown peer")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
-    sender_pub = env.get("sender_pub")
     if body.get("from_node_pub") != sender_pub:
         raise HTTPException(status_code=400, detail="sender_pub mismatch")
     from_agent = str(body.get("from_agent", "")).strip().lower()
