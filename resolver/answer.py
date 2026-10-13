@@ -340,7 +340,14 @@ def handle_query(raw: bytes, *, mirror_url: str, upstream: tuple[str, int],
         return build_response(query, [], 0)  # NODATA: our zone, unhandled type
 
     result = resolve_cyberspace(qname, mirror_url)
-    if result is None:
+    # The resolver's contract is dict-or-None, but its return is a
+    # collaborator's word at this seat: a non-dict result (a string,
+    # a list, a number from a substituted or future resolver) escaped
+    # as AttributeError from the .get calls below — a crash, not the
+    # NXDOMAIN this handler's decision tree promises for any failure.
+    # A result that is not the verified-binding dict is a failure,
+    # read exactly like None: the namespace is silent, never a guess.
+    if not isinstance(result, dict):
         return build_response(query, [], 3)  # NXDOMAIN: the namespace is silent
 
     addrs = _family_addresses(str(result.get("node_url", "")), qtype)

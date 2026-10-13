@@ -145,8 +145,37 @@ def run(mode, qname, expect_rcode, expect_answers):
               rdata.hex())
 
 
+def run_bad_result_shapes():
+    """A resolver return that is not a dict must read as NXDOMAIN,
+    never raise AttributeError from handle_query's .get calls."""
+    real = answer.resolve_cyberspace
+    raw = _query_packet(LABEL + ".cyberspace")
+    try:
+        for bad in ("string-result", 123, 1.5, True, ["x"], (1, 2)):
+            answer.resolve_cyberspace = lambda _n, _u, _b=bad: _b
+            resp = answer.handle_query(raw, mirror_url=MIRROR,
+                                       upstream=("8.8.8.8", 53))
+            check(f"bad-result {type(bad).__name__}: rcode == 3",
+                  _rcode(resp) == 3, f"got {_rcode(resp)}")
+            check(f"bad-result {type(bad).__name__}: ancount == 0",
+                  _ancount(resp) == 0, f"got {_ancount(resp)}")
+        # Control: a well-formed dict with no usable node_url is the
+        # ordinary NODATA path (name lives, family absent), untouched.
+        answer.resolve_cyberspace = lambda _n, _u: {
+            "node_url": "", "expires_at": ""}
+        resp = answer.handle_query(raw, mirror_url=MIRROR,
+                                   upstream=("8.8.8.8", 53))
+        check("dict-result control: rcode == 0", _rcode(resp) == 0,
+              f"got {_rcode(resp)}")
+        check("dict-result control: ancount == 0", _ancount(resp) == 0,
+              f"got {_ancount(resp)}")
+    finally:
+        answer.resolve_cyberspace = real
+
+
 def main():
     print("fake-mirror unit tests (resolver/answer.py):")
+    run_bad_result_shapes()
     run("good", LABEL + ".cyberspace", 0, 1)
     run("bad-sig", LABEL + ".cyberspace", 3, 0)
     run("expired", LABEL + ".cyberspace", 3, 0)
