@@ -573,6 +573,21 @@ def _fanout_channel_push(channel_id: int, channel_name: str,
                          daemon=True).start()
 
 
+def _stored_caps(raw) -> list:
+    """Loaded-shape gate for a stored capabilities cell: only a real
+    list of strings is a tag set. A stored JSON string/int/dict parsed
+    verbatim is NOT a tag set (a string would substring-match, a dict
+    key-match), malformed JSON is no tags, and non-string members of
+    a list are not tags. Every writer stores a list of strings."""
+    try:
+        caps = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(caps, list):
+        return []
+    return [c for c in caps if isinstance(c, str)]
+
+
 def _gossip_out() -> int:
     """Sender half of roster gossip (docs/FEDERATION.md build item 5):
 
@@ -609,7 +624,12 @@ def _gossip_out() -> int:
              "network": e.get("network") or "cybernet",
              "version": e["version"] or "0.1.0",
              "genesis": bool(e["genesis"]),
-             "capabilities": json.loads(e["capabilities"] or "[]"),
+             # Loaded-shape gate (_stored_caps): json.loads here put a
+             # stored string/int/dict on the wire verbatim as the
+             # entry's tag set, and malformed stored JSON raised and
+             # killed the whole gossip cycle (twin of node_directory's
+             # serve gate in routes_agents).
+             "capabilities": _stored_caps(e["capabilities"]),
              "node_url": e["node_url"]}
             for e in sample]
         if self_url:
