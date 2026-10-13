@@ -129,29 +129,31 @@ def _server_family(host: str) -> int:
 
 
 def _server_target(host: str, port: int):
-    """(family, sockaddr) the UDP wire dials for a bare server host.
+    """(family, sockaddr, expected source IP) the UDP wire dials.
 
-    A literal keeps _server_family + the literal itself, exactly as
-    before. A HOSTNAME is resolved first (getaddrinfo, AF_UNSPEC) and
-    the socket is created from the answer's family, dialing the
-    resolved sockaddr — the family can no longer be guessed from the
-    string's shape. Before, every hostname picked AF_INET and sendto
-    carried the unresolved string, so a daemon bound to ::1 and smoked
-    by a v6-only hostname (the natural --server a operator types) was
-    never reached on its own wire and read as "unreachable", while the
-    TCP leg — create_connection resolves the same way — passed. First
-    getaddrinfo result wins, as create_connection tries them in order.
-    An unresolvable hostname raises gaierror here, which main() already
-    reads as unreachable, honestly."""
+    Twin of client._server_target. A literal keeps _server_family +
+    the literal itself, exactly as before. A HOSTNAME is resolved
+    first (getaddrinfo, AF_UNSPEC) and the socket is created from the
+    answer's family, dialing the resolved sockaddr — the family can
+    no longer be guessed from the string's shape. Before, every
+    hostname picked AF_INET and sendto carried the unresolved string,
+    so a daemon bound to ::1 and smoked by a v6-only hostname (the
+    natural --server a operator types) was never reached on its own
+    wire and read as "unreachable", while the TCP leg —
+    create_connection resolves the same way — passed. First
+    getaddrinfo result wins, as create_connection tries them in
+    order. An unresolvable hostname raises gaierror here, which
+    main() already reads as unreachable, honestly. The third value
+    is the only source _query may accept a reply from (see there)."""
     try:
-        ipaddress.ip_address(host)
-        return _server_family(host), (host, port)
+        ip = ipaddress.ip_address(host)
+        return _server_family(host), (host, port), str(ip)
     except ValueError:
         pass
     infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC,
                                socket.SOCK_DGRAM)
     family, _kind, _proto, _canon, sockaddr = infos[0]
-    return family, sockaddr
+    return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
 
 
 def _query(name: str, qtype: int, server: str, port: int,
@@ -159,7 +161,7 @@ def _query(name: str, qtype: int, server: str, port: int,
     """Return (rcode, ancount, txid_echoed). Raises on transport failure."""
     packet, txid = _build_query(name, qtype)
     host = _server_host(server)
-    family, target = _server_target(host, port)
+    family, target, expected = _server_target(host, port)
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
         sock.sendto(packet, target)
@@ -169,7 +171,21 @@ def _query(name: str, qtype: int, server: str, port: int,
         # classic 512 silently amputated a multi-answer reply
         # mid-record and the header counts below still claimed the
         # answers that were never delivered.
-        resp, _ = sock.recvfrom(65535)
+        resp, source = sock.recvfrom(65535)
+        # The reply's SOURCE is part of the transaction (twin of
+        # client._query_udp): UDP has no connection, so a packet from
+        # any other (address, port) — even a perfectly formed one with
+        # the right txid — is a stranger's word, not the daemon's.
+        # Discarding the source, as before, let such a packet earn
+        # this smoke a PASS the daemon never gave.
+        try:
+            source_ip = str(ipaddress.ip_address(source[0]))
+        except ValueError:
+            source_ip = source[0]
+        if (source_ip, source[1]) != (expected, port):
+            raise ValueError(
+                "response from an unexpected source — not the daemon "
+                "queried")
     if len(resp) < 12:
         raise ValueError("truncated DNS response")
     (rtxid, flags, qd, an, ns, ar) = struct.unpack(">HHHHHH", resp[:12])

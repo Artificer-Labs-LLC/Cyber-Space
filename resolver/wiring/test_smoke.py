@@ -520,6 +520,69 @@ def _test_env_port_warnings():
           rc == 0 and not err, f"rc={rc} err={err[:80]!r}")
 
 
+# 5l. UDP wire accepts a reply ONLY from the daemon it queried: the
+#     source is part of the transaction (client._query_udp's rule), but
+#     _query discarded recvfrom's source, so a perfectly formed packet
+#     from any other (address, port) — right txid included — earned the
+#     smoke a PASS the daemon never gave. Wrong IP and wrong port both
+#     refuse; the exact source (control) still answers.
+def _test_udp_reply_source():
+    import socket as _socket
+
+    def _run(source):
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                    + packet[12:]
+                    + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                    + _socket.inet_aton("10.9.8.7"))
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], source
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            return smoke._query("alice.cyberspace", 1,
+                                "127.0.0.1", 5399, timeout=1.0), None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            return None, exc
+        finally:
+            _socket.socket = real_socket
+
+    got, err = _run(("127.0.0.1", 5399))
+    check("reply from the queried source -> _query answers (control)",
+          err is None and got is not None and got[0] == 0 and got[1] == 1,
+          f"got={got} err={err}")
+    got, err = _run(("10.0.0.99", 5399))
+    check("reply from a different IP -> _query refuses",
+          got is None and isinstance(err, ValueError)
+          and "unexpected source" in str(err),
+          f"got={got} err={err}")
+    got, err = _run(("127.0.0.1", 12345))
+    check("reply from a different port -> _query refuses",
+          got is None and isinstance(err, ValueError)
+          and "unexpected source" in str(err),
+          f"got={got} err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -550,6 +613,7 @@ if __name__ == "__main__":
     _test_udp_hostname_family()
     _test_udp_whole_datagram()
     _test_env_port_warnings()
+    _test_udp_reply_source()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
