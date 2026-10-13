@@ -1660,6 +1660,16 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             live = _resolve_peer_get_json(node_url + "/api/v1/names/" + label)
             if not isinstance(live, dict):
                 return None
+            # Only real strings are binding fields: str() below aliased
+            # a peer-carried JSON true into the label "true" (and an int
+            # into a digit label) — the pin compared the alias and the
+            # signature, genuinely signed for the string form, verified
+            # against it, so a differently-typed row passed as the SAME
+            # binding the mirror seat (step 2) refuses on sight.
+            if any(not isinstance(live.get(_f), str) for _f in
+                   ("name", "node_pubkey", "issued_at", "expires_at",
+                    "signature")):
+                return None
             if str(live.get("node_pubkey", "")).lower() != node_pubkey:
                 return None
             # The live row must answer for THIS name: verification below

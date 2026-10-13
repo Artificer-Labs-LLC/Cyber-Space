@@ -91,5 +91,55 @@ b["name"] = True
 check("bool name never reaches verify/reach", _resolve_reach_fetched(b, "true") is False)
 check("valid string binding reaches reach", _resolve_reach_fetched(_signed("typebelt2"), "typebelt2") is True)
 
+print("resolve live seat:")
+
+
+def _resolve_live_result(mirror_binding, live_binding, label):
+    pub = mirror_binding["node_pubkey"]
+    directory = {"entries": [{"node_pub": pub,
+                              "node_url": "http://8.8.8.8:8471"}]}
+    saved_get = core._resolve_get_json
+    saved_peer = core._resolve_peer_get_json
+    saved_verify = core._fed_env.verify_envelope
+
+    def fake_get(url):
+        if url.endswith("/names/" + label):
+            return mirror_binding
+        if url.endswith("/directory?limit=200"):
+            return directory
+        return None
+
+    def fake_peer(url):
+        if url.endswith("/fed/ping"):
+            return {"ok": True}
+        if url.endswith("/names/" + label):
+            return live_binding
+        return None
+
+    core._resolve_get_json = fake_get
+    core._resolve_peer_get_json = fake_peer
+    core._fed_env.verify_envelope = lambda env: True
+    try:
+        return core.resolve_cyberspace(label + ".cyberspace",
+                                       "http://127.0.0.1:8471")
+    finally:
+        core._resolve_get_json = saved_get
+        core._resolve_peer_get_json = saved_peer
+        core._fed_env.verify_envelope = saved_verify
+
+
+mb = _signed("true")
+lb = dict(mb)
+lb["name"] = True
+check("live bool name refused", _resolve_live_result(mb, lb, "true") is None)
+mb = _signed("123456")
+lb = dict(mb)
+lb["name"] = 123456
+check("live int name refused", _resolve_live_result(mb, lb, "123456") is None)
+mb = _signed("livetype")
+res = _resolve_live_result(mb, dict(mb), "livetype")
+check("live valid string binding resolves",
+      isinstance(res, dict) and res.get("node_url") == "http://8.8.8.8:8471")
+
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)
