@@ -178,12 +178,26 @@ def verify(binding: dict, expect_name: str | None = None,
         pub_b = bytes.fromhex(pub)
     except ValueError:
         return "node_pubkey is not hex"
+    # Decoded-length gate, twin of this file's --expect-pubkey pin gate
+    # and verify_rotation's len(raw)*2 check: bytes.fromhex ignores
+    # embedded spaces, so a 64-char string with two spaces decodes to
+    # a 31-byte key — it passed both checks above and was misreported
+    # as a signature failure, when the key itself is malformed. Only
+    # a 32-byte decode is a 64-hex key.
+    if len(pub_b) != 32:
+        return "node_pubkey is not 64 hex chars"
     if len(sig) != 128:
         return "signature is not 128 hex chars"
     try:
         sig_b = bytes.fromhex(sig)
     except ValueError:
         return "signature is not hex"
+    # Same gate for the signature: a spaced 128-char string decodes
+    # to 63 bytes and read as a signature failure instead of the
+    # malformed signature it is. Only a 64-byte decode is a
+    # 128-hex signature.
+    if len(sig_b) != 64:
+        return "signature is not 128 hex chars"
     try:
         issued = _parse_ts(binding["issued_at"], "issued_at")
         expires = _parse_ts(binding["expires_at"], "expires_at")
