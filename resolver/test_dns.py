@@ -231,5 +231,20 @@ check("error: AA set on non-default rcodes too",
       int.from_bytes(er3[2:4], "big") == 0x8404,
       hex(int.from_bytes(er3[2:4], "big")))
 
+# An out-of-range rcode must not alias through the old & 0xF mask:
+# 16 read as NOERROR (a refusal dressed as success), -1/255 as 15.
+# Never-raises stands, so all of them fall back to SERVFAIL (2);
+# the maximum valid rcode, 15, still passes through untouched.
+check("error: rcode 16 falls back to SERVFAIL, not NOERROR",
+      (int.from_bytes(dns.error_response(b"\x00\x01", 16)[2:4], "big") & 0xF) == 2)
+check("error: negative rcode falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", -1)[2:4], "big") & 0xF) == 2)
+check("error: rcode 255 falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", 255)[2:4], "big") & 0xF) == 2)
+check("error: non-int rcode never raises, falls back to SERVFAIL",
+      (int.from_bytes(dns.error_response(b"\x00\x01", "x")[2:4], "big") & 0xF) == 2)
+check("error: max valid rcode 15 passes through",
+      (int.from_bytes(dns.error_response(b"\x00\x01", 15)[2:4], "big") & 0xF) == 15)
+
 print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

@@ -167,5 +167,16 @@ def error_response(raw: bytes, rcode: int = 2) -> bytes:
         qid = struct.unpack(">H", raw[:2])[0] if len(raw) >= 2 else 0
     except Exception:
         qid = 0
-    flags = 0x8000 | 0x0400 | (rcode & 0xF)  # QR | AA | rcode
+    # An rcode is four bits on the wire, but masking (& 0xF) silently
+    # ALIASED an out-of-range one to a different meaning: 16 became
+    # NOERROR — a refusal dressed as success — and -1/255 became 15.
+    # This function never raises, so an rcode outside 0..15 (or not an
+    # int at all) falls back to SERVFAIL: fail-closed, never aliased.
+    try:
+        valid_rcode = 0 <= rcode <= 15
+    except TypeError:
+        valid_rcode = False
+    if not valid_rcode:
+        rcode = 2
+    flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode
     return struct.pack(">HHHHHH", qid, flags, 0, 0, 0, 0)
