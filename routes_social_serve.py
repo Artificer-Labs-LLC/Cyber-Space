@@ -1392,6 +1392,18 @@ def names_resolve(request: Request, name: str):
         live = False
     if not live:
         raise HTTPException(status_code=404, detail="No such name.")
+    # String-length gate, twin of names_reach (ea05299): this seat
+    # serves the stored row VERBATIM, and bytes.fromhex ignores
+    # embedded spaces, so a legacy row with a 129-char inserted-space
+    # sig (or a 65-char spaced pubkey) decoded to the TRUE bytes yet
+    # was served in a non-canonical spelling every consumer refuses
+    # on sight (_name_binding_verify gates len(signature) != 128
+    # / len(node_pubkey) != 64). Only exact 128/64 spellings are
+    # served; case is left alone (uppercase served before and still
+    # does). Anything else reads as absent, like an expired row.
+    if not isinstance(row[4], str) or len(row[4]) != 128 \
+            or not isinstance(row[1], str) or len(row[1]) != 64:
+        raise HTTPException(status_code=404, detail="No such name.")
     return dict(zip(("name", "node_pubkey", "issued_at", "expires_at", "signature"), row))
 
 
