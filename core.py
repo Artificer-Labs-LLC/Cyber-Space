@@ -1127,6 +1127,15 @@ def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
     reads as no proof."""
     if not isinstance(record, dict):
         return False
+    # Only real strings are key/name/time arguments: the comparisons
+    # below called .lower() on stored_pubkey/new_pubkey with no gate,
+    # so a gossip-carried int/list key escaped as AttributeError past
+    # this function's fail-closed contract instead of reading as no
+    # proof (the record's own fields are guarded by verify_rotation;
+    # these caller-supplied ones were not).
+    if any(not isinstance(_v, str) for _v in
+           (name, stored_pubkey, new_pubkey, binding_issued_at)):
+        return False
     if _verify_rotation_record(record) is not None:
         return False
     if record["name"].strip().lower() != name:
@@ -1167,6 +1176,13 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
     jump is impossible: every hop must carry the old key's own
     signature, so a forger needs every intermediate private key."""
     if not isinstance(chain, list) or not chain:
+        return False
+    # Twin of the single-hop seat's gate: the linkage comparisons
+    # below call .lower() on stored_pubkey/new_pubkey with no gate,
+    # so a non-string key escaped as AttributeError past the
+    # fail-closed contract instead of reading as no proof.
+    if any(not isinstance(_v, str) for _v in
+           (name, stored_pubkey, new_pubkey, binding_issued_at)):
         return False
     if len(chain) > _ROTATION_CHAIN_CAP:
         return False
