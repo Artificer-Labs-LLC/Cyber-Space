@@ -308,6 +308,22 @@ check("error: fractional float rcode never raises, falls back to SERVFAIL",
       (int.from_bytes(dns.error_response(b"\x00\x01", 2.5)[2:4], "big") & 0xF) == 2)
 check("error: None rcode never raises, falls back to SERVFAIL",
       (int.from_bytes(dns.error_response(b"\x00\x01", None)[2:4], "big") & 0xF) == 2)
+# A bool is an int subclass: False passed as rcode 0 (NOERROR — a
+# refusal dressed as success) and True as rcode 1; bools likewise
+# passed as query id / qtype / ttl in build_response. A bool is not
+# a wire int anywhere in this codec.
+check("error: False rcode falls back to SERVFAIL, not NOERROR",
+      (int.from_bytes(dns.error_response(b"\x00\x01", False)[2:4], "big") & 0xF) == 2)
+check("error: True rcode falls back to SERVFAIL, not rcode 1",
+      (int.from_bytes(dns.error_response(b"\x00\x01", True)[2:4], "big") & 0xF) == 2)
+check("build: bool rcode raises ValueError, not NOERROR",
+      raises_valueerror(dns.build_response, q, [], False))
+check("build: bool query id raises ValueError",
+      raises_valueerror(dns.build_response, dict(q, id=True), []))
+check("build: bool qtype raises ValueError",
+      raises_valueerror(dns.build_response, q, [(True, 300, b"\x7f\x00\x00\x01")]))
+check("build: bool ttl raises ValueError",
+      raises_valueerror(dns.build_response, q, [(1, True, b"\x7f\x00\x00\x01")]))
 
 print(f"  {CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

@@ -15,6 +15,17 @@ import struct
 _RCODE_NAMES = {0: "NOERROR", 2: "SERVFAIL", 3: "NXDOMAIN"}
 
 
+def _is_int(value) -> bool:
+    """A real wire int — bool is an int subclass in Python, so True/False
+    passed every isinstance check below: error_response(False) built a
+    NOERROR refusal (a refusal dressed as success, the aliasing the rcode
+    checks exist to refuse) and build_response accepted True as qid 1 /
+    qtype 1 / ttl 1. The rest of the codebase (core, federation,
+    rendezvous) already excludes bool explicitly; this codec now does too.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _read_name(data: bytes, off: int) -> tuple[str, int]:
     """Read a DNS label sequence from off. Returns (dotted_name, new_off).
 
@@ -116,7 +127,7 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     NOERROR, 2 = SERVFAIL, 3 = NXDOMAIN. Anything else raises ValueError —
     the daemon answers only what it means.
     """
-    if not isinstance(rcode, int) or rcode not in _RCODE_NAMES:
+    if not _is_int(rcode) or rcode not in _RCODE_NAMES:
         raise ValueError(f"unsupported rcode {rcode}")
     # The query dict itself is caller-supplied (a hand-built dict, not
     # only parse_query's output): a non-dict, a missing id/rd/question,
@@ -138,7 +149,7 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
     # only yields 0..65535) or more than 65535 answers escaped as
     # struct.error from the header pack, the same ValueError-contract
     # break the answer fields had. Range-check them here too.
-    if not isinstance(qid, int) \
+    if not _is_int(qid) \
             or not 0 <= qid <= 65535:
         raise ValueError("bad query id")
     try:
@@ -161,7 +172,7 @@ def build_response(query: dict, answers: list[tuple[int, int, bytes]], rcode: in
         # from the comparison (or struct.error from the pack for a
         # float, which passes a range check), and non-bytes rdata
         # escaped as TypeError from len() or the body join.
-        if not isinstance(qtype, int) or not isinstance(ttl, int) \
+        if not _is_int(qtype) or not _is_int(ttl) \
                 or not isinstance(rdata, (bytes, bytearray)) \
                 or not 0 <= qtype <= 65535 \
                 or not 0 <= ttl <= 4294967295 \
@@ -207,7 +218,7 @@ def error_response(raw: bytes, rcode: int = 2) -> bytes:
     # flags OR below — breaking this function's never-raises contract
     # for exactly the hand-built callers the fallback exists for.
     # Require a real int in range; anything else falls back.
-    if not isinstance(rcode, int) or not 0 <= rcode <= 15:
+    if not _is_int(rcode) or not 0 <= rcode <= 15:
         rcode = 2
     flags = 0x8000 | 0x0400 | rcode  # QR | AA | rcode
     return struct.pack(">HHHHHH", qid, flags, 0, 0, 0, 0)
