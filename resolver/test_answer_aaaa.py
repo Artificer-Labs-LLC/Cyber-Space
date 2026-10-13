@@ -204,6 +204,14 @@ def main():
         check(f"unasked qtype {bad!r}: []",
               answer._family_addresses("http://127.0.0.1:18799", bad) == [])
 
+    # 9. _family_addresses returns [] on a non-string node_url (never
+    #    raises, never resolves): ints/floats used to escape as
+    #    AttributeError from urlsplit, and a bytes URL used to be
+    #    parsed and its host resolved as if it had been asked as a str
+    for bad in (123, 1.5, True, None, b"http://127.0.0.1:18799"):
+        check(f"non-string node_url {bad!r}: []",
+              answer._family_addresses(bad, 1) == [])
+
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if CASES["failed"] else 0)
 

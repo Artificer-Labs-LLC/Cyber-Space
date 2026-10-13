@@ -82,6 +82,14 @@ def _family_addresses(node_url: str, qtype: int) -> list[bytes]:
     if (isinstance(qtype, bool) or not isinstance(qtype, int)
             or qtype not in (QTYPE_A, QTYPE_AAAA)):
         return []
+    # The node_url is caller-supplied too (handle_query str()-coerces
+    # its result dict, but the library seat is public): a non-string
+    # escaped as AttributeError from urlsplit's .decode (int/float),
+    # and a bytes URL was parsed and its host resolved — answering
+    # for a URL nobody asked as a string. Only a real string has a
+    # host; anything else has no addresses, exactly like junk input.
+    if not isinstance(node_url, str):
+        return []
     want = {QTYPE_A: socket.AF_INET, QTYPE_AAAA: socket.AF_INET6}[qtype]
     try:
         host = urllib.parse.urlsplit(node_url).hostname or ""
