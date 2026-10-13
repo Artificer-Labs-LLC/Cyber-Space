@@ -32,6 +32,18 @@ def _read_name(data: bytes, off: int) -> tuple[str, int]:
     Handles pointer compression (0xC0..) so hand-built and real-world
     queries both parse. Loops are bounded — a pointer cycle is malformed.
     """
+    # The packet and offset are caller-supplied at the library seats
+    # that call this directly (client, answer): a non-bytes packet
+    # escaped as TypeError from the index/& below, a float/str/None
+    # offset as TypeError from the comparison, True aliased to offset
+    # 1, and a NEGATIVE offset silently read from the packet's tail
+    # (data[-1] is its last byte) — none of them the ValueError this
+    # codec's fail-closed boundary promises. Only a real bytes packet
+    # at a real, non-negative int offset (bool excluded, twin of
+    # _is_int) has a name to read; anything else is malformed.
+    if not isinstance(data, (bytes, bytearray)) \
+            or not _is_int(off) or off < 0:
+        raise ValueError("bad name read")
     labels: list[str] = []
     jumped = False
     end = off
@@ -73,6 +85,15 @@ def parse_query(data: bytes) -> dict:
     Raises ValueError on anything malformed or out of scope (no question,
     more than one question, truncated packet).
     """
+    # The packet is caller-supplied (handle_query guards only
+    # ValueError, trusting this contract): a non-bytes packet of 12+
+    # items escaped as TypeError from struct.unpack (str) or len()
+    # (None/int) instead of the SERVFAIL handle_query answers a
+    # malformed packet with. Only a real bytes packet (bytearray
+    # included, twin of build_response's question gate) can be a
+    # query; anything else is malformed here, not at the unpack.
+    if not isinstance(data, (bytes, bytearray)):
+        raise ValueError("packet is not bytes")
     if len(data) < 12:
         raise ValueError("packet shorter than header")
     qid, flags, qdcount, ancount, nscount, arcount = struct.unpack(">HHHHHH", data[:12])

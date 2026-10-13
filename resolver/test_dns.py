@@ -87,6 +87,43 @@ check("parse: truncated question tail refused",
       raises_valueerror(dns.parse_query,
                          _query([b"vill", b"cyberspace"], tail=b"\x00\x00\x01")))
 
+# A non-bytes packet must read as ValueError too, not escape as
+# TypeError from len()/struct.unpack — handle_query guards only
+# ValueError and answers SERVFAIL, so the TypeError broke the
+# daemon's never-raises path for exactly the hand-built callers the
+# contract exists for. A bytearray packet still parses.
+check("parse: long string packet raises ValueError, not TypeError",
+      raises_valueerror(dns.parse_query, "x" * 20))
+check("parse: None packet raises ValueError, not TypeError",
+      raises_valueerror(dns.parse_query, None))
+check("parse: int packet raises ValueError, not TypeError",
+      raises_valueerror(dns.parse_query, 123))
+check("parse: list packet raises ValueError, not TypeError",
+      raises_valueerror(dns.parse_query, [b"x"] * 20))
+check("parse: bytearray packet still parses",
+      dns.parse_query(bytearray(GOOD_A))["qname"] == "vill.cyberspace")
+
+# _read_name's packet/offset are caller-supplied at its direct seats:
+# a non-bytes packet or a float/str/None offset escaped as TypeError,
+# True aliased to offset 1, and a negative offset silently read from
+# the packet's tail. All are ValueError now; a valid read is untouched.
+check("read_name: string packet raises ValueError, not TypeError",
+      raises_valueerror(dns._read_name, "abc", 0))
+check("read_name: None packet raises ValueError, not TypeError",
+      raises_valueerror(dns._read_name, None, 0))
+check("read_name: float offset raises ValueError, not TypeError",
+      raises_valueerror(dns._read_name, b"\x00", 1.0))
+check("read_name: string offset raises ValueError, not TypeError",
+      raises_valueerror(dns._read_name, b"\x00", "0"))
+check("read_name: None offset raises ValueError, not TypeError",
+      raises_valueerror(dns._read_name, b"\x00", None))
+check("read_name: bool offset raises ValueError, not offset 1",
+      raises_valueerror(dns._read_name, b"\x04vill\x00", True))
+check("read_name: negative offset raises ValueError, not a tail read",
+      raises_valueerror(dns._read_name, b"\x04vill\x00", -1))
+check("read_name: valid read untouched",
+      dns._read_name(b"\x04vill\x00", 0) == ("vill", 6))
+
 
 def _counted_query(an=0, ns=0, ar=0, extra=b""):
     """A query whose header CLAIMS sections (the _query builder above
