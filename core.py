@@ -1503,6 +1503,14 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         binding = _resolve_get_json(mirror + "/api/v1/names/" + label)
         if not isinstance(binding, dict):
             return None
+        # Only real strings are binding fields: str() here aliased a
+        # mirror-carried JSON true into the label "true" — verified
+        # against a signature genuinely signed for "true" and read as
+        # a live binding (twin of dial.plan's step-3 gate).
+        if any(not isinstance(binding.get(_f), str) for _f in
+               ("name", "node_pubkey", "issued_at", "expires_at",
+                "signature")):
+            return None
         name = str(binding.get("name", "")).lower()
         node_pubkey = str(binding.get("node_pubkey", "")).lower()
         issued_at = str(binding.get("issued_at", ""))
@@ -1799,6 +1807,14 @@ def ingest_gossiped_binding(binding: dict) -> str:
     "dropped-stale", "dropped-over-cap", "dropped-full". Never raises."""
     try:
         if not isinstance(binding, dict):
+            return "dropped-malformed"
+        # Only real strings are binding fields: str() here aliased a
+        # gossip-carried JSON true into the label "true" and INSERTED
+        # it under a signature genuinely signed for "true" (twin of
+        # resolve_cyberspace's step-2 gate).
+        if any(not isinstance(binding.get(_f), str) for _f in
+               ("name", "node_pubkey", "issued_at", "expires_at",
+                "signature")):
             return "dropped-malformed"
         name = str(binding.get("name", "")).lower()
         node_pubkey = str(binding.get("node_pubkey", "")).lower()

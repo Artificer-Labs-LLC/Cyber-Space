@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Belt: core's two binding seats refuse a NON-STRING binding field
+instead of str()-aliasing it (primitives 1 naming + 2 resolution).
+
+resolve_cyberspace step 2 and ingest_gossiped_binding both read the five
+binding fields through str(): a mirror/gossip-carried JSON true served
+as the name coerced to the label "true", verified against a signature
+genuinely signed for "true", and was read as live (resolve fetched the
+reach descriptor) / INSERTED (ingest). A digit-only pubkey served as a
+number likewise stringified to its own hex. Twin of dial.plan's step-3
+gate and the canonical payload builders' gate in core.
+
+Covers: bool name, int pubkey, int issued_at at both seats refused;
+valid all-string binding at both seats exact (control).
+
+Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/binding-field-type-belt-test.py
+"""
+import os
+import secrets
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+TMP = tempfile.mkdtemp(prefix="binding-field-type-belt-")
+os.environ["CYBERNET_DB_DIR"] = TMP
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import core  # noqa: E402
+
+core.init_db()
+
+CASES = {"passed": 0, "failed": 0}
+
+
+def check(name, cond, extra=""):
+    if cond:
+        CASES["passed"] += 1
+        print(f"  ok  {name}")
+    else:
+        CASES["failed"] += 1
+        print(f"  FAIL {name} {extra}")
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _signed(label):
+    now = datetime.now(timezone.utc)
+    issued, expires = _iso(now - timedelta(hours=1)), _iso(now + timedelta(days=364))
+    priv = secrets.token_hex(32)
+    pub = core._fed_ed25519.publickey(bytes.fromhex(priv)).hex()
+    sig = core._fed_ed25519.sign(
+        core._name_claim_payload(label, pub, issued, expires),
+        bytes.fromhex(priv), bytes.fromhex(pub)).hex()
+    return {"name": label, "node_pubkey": pub, "issued_at": issued,
+            "expires_at": expires, "signature": sig}
+
+
+def _resolve_reach_fetched(binding, label):
+    calls = []
+    saved = core._resolve_get_json
+
+    def fake(url):
+        calls.append(url)
+        return binding if url.endswith("/names/" + label) else None
+
+    core._resolve_get_json = fake
+    try:
+        core.resolve_cyberspace(label + ".cyberspace", "http://127.0.0.1:8471")
+    finally:
+        core._resolve_get_json = saved
+    return any(u.endswith("/reach") for u in calls)
+
+
+print("ingest seat:")
+b = _signed("true")
+b["name"] = True
+check("bool name dropped-malformed", core.ingest_gossiped_binding(b) == "dropped-malformed")
+b = _signed("typebelt")
+b["node_pubkey"] = int(b["node_pubkey"], 16)
+check("int pubkey dropped-malformed", core.ingest_gossiped_binding(b) == "dropped-malformed")
+b = _signed("typebelt")
+b["issued_at"] = 123
+check("int issued_at dropped-malformed", core.ingest_gossiped_binding(b) == "dropped-malformed")
+check("valid string binding inserted", core.ingest_gossiped_binding(_signed("typebelt")) == "inserted")
+
+print("resolve seat:")
+b = _signed("true")
+b["name"] = True
+check("bool name never reaches verify/reach", _resolve_reach_fetched(b, "true") is False)
+check("valid string binding reaches reach", _resolve_reach_fetched(_signed("typebelt2"), "typebelt2") is True)
+
+print(f"{CASES['passed']} passed, {CASES['failed']} failed")
+sys.exit(1 if CASES["failed"] else 0)
