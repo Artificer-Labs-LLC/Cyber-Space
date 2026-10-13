@@ -360,7 +360,15 @@ def _query_udp(
             s = socket.socket(family, socket.SOCK_DGRAM)
         s.settimeout(timeout)
         s.sendto(packet, (host, port))
-        data, source = s.recvfrom(4096)
+        # The daemon's replies are whole on this wire (it never sets
+        # TC) and can run past 4096 — a multi-answer binding, or a
+        # forwarded upstream reply relayed byte-for-byte. recvfrom
+        # discards whatever it is not handed room for, so a smaller
+        # read silently amputated the tail mid-record and the parser
+        # then misread a perfect answer as malformed. Read a whole
+        # datagram: 65535, the UDP maximum, twin of daemon._serve_udp
+        # and answer._forward.
+        data, source = s.recvfrom(65535)
         try:
             expected = str(ipaddress.ip_address(host))
         except ValueError:
