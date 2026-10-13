@@ -174,6 +174,63 @@ def _skip_name(data: bytes, off: int) -> int:
         off += 1 + length
 
 
+def _read_name(data: bytes, off: int) -> tuple[str, int]:
+    """(dotted name, offset past it) at off — twin of dns._read_name:
+    labels plus compression pointers, pointer cycles bounded."""
+    labels: list[str] = []
+    jumped = False
+    end = off
+    for _ in range(64):
+        if off >= len(data):
+            raise ValueError("truncated DNS response — response is not ours")
+        length = data[off]
+        if length & 0xC0 == 0xC0:
+            if off + 1 >= len(data):
+                raise ValueError(
+                    "truncated DNS response — response is not ours")
+            if not jumped:
+                end = off + 2
+            off = ((length & 0x3F) << 8) | data[off + 1]
+            jumped = True
+            continue
+        if length & 0xC0:
+            raise ValueError("malformed name in response — response is not ours")
+        if length == 0:
+            if not jumped:
+                end = off + 1
+            break
+        off += 1
+        if off + length > len(data):
+            raise ValueError("truncated DNS response — response is not ours")
+        try:
+            labels.append(data[off:off + length].decode("ascii"))
+        except UnicodeDecodeError:
+            raise ValueError("malformed name in response — response is not ours")
+        off += length
+    else:
+        raise ValueError("malformed name in response — response is not ours")
+    return ".".join(labels), end
+
+
+def _refuse_different_question(resp: bytes, name: str, qtype: int) -> None:
+    """Refuse an echoed question that is not THIS one, twin of
+    client._parse_response: the daemon echoes exactly the question
+    it was asked (build_response carries the parsed question bytes),
+    so an echo naming a different name — or the same name under a
+    different qtype or class — is a reply to another question and
+    its answers belong to that question, however clean its header.
+    Name compared case-insensitively (the wire form of the asked
+    name is already normalized lower-case by main())."""
+    seen, off = _read_name(resp, 12)
+    if off + 4 > len(resp):
+        raise ValueError("truncated DNS response — response is not ours")
+    seen_qtype, seen_qclass = struct.unpack_from(">HH", resp, off)
+    if (seen.lower() != name.lower() or seen_qtype != qtype
+            or seen_qclass != _QCLASS_IN):
+        raise ValueError(
+            "response answers a different question — response is not ours")
+
+
 def _refuse_trailing(resp: bytes, qd: int, an: int) -> None:
     """Refuse bytes left over after the counted sections, twin of
     client._parse_response: neither daemon response builder ever
@@ -300,6 +357,10 @@ def _query(name: str, qtype: int, server: str, port: int,
     # and is not the daemon's reply to THIS query.
     if qd != 1:
         raise ValueError("response does not echo exactly one question — response is not ours")
+    # Echoed question, twin of client._parse_response: the one
+    # question must be THIS one (name, qtype, class IN) — see
+    # _refuse_different_question.
+    _refuse_different_question(resp, name, qtype)
     # Trailing bytes, twin of client._parse_response: the packet
     # must end exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)
@@ -382,6 +443,10 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # daemon's reply to it.
     if qd != 1:
         raise ValueError("response does not echo exactly one question — response is not ours")
+    # Echoed question, twin of _query above: the one question must
+    # be THIS one (name, qtype, class IN) — see
+    # _refuse_different_question.
+    _refuse_different_question(resp, name, qtype)
     # Trailing bytes, twin of _query above: the packet must end
     # exactly at its counted sections (see _refuse_trailing).
     _refuse_trailing(resp, qd, an)

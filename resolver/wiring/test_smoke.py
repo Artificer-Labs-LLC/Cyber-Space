@@ -1502,6 +1502,102 @@ def _test_trailing_bytes():
               f"err={err}")
 
 
+# 5x. A reply must echo THIS question: client._parse_response refuses
+#     an echoed question naming a different name (or family/class)
+#     than the one asked — its answers belong to another question —
+#     but both smoke wires only counted qd (==1) and walked the
+#     question's bytes without reading them, so a packet echoing
+#     mallory.cyberspace (or alice as AAAA/CH) claiming an answer
+#     earned a PASS. Both wires refuse name, qtype and qclass drift.
+def _test_echoed_question():
+    import socket as _socket
+    import threading
+
+    def _enc(name):
+        return b"".join(bytes([len(p)]) + p.encode("ascii")
+                        for p in name.split(".")) + b"\x00"
+
+    variants = (
+        ("NAME", lambda q: _enc("mallory.cyberspace") + q[-4:]),
+        ("QTYPE", lambda q: q[:-4] + struct.pack(">HH", 28, 1)),
+        ("QCLASS", lambda q: q[:-4] + struct.pack(">HH", 1, 3)),
+    )
+    for label, mutate in variants:
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                    + mutate(packet[12:])
+                    + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                    + _socket.inet_aton("10.9.8.7"))
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399,
+                         timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP different-question ({label}) -> _query refuses",
+              isinstance(err, ValueError)
+              and "different question" in str(err), f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, mutate=mutate):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                resp = (struct.pack(">HHHHHH", txid, 0x8500, 1, 1, 0, 0)
+                        + mutate(q[12:])
+                        + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                        + _socket.inet_aton("10.9.8.7"))
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"TCP different-question ({label}) -> _query_tcp refuses",
+              isinstance(err, ValueError)
+              and "different question" in str(err), f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1544,6 +1640,7 @@ if __name__ == "__main__":
     _test_ns_ar_counts()
     _test_qd_count()
     _test_trailing_bytes()
+    _test_echoed_question()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
