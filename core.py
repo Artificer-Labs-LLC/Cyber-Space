@@ -2443,6 +2443,20 @@ def _provable_deltas() -> list:
             continue
         retire = bool(r["retired_at"])
         sig_hex = str(r["delta_sig"] or "")
+        # String-length gate, twin of fed_directory_delta (0bcca64) /
+        # _recv_attestation (136c464): bytes.fromhex ignores embedded
+        # spaces, so a stored 129-char sig with an inserted space (or
+        # an outer-padded spelling) decoded to the TRUE 64 bytes and
+        # checkvalid VERIFIED it -- and this seat forwards sig_hex
+        # verbatim as this node's own delta, a non-canonical spelling
+        # every receiver seat now refuses on sight (len(sig) != 128).
+        # Legacy/pre-gate rows are exactly what this re-verify seat
+        # exists to filter. Only the exact 128-char spelling is
+        # provable; case is left alone (uppercase verified before and
+        # still does). The decoded-length half is checkvalid's own
+        # gate (a 63-byte decode already reads False).
+        if len(sig_hex) != 128:
+            continue
         try:
             sig_ok = _fed_ed25519.checkvalid(
                 bytes.fromhex(sig_hex),
