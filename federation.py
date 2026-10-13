@@ -6,6 +6,7 @@ import json
 import re
 import hashlib
 import secrets
+import time
 import urllib.request
 from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _NODE_PUB, _NODE_URL_RE, _authed, _broadcast, _check_rate, _db,
@@ -16,6 +17,46 @@ from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _valid_node_url, ingest_reach_descriptor)
 
 router = APIRouter()
+
+# Seen-sig replay-dedupe horizon: an envelope sig is a replay only
+# inside this window (the envelope MAX_SKEW horizon) — past it the
+# envelope's own timestamp gate refuses the replay anyway.
+_SEEN_SIG_HORIZON_SEC = 600
+
+
+def _claim_seen_sig(conn, sig_hex: str, now: float = None) -> bool:
+    """Claim an inbound envelope signature; the replay-dedupe primitive.
+
+    Restored 2026-10-13: the core split (515369d) carried the
+    fed_seen_sigs table into core_serve.py's schema but dropped this
+    helper and every receiver wiring with it, silently un-deduping all
+    inbound federation receivers (the fedws*-replay-dedupe belts have
+    failed on it since). This tick restores the primitive (step 1);
+    re-wiring the receivers is the follow-on step.
+
+    Atomic check-and-insert on fed_seen_sigs. Returns True when this
+    signature was already seen inside the horizon (i.e. a REPLAY — the
+    caller must reject the envelope); False on first sight (the signature
+    is now recorded). Fail-closed: a malformed sig_hex raises ValueError,
+    so the caller can 400 instead of touching the store. Expired rows are
+    pruned on every call, bounding the table at ~one horizon of traffic.
+    """
+    if not isinstance(sig_hex, str) or len(sig_hex) != 128:
+        raise ValueError("bad signature shape")
+    try:
+        bytes.fromhex(sig_hex)
+    except ValueError:
+        raise ValueError("bad signature shape")
+    t = now if now is not None else time.time()
+    # Prune BEFORE the check: an expired signature is not a replay, and an
+    # expired row must never block a fresh claim of the same sig.
+    conn.execute("DELETE FROM fed_seen_sigs WHERE seen_at < ?",
+                 (t - _SEEN_SIG_HORIZON_SEC,))
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO fed_seen_sigs(sig, seen_at) VALUES (?, ?)",
+        (sig_hex, t))
+    return cur.rowcount == 0
+
 
 def _recv_attestation(delta, sender_pub: str, retire: bool):
     """Validate a `body.delta` self-attestation carried on /fed/announce or
