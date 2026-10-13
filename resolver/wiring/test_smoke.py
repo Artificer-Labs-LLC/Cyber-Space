@@ -1230,6 +1230,91 @@ def _test_ad_cd_bits():
               f"err={err}")
 
 
+# 5u. A reply must not carry authority/additional records:
+#     client._parse_response refuses nscount/arcount nonzero
+#     (neither daemon response builder ever emits any —
+#     build_response sends header counts 0/0 for those sections
+#     and error_response sends 0/0/0/0; records the parser would
+#     only skip can carry nothing the daemon meant), but both
+#     smoke wires ignored ns/ar entirely, so a QR|AA|RD-set
+#     packet with ns=1 or ar=1 claiming an answer earned a PASS.
+#     Both wires refuse either count.
+def _test_ns_ar_counts():
+    import socket as _socket
+    import threading
+
+    for label, counts in (("NS", (1, 1, 1, 0)), ("AR", (1, 1, 0, 1))):
+        canned = {}
+
+        class _FakeUdp:
+            def __init__(self, family, kind):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def sendto(self, packet, target):
+                txid = struct.unpack(">H", packet[:2])[0]
+                canned["resp"] = (
+                    struct.pack(">HHHHHH", txid, 0x8500, *counts)
+                    + packet[12:]
+                    + struct.pack(">HHHIH", 0xC00C, 1, 1, 120, 4)
+                    + _socket.inet_aton("10.9.8.7"))
+                return len(packet)
+
+            def recvfrom(self, n):
+                return canned["resp"], ("127.0.0.1", 5399)
+
+        real_socket = _socket.socket
+        _socket.socket = _FakeUdp
+        try:
+            smoke._query("alice.cyberspace", 1, "127.0.0.1", 5399, timeout=1.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        finally:
+            _socket.socket = real_socket
+        check(f"UDP {label}-count packet -> _query refuses",
+              isinstance(err, ValueError) and "authority/additional" in str(err),
+              f"err={err}")
+
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+        srv.listen(1)
+
+        def _serve_once(srv=srv, counts=counts):
+            conn, _ = srv.accept()
+            with conn:
+                head = conn.recv(2)
+                (ln,) = struct.unpack(">H", head)
+                q = b""
+                while len(q) < ln:
+                    q += conn.recv(ln - len(q))
+                (txid,) = struct.unpack(">H", q[:2])
+                resp = struct.pack(">HHHHHH", txid, 0x8500, *counts) + q[12:]
+                conn.sendall(struct.pack(">H", len(resp)) + resp)
+            srv.close()
+
+        threading.Thread(target=_serve_once, daemon=True).start()
+        try:
+            smoke._query_tcp("alice.cyberspace", 1, "127.0.0.1", port,
+                             timeout=2.0)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - the refusal is the check
+            err = exc
+        check(f"TCP {label}-count packet -> _query_tcp refuses",
+              isinstance(err, ValueError) and "authority/additional" in str(err),
+              f"err={err}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -1269,6 +1354,7 @@ if __name__ == "__main__":
     _test_ra_bit()
     _test_z_bit()
     _test_ad_cd_bits()
+    _test_ns_ar_counts()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

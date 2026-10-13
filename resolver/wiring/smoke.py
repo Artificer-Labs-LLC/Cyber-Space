@@ -240,6 +240,13 @@ def _query(name: str, qtype: int, server: str, port: int,
     # carries a recursive checker's marks, not the daemon's.
     if flags & 0x0030:
         raise ValueError("response sets AD/CD bits the daemon never sets — response is not ours")
+    # Authority/additional counts, twin of client._parse_response:
+    # a packet carrying authority or additional section records is
+    # not the daemon's — neither response builder ever emits any
+    # (build_response sends header counts 0/0 for those sections and
+    # error_response sends 0/0/0/0), and this smoke never reads them.
+    if ns or ar:
+        raise ValueError("response carries authority/additional sections the daemon never sends — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
@@ -309,6 +316,11 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
     # ever sets AD or CD and this smoke's query never asks for them.
     if flags & 0x0030:
         raise ValueError("response sets AD/CD bits the daemon never sets — response is not ours")
+    # Authority/additional counts, twin of _query above: a packet
+    # carrying authority or additional records is not the daemon's;
+    # neither response builder ever emits any.
+    if ns or ar:
+        raise ValueError("response carries authority/additional sections the daemon never sends — response is not ours")
     return flags & 0x000F, an, rtxid
 
 
