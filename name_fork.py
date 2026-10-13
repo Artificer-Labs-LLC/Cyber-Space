@@ -425,7 +425,13 @@ _weak_calls = 0
 def _key_check(pub: str) -> str | None:
     """Patchable. None = key passes; otherwise the refusal reason."""
     from fed import ed25519 as _ed
-    ok = _ed.sodium_key_ok(bytes.fromhex(pub))
+    try:
+        raw = bytes.fromhex(pub)
+    except (TypeError, ValueError):
+        return "not hex"
+    if len(raw) != 32:
+        return "not 32 bytes"
+    ok = _ed.sodium_key_ok(raw)
     if ok is None:
         return SODIUM_KEY_MISSING
     return None if ok else "not a prime-order-subgroup point (libsodium)"
@@ -1213,7 +1219,7 @@ def consider_rotation(conn: sqlite3.Connection, rec: dict,
 
 # ------------------------------------------------------------- catch-up
 
-def path_accept_rule(conn, name, path) -> list | None:
+def path_accept_rule(conn, name, path, prenormalized=None) -> list | None:
     """Catch-up acceptance: the fetched path must link hash by hash to this
     node's own head, its first old_pub must equal the current pin, every
     link passes _norm_cert, and the path is accepted or refused WHOLE.
@@ -1224,8 +1230,10 @@ def path_accept_rule(conn, name, path) -> list | None:
         return None
     pin, seq, head = st
     recs = []
-    for raw in path:
-        rec = _norm_cert(raw)
+    for i, raw in enumerate(path):
+        # The caller (core.pull_name_chain) charges and normalizes OUTSIDE
+        # _db_lock and passes the results in.
+        rec = prenormalized[i] if prenormalized is not None else _norm_cert(raw)
         if rec is None or rec["name"] != name:
             return None
         recs.append(rec)
@@ -1241,14 +1249,16 @@ def path_accept_rule(conn, name, path) -> list | None:
 
 
 def accept_catchup(conn, name, path, sender_pub=None,
-                   now: float | None = None) -> str:
+                   now: float | None = None, prenormalized=None) -> str:
     """Apply a fetched path whole. Then re-judge pending certs that now
     link. Returns 'accepted', 'refused', 'contested', or 'rate-held'."""
     ensure_schema(conn)
     now = time.time() if now is None else now
     if is_contested(conn, name):
         return "contested"
-    recs = path_accept_rule(conn, name, path)
+    if prenormalized is not None and len(prenormalized) != len(path):
+        return "refused"
+    recs = path_accept_rule(conn, name, path, prenormalized)
     if recs is None:
         return "refused"
     head = head_hash(conn, name)
@@ -1283,18 +1293,31 @@ def accept_catchup(conn, name, path, sender_pub=None,
     return "accepted"
 
 
-def drain_pending(conn, name, sender_pub=None, now=None) -> dict:
-    """Re-judge pending certs for a name after its head moved."""
-    rows = conn.execute("SELECT id, cert, sender FROM name_pending WHERE name=?"
-                        " ORDER BY id", (name,)).fetchall()
+def pending_rows(conn, name) -> list:
+    """(id, cert dict, sender) for a name's pending certs, oldest first."""
+    return [(rid, json.loads(cert), sender) for rid, cert, sender in conn.execute(
+        "SELECT id, cert, sender FROM name_pending WHERE name=? ORDER BY id",
+        (name,)).fetchall()]
+
+
+def drain_pending(conn, name, sender_pub=None, now=None,
+                  prenormalized: dict | None = None) -> dict:
+    """Re-judge pending certs for a name after its head moved.
+    prenormalized: {pending id: normalized rec or None}, computed by the
+    caller outside _db_lock; ids not in it are skipped (never normalized
+    under the lock)."""
+    rows = pending_rows(conn, name)
     res = {"accepted": {}, "contested": set(), "outcomes": []}
-    for rid, cert, sender in rows:
-        c = json.loads(cert)
+    for rid, c, sender in rows:
         h = head_hash(conn, name)
         if c.get("prev_hash") != h:
             continue
+        if prenormalized is not None and rid not in prenormalized:
+            continue
         conn.execute("DELETE FROM name_pending WHERE id=?", (rid,))
-        r = ingest_rotation_round(conn, [c], sender, now=now)
+        r = ingest_rotation_round(
+            conn, [c], sender, now=now,
+            prenormalized=None if prenormalized is None else [prenormalized[rid]])
         res["accepted"].update(r["accepted"])
         res["contested"] |= r["contested"]
         res["outcomes"] += r["outcomes"]

@@ -2505,13 +2505,67 @@ def pull_name_chain(sender_pub: str, name: str, fetch=None) -> str:
     chain = fetch(row[0], name, str(sender_pub).lower())
     if not isinstance(chain, dict):
         return "no-chain"
-    path = name_fork.path_after(chain, head)
+    path = name_fork.path_after(chain, head)[:NAMES_GOSSIP_ROTATION_CAP]
+    # Bulwark HIGH: charge EVERY cert against the 32/256 budgets before any
+    # parsing; a path is accepted whole, so a path the budget cannot cover
+    # is refused unparsed. Normalization + libsodium verify run outside
+    # _db_lock; the lock is held only for state reads and writes.
+    if charge_catchup(sender_pub, len(path)) is not None:
+        return "rate-limited"
+    normalized = normalize_rotation_certs(path, sender_pub)
     with _db_lock, _db() as conn:
-        verdict = name_fork.accept_catchup(conn, name, path[:NAMES_GOSSIP_ROTATION_CAP],
-                                           sender_pub)
-        if verdict == "accepted":
-            name_fork.drain_pending(conn, name, sender_pub)
+        verdict = name_fork.accept_catchup(conn, name, path, sender_pub,
+                                           prenormalized=normalized)
+        pend = name_fork.pending_rows(conn, name) if verdict == "accepted" else []
+    if pend:
+        raws = [c for _, c, _ in pend]
+        if charge_catchup(sender_pub, len(raws)) is None:
+            normed = normalize_rotation_certs(raws, sender_pub)
+            if normed is not None:
+                pre = {rid: n for (rid, _, _), n in zip(pend, normed)}
+                with _db_lock, _db() as conn:
+                    name_fork.drain_pending(conn, name, sender_pub,
+                                            prenormalized=pre)
     return verdict
+
+
+# Catch-up budget (Bulwark). A pull is charged ALL-OR-NOTHING before any
+# cert is parsed: first the sending peer's own bucket (the same
+# namefork:<peer> bucket gossip uses, 32 / 60 s), then catch-up's reserved
+# slice of the global budget (64 of the 256 / 60 s), then the global budget.
+# Catch-up can never take more than its slice, so gossip keeps >= 192.
+CATCHUP_PER_SENDER = 32
+CATCHUP_GLOBAL_SLICE = 64
+_catchup_times = deque()
+
+
+def _catchup_sender_ok(q, n) -> bool:
+    """Per-sender bucket check. Patchable: the belt's mutant drops it."""
+    return len(q) + n <= CATCHUP_PER_SENDER
+
+
+def charge_catchup(sender_pub: str, n: int) -> str | None:
+    """None when n units were charged; else which bucket refused
+    ('sender', 'slice', 'global'). Nothing is charged on refusal."""
+    now = time.monotonic()
+    cutoff = now - GOSSIP_VERIFY_GLOBAL_WINDOW
+    with _db_lock:   # O(n) deque bookkeeping only; no parse, no verify
+        q = _hits[f"namefork:{str(sender_pub).lower()}"]
+        while q and now - q[0] > 60.0:
+            q.popleft()
+        for d in (_catchup_times, _gossip_verify_times):
+            while d and d[0] < cutoff:
+                d.popleft()
+        if not _catchup_sender_ok(q, n):
+            return "sender"
+        if len(_catchup_times) + n > CATCHUP_GLOBAL_SLICE:
+            return "slice"
+        if len(_gossip_verify_times) + n > GOSSIP_VERIFY_GLOBAL_LIMIT:
+            return "global"
+        q.extend([now] * n)
+        _catchup_times.extend([now] * n)
+        _gossip_verify_times.extend([now] * n)
+    return None
 
 
 def _spawn_chain_pull(sender_pub: str, name: str) -> None:

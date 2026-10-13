@@ -99,8 +99,8 @@ real = run_stale_path()
 check("fetched path starting from a stale pin is refused whole; not contested", real)
 
 
-def internal_only(conn, name, path):
-    recs = [nf._norm_cert(r) for r in path]
+def internal_only(conn, name, path, prenormalized=None):
+    recs = list(prenormalized) if prenormalized is not None else [nf._norm_cert(r) for r in path]
     if not recs or any(r is None for r in recs):
         return None
     for a, b in zip(recs, recs[1:]):

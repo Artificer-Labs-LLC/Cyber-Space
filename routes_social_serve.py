@@ -1145,9 +1145,12 @@ def _claim_weak_reason(pub: str):
 
 def _rotate_weak_reason(pub: str):
     """ART-40: rotate refuses a weak old or new key before any write.
-    The belt's rotate mutant replaces this with a no-op."""
-    import window_open
-    return window_open.weak_reason(pub)
+    Bulwark: libsodium only (crypto_core_ed25519_is_valid_point, gated on
+    the bundled-library startup probe); never window_open.weak_reason or
+    is_weak. Missing/failed libsodium refuses. The belt's rotate mutant
+    replaces this with a no-op."""
+    import name_fork
+    return name_fork._key_check(str(pub or "").strip().lower())
 
 
 @router.post("/api/v1/names/claim")
