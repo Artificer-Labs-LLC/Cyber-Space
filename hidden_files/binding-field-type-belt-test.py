@@ -233,5 +233,48 @@ _dcode, _dlines = _dial_directory_result(
 check("dial directory valid string entry plans direct",
       _dcode == 0 and any("legacy directory" in _l for _l in _dlines))
 
+print("dial descriptor seat:")
+
+
+def _dial_descriptor_result(desc_pub, desc_name="descseat"):
+    saved_get = core._resolve_get_json
+    saved_bv = core._name_binding_verify
+    saved_dv = core._reach_descriptor_verify
+    now = datetime.now(timezone.utc)
+    binding = {"name": "descseat", "node_pubkey": _digit_pub,
+               "issued_at": _iso(now - timedelta(hours=1)),
+               "expires_at": _iso(now + timedelta(days=364)),
+               "signature": "ab" * 64}
+    desc = {"name": desc_name, "node_pubkey": desc_pub,
+            "reach": [{"kind": "direct", "url": "http://8.8.8.8:8471"}],
+            "issued_at": _iso(now - timedelta(hours=1)),
+            "expires_at": _iso(now + timedelta(days=30)),
+            "signature": "cd" * 64}
+    routes = {"http://127.0.0.1:8471/api/v1/node": {"ok": True},
+              "http://127.0.0.1:8471/api/v1/names/descseat": binding,
+              "http://127.0.0.1:8471/api/v1/names/descseat/reach": desc,
+              "http://127.0.0.1:8471/api/v1/directory?limit=200":
+                  {"entries": []}}
+    core._resolve_get_json = lambda u: routes.get(u)
+    core._name_binding_verify = lambda *a, **k: True
+    # Verify is stubbed True so the SEAT's own comparison is what is
+    # under test: it must not str()-alias even if verify's gates move.
+    core._reach_descriptor_verify = lambda d: True
+    try:
+        return dial.plan("descseat.cyberspace", "http://127.0.0.1:8471")
+    finally:
+        core._resolve_get_json = saved_get
+        core._name_binding_verify = saved_bv
+        core._reach_descriptor_verify = saved_dv
+
+
+check("dial descriptor int node_pubkey refused",
+      _dial_descriptor_result(int(_digit_pub))[0] == 3)
+check("dial descriptor bool name refused",
+      _dial_descriptor_result(_digit_pub, desc_name=True)[0] == 3)
+_dcode, _dlines = _dial_descriptor_result(_digit_pub)
+check("dial descriptor valid string fields plan direct",
+      _dcode == 0 and any("reach descriptor" in _l for _l in _dlines))
+
 print(f"{CASES['passed']} passed, {CASES['failed']} failed")
 sys.exit(1 if CASES["failed"] else 0)

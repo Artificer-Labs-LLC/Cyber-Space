@@ -167,14 +167,22 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # or the descriptor is somebody else's mouth moving.
     desc = core._resolve_get_json(mirror + "/api/v1/names/" + label + "/reach")
     if isinstance(desc, dict) and core._reach_descriptor_verify(desc):
-        if str(desc.get("node_pubkey", "")).lower() != node_pubkey:
+        # Only real strings are descriptor fields (twin of the step-3
+        # binding gate): _reach_descriptor_verify gates name/pub today,
+        # but this seat must not str()-alias on its own — a digit-only
+        # pubkey served as a number stringified to its own hex and the
+        # seat read the descriptor as this name's, the SAME alias the
+        # binding and directory seats refuse on sight.
+        _desc_pub = desc.get("node_pubkey")
+        if not isinstance(_desc_pub, str) or _desc_pub.lower() != node_pubkey:
             # A descriptor that verifies but names a different key is not
             # this name's mouth moving: the daemon (resolve_cyberspace
             # step 5) skips it and falls to the directory scan, so the
             # plan previews that instead of vetoing the dial.
             out.append("note: descriptor names a different key — directory fallback")
             desc = None
-        elif str(desc.get("name", "")).lower() != label:
+        elif not isinstance(desc.get("name"), str) \
+                or desc.get("name").lower() != label:
             # A descriptor that verifies under the right key but was
             # signed for a DIFFERENT name is not this name's mouth
             # moving either: the name is inside the signed canonical
