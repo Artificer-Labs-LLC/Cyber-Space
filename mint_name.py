@@ -251,7 +251,22 @@ def main(argv: list[str]) -> int:
     home.mkdir(parents=True, exist_ok=True)
     key_path = home / f"{label}-name.key"
     if key_path.exists():
-        priv = bytes.fromhex(key_path.read_text().strip())
+        # An existing key file that does not parse as hex (corrupt,
+        # truncated mid-copy, hand-edited) is an operator-side bad
+        # input: bytes.fromhex raised ValueError uncaught and the
+        # mint died in a traceback — a crash, not the refusal every
+        # other bad input here gets, and not the verdict the len
+        # check below gives a parseable-but-wrong-size seed. Refuse
+        # as a bad argument, twin of rotate_name's guarded key reads.
+        # The file is left untouched: never overwrite a key we
+        # could not read.
+        try:
+            priv = bytes.fromhex(key_path.read_text().strip())
+        except (OSError, ValueError):
+            print(f"refused: {key_path} does not hold a hex seed — "
+                  f"fix or remove it; nothing was minted and it was "
+                  f"not overwritten", file=sys.stderr)
+            return 2
         if len(priv) != 32:
             print(f"refused: {key_path} is not a 32-byte seed", file=sys.stderr)
             return 2

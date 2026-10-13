@@ -200,6 +200,22 @@ for label, bad_mirror in (("badportmint", "http://127.0.0.1:99999"),
     check(f"mirror {bad_mirror!r} wrote no key",
           not os.path.exists(os.path.join(HOME, ".cyberspace", f"{label}-name.key")))
 
+# --- corrupt existing key file refused locally, never overwritten ----
+# Every other key reader (rotate_name's three seats) guards its
+# bytes.fromhex read; mint's existing-key load did not, so a key file
+# that is not hex (corrupt, truncated, hand-edited) died in an uncaught
+# ValueError traceback instead of the refusal a parseable-but-wrong-size
+# seed already got. The file must survive untouched — a mint never
+# overwrites a key it could not read.
+for label, junk in (("garbagekey", "not-hex!!"), ("oddkey", "abc")):
+    kp2 = os.path.join(HOME, ".cyberspace", f"{label}-name.key")
+    with open(kp2, "w") as f:
+        f.write(junk)
+    rc = mint_name.main([label, MIRROR])
+    check(f"corrupt key file ({junk!r}) exits 2 locally", rc == 2, f"rc={rc}")
+    check(f"corrupt key file ({junk!r}) left untouched",
+          open(kp2).read() == junk)
+
 server.should_exit = True
 t.join(5)
 print(f"\n{passed} passed, {failed} failed")
