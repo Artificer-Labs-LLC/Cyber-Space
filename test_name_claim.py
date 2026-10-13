@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _node_url_host, _parse_claim_time, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _name_claim_beats, _node_url_host, _old_binding_beaten, _parse_claim_time, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -100,6 +100,39 @@ def conflict_cases():
     check("same key differing only in case: same key",
           _name_claim_beats(_b("x", PUB_A.upper(), LATER),
                             _b("x", PUB_A, EARLY)) is True)
+
+
+def claim_beats_pubkey_cases():
+    print("conflict rule pubkey types:")
+    # Refusal contract is ValueError on a malformed binding, same as
+    # _parse_claim_time — _old_binding_beaten guards ValueError alone
+    # (its Examiner-block fallback). A non-string pubkey escaped as
+    # AttributeError from .lower() (int/None/float/bool/list) or
+    # TypeError from the bytes-vs-str tiebreak instead.
+    from datetime import datetime, timezone
+    now_dt = datetime.now(timezone.utc)
+    for bad in (123, 1.5, True, None, b"aa", ["aa"]):
+        for seat in ("new", "old"):
+            new_b = _b("x", bad if seat == "new" else PUB_A, EARLY)
+            old_b = _b("x", bad if seat == "old" else PUB_B, EARLY)
+            try:
+                got = _name_claim_beats(new_b, old_b)
+            except ValueError:
+                check(f"non-string {seat} pubkey {bad!r} refused as ValueError", True)
+                continue
+            except Exception as e:  # noqa: BLE001
+                check(f"non-string {seat} pubkey {bad!r} refused as ValueError",
+                      False, f"raised {type(e).__name__}: {e}")
+                continue
+            check(f"non-string {seat} pubkey {bad!r} refused as ValueError",
+                  False, f"-> {got!r}")
+    # Downstream: the fallback now engages — a foreign malformed
+    # challenger reads as not-beaten (bool), never a leaked crash.
+    old_live = _b("x", PUB_A, EARLY, expires="2099-01-01T00:00:00+00:00")
+    check("downstream fallback reads foreign malformed as not-beaten",
+          _old_binding_beaten(old_live, _b("x", 123, EARLY), PUB_B, now_dt) is False)
+    check("valid tie-break still exact",
+          _name_claim_beats(_b("x", PUB_A, EARLY), _b("x", PUB_B, EARLY)) is True)
 
 
 def node_url_cases():
@@ -234,6 +267,7 @@ def main():
     print("names-registry primitive tests (core.py):")
     label_cases()
     conflict_cases()
+    claim_beats_pubkey_cases()
     node_url_cases()
     node_url_host_cases()
     reject_nonpublic_cases()

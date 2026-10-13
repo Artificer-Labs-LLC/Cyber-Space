@@ -864,13 +864,26 @@ def _name_claim_beats(new: dict, old: dict) -> bool:
     pubkey comparison. String comparison let mirrors diverge: mirror A
     keeping "Z" and mirror B keeping "+00:00" for the same instant,
     depending on arrival order."""
-    if new["node_pubkey"].lower() == old["node_pubkey"].lower():
+    # The refusal contract is ValueError on a malformed binding — the
+    # same contract _parse_claim_time carries, and the only one the
+    # caller _old_binding_beaten guards (its Examiner-block fallback
+    # engages on ValueError alone). A non-string pubkey (a JSON/gossip
+    # field can carry 123/true/a list straight in) escaped as
+    # AttributeError from .lower(), or TypeError from the bytes-vs-str
+    # tiebreak, past that fallback. Only a real string is a key; refuse
+    # at the source.
+    new_pub = new["node_pubkey"]
+    old_pub = old["node_pubkey"]
+    if not isinstance(new_pub, str) or not isinstance(old_pub, str):
+        raise ValueError(
+            f"node_pubkey must be a string: {new_pub!r} / {old_pub!r}")
+    if new_pub.lower() == old_pub.lower():
         return _parse_claim_time(new["issued_at"]) > _parse_claim_time(old["issued_at"])
     new_t = _parse_claim_time(new["issued_at"])
     old_t = _parse_claim_time(old["issued_at"])
     if new_t != old_t:
         return new_t < old_t
-    return new["node_pubkey"].lower() < old["node_pubkey"].lower()
+    return new_pub.lower() < old_pub.lower()
 
 
 # r3 (ART-29): rotation chain cap. A gossiped rotation chain longer than
