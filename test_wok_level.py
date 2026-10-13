@@ -168,17 +168,28 @@ def row_failclosed():
 def row_triple():
     return refused(lambda: parse(pinfile(OPS, signer_ks=((0, s0), (0, s0), (0, s0)))))
 def row_oor():
-    return refused_as(hl.SignerIndexOutOfRange, lambda: parse(pinfile(OPS, signer_ks=((0, s0), (7, s1)))))
+    # Cipher 5157a264: index == len(signers) refused AS out of range, 0 verifies
+    n = len(SIGNERS)
+    return (refused_as(hl.SignerIndexOutOfRange, lambda: parse(pinfile(OPS, signer_ks=((0, s0), (n, s1)))))
+            and refused_as(hl.SignerIndexOutOfRange, lambda: parse(pinfile(OPS, signer_ks=((0, s0), (7, s1))))))
 def row_thr_one():
-    # threshold 2, exactly one VALID signature: refused before any verify
-    return refused_as(hl.TooFewSignatures, lambda: parse(pinfile(OPS, signer_ks=((0, s0),))))
+    # Cipher 5157a264: threshold 2, exactly one VALID signature -> refused
+    # (TooFewSignatures) before any verify. Control: the same one signature
+    # loads at threshold 1, so the refusal is the count, not the signature.
+    one = pinfile(OPS, signer_ks=((0, s0),))
+    ctl = hl.parse_pins(one, GEN, sig_ok, SIGNERS, 1)["version"] == 3
+    return THR == 2 and ctl and refused_as(hl.TooFewSignatures, lambda: parse(one))
 def row_tag_mode():
     # single-operator tag over a mode-2 body (and the reverse): typed refusal, 0 verifies
     b1, b2 = head(1), head(2)
     t1, t2 = hl.TAGS["single-operator"], hl.TAGS["independent"]
     a = t1 + b2[len(t2):]
     c = t2 + b1[len(t1):]
-    return (refused_as(hl.TagModeMismatch, lambda: hl.verify_head(a, gsig(a), GEN, [], PINS, sig_ok, mark=MARK))
+    b0 = head(0)
+    d = t1 + b0[len(hl.TAGS["unwitnessed"]):]      # Lodestar 2bdecf9c item 3: tag single-operator, mode 0x00
+    return (d[len(t1)] == 0x00
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(d, gsig(d), GEN, cos([f1], d), PINS, sig_ok, mark=MARK))
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(a, gsig(a), GEN, [], PINS, sig_ok, mark=MARK))
             and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(c, gsig(c), GEN, [], PINS, sig_ok, mark=MARK)))
 OP_F2 = b"\x02" * 32
 f3, F3 = K(6)
@@ -189,16 +200,92 @@ def row_single_two_fleet():
     b = head(1, op=OP_FLEET)
     ok_one = ver(b, cos([f1], b), pins=PINS2)[0] == "single-operator"
     return ok_one and _refused_typed(hl.OperatorMismatch, lambda: ver(b, cos([f1, f3], b), pins=PINS2))
+def row_op_x_names_y():
+    # Lodestar 2bdecf9c item 4: single-operator head whose VALID cosigns all
+    # come from operator X (OP_FLEET) but whose body names operator Y.
+    # Y = another pinned fleet operator, an outside operator, an unpinned id.
+    for y in (OP_F2, OP_A, OP_X):
+        b = head(1, op=y)
+        cs = cos([f1], b)
+        if not all(sig_ok(c["pub"], hl.COSIGN_PREFIX + b[len(hl.TAGS["single-operator"]):], c["sig"]) for c in cs):
+            return False                                   # cosigns really are valid
+        if not _refused_typed(hl.OperatorMismatch, lambda: ver(b, cs, pins=PINS2)): return False
+    b = head(1, op=OP_FLEET)                               # control: X names X
+    return ver(b, cos([f1], b), pins=PINS2)[0] == "single-operator"
 def _refused_typed(cls, fn):
     try: fn(); return False
     except Exception as e: return isinstance(e, cls)
-def row_first_contact_switch():
-    # pending Villhaze: default stays TOFU (labelled); the alternative is one switch
+def _fc(b, **kw):
+    out = {}
+    lvl = hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None, out=out, **kw)
+    return lvl, out
+def row_first_contact_default():
+    # PENDING Villhaze (ART-29 2a078f21). Default is FAIL-CLOSED: with no mark
+    # stored, nonzero prev_size is refused before any verify; prev_* is never
+    # skipped silently. prev_size == 0 is accepted and labelled first_contact.
+    bad, ok = head(0, mark=(5, PROOT)), head(0, mark=(0, hl.ZERO32))
+    lvl, out = _fc(ok)
+    return (hl.FIRST_CONTACT == "refuse_nonzero_prev"
+            and refused_as(hl.FirstContactRefused, lambda: _fc(bad))
+            and lvl[0] == "unwitnessed" and out["first_contact"] is True
+            and out["first_contact_policy"] == "refuse_nonzero_prev")
+def row_first_contact_tofu():
+    # the labelled TOFU alternative is one switch; its result is LABELLED
     b = head(0, mark=(5, PROOT))
-    h = hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None)
-    with mock.patch.object(hl, "FIRST_CONTACT", "refuse_nonzero_prev"):
-        alt = refused(lambda: hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None))
-    return hl.FIRST_CONTACT == "tofu" and h[0] == "unwitnessed" and alt
+    with mock.patch.object(hl, "FIRST_CONTACT", "tofu"):
+        lvl, out = _fc(b)
+    with mock.patch.object(hl, "FIRST_CONTACT", "bogus"):
+        unk = refused_as(hl.FirstContactRefused, lambda: _fc(b))
+    _, o2 = (None, {})
+    hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=MARK, out=o2)  # mark stored: not first contact
+    return (lvl[0] == "unwitnessed" and out == {"first_contact": True, "first_contact_policy": "tofu"}
+            and unk and o2["first_contact"] is False)
+import ast
+def override_calls(src, fname="<src>"):
+    """Calls to parse_pins/load_pins that pass signers/threshold (keyword or
+    extra positional). Production code must have none (Cipher 5157a264)."""
+    base = {"parse_pins": 3, "load_pins": 4}
+    hits = []
+    for n in ast.walk(ast.parse(src, fname)):
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+            if name in base and (len(n.args) > base[name] or any(k.arg in ("signers", "threshold") or k.arg is None for k in n.keywords)):
+                hits.append(f"{fname}:{n.lineno}")
+    return hits
+def production_files():
+    root = os.path.dirname(os.path.abspath(hl.__file__))
+    import subprocess
+    try:
+        ls = subprocess.run(["git", "-C", root, "ls-files", "*.py"], capture_output=True, text=True, check=True).stdout.split()
+        return [os.path.join(root, f) for f in ls
+                if not os.path.basename(f).startswith("test_") and os.path.basename(f) != "head_level.py"]
+    except Exception:
+        pass
+    out = []
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if not d.startswith(".") and d not in ("venv", ".venv", "node_modules", "__pycache__")]
+        for f in fn:
+            if f.endswith(".py") and not f.startswith("test_") and f != "head_level.py":
+                out.append(os.path.join(dp, f))
+    return out
+def row_no_prod_override():
+    hits = []
+    for p in production_files():
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try: hits += override_calls(open(p).read(), p)
+            except SyntaxError: hits.append(p + ":unparseable")
+    # inside head_level, only load_pins -> parse_pins forwards them
+    hl_hits = override_calls(open(hl.__file__).read(), "head_level.py")
+    # self-check: the scanner flags each override shape
+    probe = all(override_calls(s_) for s_ in ("hl.parse_pins(d, g, s, ('aa',), 1)",
+                                             "parse_pins(d, g, s, threshold=1)",
+                                             "hl.load_pins(p, g, s, st, signers=x)",
+                                             "hl.load_pins(p, g, s, st, **kw)"))
+    clean = not override_calls("hl.parse_pins(d, g, s); hl.load_pins(p, g, s, st)")
+    return len(production_files()) > 0 and hits == [] and len(hl_hits) == 1 and probe and clean
 def row_sig_calls():
     CALLS[0] = 0; parse(pinfile(OPS, signer_ks=((0, s0), (1, s1), (2, s2)))); return CALLS[0] <= THR
 
@@ -231,13 +318,15 @@ ROWS = [
     ("(P) signature by the wrong signer refused", row_pin_badsig),
     ("(a) placeholder / threshold 0: no pin file, valid fleet cosign still rates unwitnessed", row_failclosed),
     ("(b) three copies of one signer's sig fail threshold 2", row_triple),
-    ("(b) out-of-range signer index refused, 0 verifies", row_oor),
     ("(b) at most threshold-many pin verifies", row_sig_calls),
     ("(C1) threshold 2 with one valid signature refused (TooFewSignatures), 0 verifies", row_thr_one),
     ("(C2) out-of-range signer index: typed SignerIndexOutOfRange, 0 verifies, never IndexError", row_oor),
     ("(L5) tag/mode mismatch both ways: typed TagModeMismatch, 0 verifies", row_tag_mode),
     ("(L5) single-operator with a second fleet operator cosigning: OperatorMismatch", row_single_two_fleet),
-    ("(FC) first-contact switch: default tofu unchanged; refuse_nonzero_prev refuses", row_first_contact_switch),
+    ("(L4) single-operator head: valid cosigns from operator X, body names Y -> OperatorMismatch (Y fleet/outside/unpinned)", row_op_x_names_y),
+    ("(FC) first contact, default fail-closed: nonzero prev_size refused, 0 verifies; prev_size 0 labelled (PENDING Villhaze)", row_first_contact_default),
+    ("(FC) first contact, labelled TOFU switch: accepted + labelled; unknown switch refused", row_first_contact_tofu),
+    ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
 ]
 # sha256 of tag||body for head(m): Genesis seed sha256("wok-level-0"), size 7,
 # root ab*32, prev (5, cd*32), operator 01*32 in mode 1, issued 1700000100.
@@ -266,7 +355,7 @@ def _mut_src(old, new, fn):
     helpers are redefined for mutants."""
     src = open(hl.__file__).read(); assert src.count(old) == 1, old
     ns = {"__name__": "head_level_mut"}; exec(compile(src.replace(old, new), "mut", "exec"), ns)
-    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures"):
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused"):
         ns[n] = getattr(hl, n)
     return ns[fn]
 def mut_parse(old, new):
@@ -275,6 +364,23 @@ def mut_parse(old, new):
 def mut_verify(old, new):
     f = _mut_src(old, new, "verify_head")
     return lambda *a, **k: f(*a, **k)
+def label_dropped(*a, out=None, **k):
+    """Mutant: the first-contact label is not propagated to the caller."""
+    r = ORIG(*a, out={}, **k)
+    if out is not None: out.update({"first_contact": False, "first_contact_policy": None})
+    return r
+def _thr_after():
+    """Mutant: the count check moved after the verify loop (verifies first)."""
+    src = open(hl.__file__).read()
+    chk = '    if len(sigs) < threshold:\n        raise TooFewSignatures("too few pin signatures")\n'
+    tail = '    return {"log_id": lid, "version": version'
+    assert src.count(chk) == 1 and src.count(tail) == 1
+    src = src.replace(chk, "").replace(tail, chk + tail)
+    ns = {"__name__": "head_level_mut"}; exec(compile(src, "mut", "exec"), ns)
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused"):
+        ns[n] = getattr(hl, n)
+    f = ns["parse_pins"]
+    return lambda data, gp, so, signers=None, threshold=None: f(data, gp, so, signers, threshold)
 mut_dupacross = mut_parse('            if pub in seen:\n                raise Refused', '            if False:\n                raise Refused')
 mut_trailing = mut_parse('    if p != len(data):\n        raise Refused("trailing bytes")', '    pass')
 def run_mut(row, patches):
@@ -310,6 +416,11 @@ MUT = [
     ("signer-index range check removed", row_oor, [mock.patch.object(hl, "parse_pins", mut_parse('    if any(i >= len(signers) for i in idx):\n        raise SignerIndexOutOfRange', '    if False:\n        raise SignerIndexOutOfRange'))]),
     ("tag/mode check removed", row_tag_mode, [mock.patch.object(hl, "cheap_head", _mut_src('    if MODES[mode] != m:\n        raise TagModeMismatch', '    if False:\n        raise TagModeMismatch', "cheap_head"))]),
     ("operator_id checked by membership, not equality", row_single_two_fleet, [mock.patch.object(hl, "verify_head", mut_verify('fleet_ops != {h["operator_id"]}', 'h["operator_id"] not in fleet_ops'))]),
+    ("operator_id check removed (X cosigns, body names Y)", row_op_x_names_y, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
+    ("threshold count checked only after verifying", row_thr_one, [mock.patch.object(hl, "parse_pins", _thr_after())]),
+    ("first contact skips prev_* silently", row_first_contact_default, [mock.patch.object(hl, "cheap_head", _mut_src('        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:', '        if False:', "cheap_head"))]),
+    ("first-contact default flipped to TOFU without a ruling", row_first_contact_default, [mock.patch.object(hl, "FIRST_CONTACT", "tofu")]),
+    ("first-contact label dropped", row_first_contact_tofu, [mock.patch.object(hl, "verify_head", label_dropped)]),
     ("operator_id check removed", row_single_wrong_op, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
 ]
 table = []

@@ -48,15 +48,24 @@ class TooFewSignatures(Refused):
     pass
 
 
-# ---- FIRST-CONTACT SWITCH (PENDING VILLHAZE RULING) ----------------------
-# What to do with prev_size/prev_root when no mark is stored yet.
-#   "tofu"                - current behavior, unchanged: accept any prev_*
-#                           on first contact; the result is labelled
-#                           first_contact=True so callers can see it.
-#   "refuse_nonzero_prev" - refuse a first-contact head whose prev_size != 0.
-# This is the single switch; nothing else reads first-contact policy.
-FIRST_CONTACT = "tofu"
-FIRST_CONTACT_CHOICES = ("tofu", "refuse_nonzero_prev")
+class FirstContactRefused(Refused):
+    pass
+
+
+# ---- FIRST-CONTACT SWITCH (PENDING VILLHAZE RULING, ART-29 2a078f21) -----
+# What cheap_head does with prev_size/prev_root when NO continuity mark is
+# stored yet. prev_* is never skipped silently (Lodestar 2bdecf9c, Examiner).
+#   "refuse_nonzero_prev" - DEFAULT, fail-closed: a first-contact head must
+#                           carry prev_size == 0; anything else is refused
+#                           (FirstContactRefused) before any verify.
+#   "tofu"                - labelled trust-on-first-use: a first-contact head
+#                           with any prev_* is accepted as the first mark and
+#                           labelled first_contact=True (cheap_head result and
+#                           verify_head(out=...)).
+# TODO(Villhaze ART-29 2a078f21): flip only on her written ruling. This is
+# the single switch; nothing else reads first-contact policy.
+FIRST_CONTACT = "refuse_nonzero_prev"
+FIRST_CONTACT_CHOICES = ("refuse_nonzero_prev", "tofu")
 
 
 def log_id_of(genesis_pub_hex: str) -> bytes:
@@ -94,13 +103,14 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
         raise Refused("prev_* does not match the stored mark")
     if mark is None:
         if FIRST_CONTACT not in FIRST_CONTACT_CHOICES:
-            raise Refused("FIRST_CONTACT switch has an unknown value")
+            raise FirstContactRefused("FIRST_CONTACT switch has an unknown value")
         if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:
-            raise Refused("first contact with nonzero prev_size")
+            raise FirstContactRefused("first contact with nonzero prev_size")
     if psize > size:
         raise Refused("prev_size > tree_size")
     return {"mode": mode, "level": m, "body": body, "tree_size": size, "root": root,
-            "operator_id": op, "issued_at": issued, "first_contact": mark is None}
+            "operator_id": op, "issued_at": issued, "first_contact": mark is None,
+            "first_contact_policy": FIRST_CONTACT if mark is None else None}
 
 
 def select_cosigns(cosigns, keys):
@@ -117,13 +127,16 @@ def select_cosigns(cosigns, keys):
     return kept
 
 
-def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING):
+def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=RULING, out=None):
     """pins comes from load_pins() (the shipped file), never a response.
     pins=None (fail closed: placeholder signers / threshold 0) rates every
     head at most unwitnessed. Returns (level, cosign_verify_calls)."""
     if pins is None:
         pins = {"keys": {}}
     h = cheap_head(blob, log_id_of(genesis_pub), mark)            # (2) before any verify
+    if out is not None:                     # first-contact label (TOFU path)
+        out["first_contact"] = h["first_contact"]
+        out["first_contact_policy"] = h["first_contact_policy"]
     keys = {k: v for k, v in pins["keys"].items()
             if v["from"] <= h["tree_size"] <= v["to"]}
     if not sig_ok(genesis_pub, blob, genesis_sig):
@@ -164,7 +177,10 @@ def placeholder(signers=None, threshold=None) -> bool:
 
 def parse_pins(data: bytes, genesis_pub: str, sig_ok, signers=None, threshold=None):
     """Structure, sortedness, duplicates, Genesis exclusion, key strength and
-    trailing bytes are all refused BEFORE any signature verify."""
+    trailing bytes are all refused BEFORE any signature verify.
+    signers/threshold overrides are TEST-ONLY: production callers pass
+    neither and get the compiled-in PIN_SIGNERS/PIN_THRESHOLD (Cipher
+    5157a264; enforced by the AST row in test_wok_level.py)."""
     signers = PIN_SIGNERS if signers is None else signers
     threshold = PIN_THRESHOLD if threshold is None else threshold
     if not data.startswith(PIN_MAGIC):
@@ -241,7 +257,8 @@ def parse_pins(data: bytes, genesis_pub: str, sig_ok, signers=None, threshold=No
 
 
 def load_pins(path: str, genesis_pub: str, sig_ok, state_path: str, signers=None, threshold=None):
-    """Local path only. Highest pin_version seen is stored; rollback refused."""
+    """Local path only. Highest pin_version seen is stored; rollback refused.
+    signers/threshold overrides are TEST-ONLY (see parse_pins)."""
     if placeholder(signers, threshold):
         return None                         # fail closed: load no pin file
     if "://" in str(path):
