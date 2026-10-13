@@ -1274,9 +1274,16 @@ def _relay_route(desc):
         for strat in reach:
             if not isinstance(strat, dict):
                 continue
-            if str(strat.get("kind", "")) != "relay":
+            # Only real strings are strategy fields: str() here aliased
+            # a digit-only relay pubkey served as a JSON number into its
+            # own 64-char hex, returned as that relay route — the SAME
+            # alias the binding/descriptor seats refuse on sight.
+            if strat.get("kind") != "relay":
                 continue
-            relay_pub = str(strat.get("relay", "")).lower()
+            _relay_raw = strat.get("relay")
+            if not isinstance(_relay_raw, str):
+                continue
+            relay_pub = _relay_raw.lower()
             if len(relay_pub) != 64:
                 continue
             try:
@@ -1284,7 +1291,7 @@ def _relay_route(desc):
             except ValueError:
                 continue
             try:
-                url = _valid_node_url(str(strat.get("url", "")))
+                url = _valid_node_url(strat.get("url", ""))
             except HTTPException:
                 continue
             if not url:
