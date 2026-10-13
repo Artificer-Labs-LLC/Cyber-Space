@@ -1869,6 +1869,17 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
             # descriptor cross-name case, one step later).
             if str(live.get("name", "")).lower() != label:
                 return None
+            # String-length gate, twin of step 2 above and dial.plan's
+            # binding seat: this seat passed the peer-served signature
+            # straight to verify with no length gate, and
+            # bytes.fromhex ignores embedded spaces, so a 129-char
+            # signature with an inserted space (or an outer-padded
+            # spelling) decoded to the TRUE 64 bytes and VERIFIED —
+            # resolve returned the address for a live row every other
+            # binding seat refuses on sight (len(signature) != 128).
+            # The decoded-length half remains checkvalid's own gate.
+            if len(str(live.get("signature", ""))) != 128:
+                return None
             if not _name_binding_verify(
                     str(live.get("name", "")).lower(), node_pubkey,
                     str(live.get("issued_at", "")),
