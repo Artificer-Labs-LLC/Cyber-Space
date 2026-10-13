@@ -758,6 +758,19 @@ def node_directory(cap: str | None = Query(default=None),
             d["capabilities"] = json.loads(d["capabilities"])
         except (TypeError, ValueError):
             d["capabilities"] = []
+        # Only a real list is a capability tag set: a stored JSON
+        # string/int/dict loaded verbatim was SERVED as the entry's
+        # capabilities, and the cap filter below then substring-matched
+        # a string ("mess" matched "messaging" — the route promises
+        # exact tag match), key-matched a dict, and crashed TypeError
+        # on an int. Every writer stores a list of strings; any other
+        # loaded shape reads as no tags, and non-string members of a
+        # list are not tags.
+        if not isinstance(d["capabilities"], list):
+            d["capabilities"] = []
+        else:
+            d["capabilities"] = [c for c in d["capabilities"]
+                                 if isinstance(c, str)]
         entries.append(d)
     if cap:
         entries = [e for e in entries if cap in e["capabilities"]]
