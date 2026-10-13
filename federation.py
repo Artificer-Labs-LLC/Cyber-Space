@@ -1215,6 +1215,20 @@ def fed_workspace_removed(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; step 2, fourth and last
+    # workspace receiver — twin of fed_workspace_invite 521e601 /
+    # countersign 3fe8abc / leave b1af9b9): claim the envelope's sig
+    # after verify+recipient, before the sender_pub mismatch check, the
+    # peer standing gate, the removed_sig ed25519 verify, and the
+    # struck_at write. verify_envelope already established a valid sig,
+    # so the claim's ValueError is unreachable. Named post-claim edges:
+    # sender_pub mismatch, unknown peer, bad member_key, bad
+    # removed_sig, and no-row all claim; genuine resends re-sign with a
+    # fresh ts (new sig) and land on the real row state (idempotent 200
+    # already_struck), never a replay false-positive.
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
