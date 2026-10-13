@@ -78,11 +78,23 @@ def _doc_name(doc) -> str:
     return ""
 
 
+# Mirror-response read bound, twin of core._PEER_RESP_MAX: the mirror
+# is untrusted for every shape this client checks, so its body gets the
+# same 64KB cap core puts on peer reads (a rotations document or a live
+# binding is a few hundred bytes to a few KB). read() unbounded let a
+# mirror — or anything answering for it — stream an endless body into
+# memory before any shape check ran.
+_FETCH_MAX = 65536
+
+
 def _fetch(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read(_FETCH_MAX + 1)
+            if len(raw) > _FETCH_MAX:
+                raise ChainError(f"mirror returned oversize response at {url}")
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
             raise ChainError(f"mirror says no chain here: HTTP {e.code} {url}")
