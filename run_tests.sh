@@ -14,6 +14,7 @@ TESTS=(
   "test_name_claim.py"
   "test_verify_name.py"
   "test_resolve_chain.py"
+  "test_rotate_name.py"
   "test_rendezvous.py"
   "test_hold_open.py"
   "resolver/test_answer_aaaa.py"

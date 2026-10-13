@@ -183,6 +183,27 @@ def _get_json(url: str, timeout: float = 30.0) -> dict | None:
 def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
                   issued_at: str | None = None) -> dict:
     """Mint a rotation record dict. Raises ValueError on a refused input."""
+    # Every argument is caller-supplied at this library seat (main()
+    # passes validated values, but a direct caller can pass anything):
+    # a non-string label/new_pubkey escaped as AttributeError from
+    # _normalize's .strip(), a non-bytes seed as TypeError from len()
+    # or the signer, and a non-string/non-canonical issued_at either
+    # escaped as AttributeError from the payload's .encode() or —
+    # worse — minted a record verify_rotation itself refuses as
+    # non-canonical, a rotation no seat will ever accept. Gate the
+    # types at the source, and hold an explicit issued_at to the same
+    # canonical shape verify_rotation demands; only then is a minted
+    # record one the verifier can vouch for. A future issued_at stays
+    # mintable (verify reads it as not-yet-in-force, by design).
+    if not isinstance(label, str):
+        raise ValueError("label is not a string")
+    if not isinstance(old_priv, (bytes, bytearray)):
+        raise ValueError("old key is not a 32-byte seed")
+    old_priv = bytes(old_priv)
+    if not isinstance(new_pub_hex, str):
+        raise ValueError("new_pubkey is not a string")
+    if issued_at is not None and not isinstance(issued_at, str):
+        raise ValueError("issued_at is not a string")
     if len(old_priv) != 32:
         raise ValueError("old key is not a 32-byte seed")
     label = _normalize(label)
@@ -200,6 +221,7 @@ def mint_rotation(label: str, old_priv: bytes, new_pub_hex: str,
         raise ValueError("rotation to the same key is a no-op — renew the "
                          "claim instead")
     issued_at = issued_at or _iso_now()
+    _parse_canonical_ts(issued_at)  # raises ValueError if non-canonical
     payload = _rotate_payload(label, old_pub_hex, new_pub_hex, issued_at)
     sig = sign(payload, old_priv, bytes.fromhex(old_pub_hex)).hex().lower()
     return {"name": label, "old_pubkey": old_pub_hex,
