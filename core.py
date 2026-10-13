@@ -897,7 +897,24 @@ def _reach_descriptor_verify(desc) -> bool:
             return False
         if not isinstance(pub, str) or len(pub) != 64:
             return False
-        bytes.fromhex(pub)  # bad hex -> refusal
+        # Decoded-length gate, twin of verify_name: bytes.fromhex
+        # ignores embedded spaces, so a spaced 64-char pubkey decodes
+        # to fewer than 32 bytes — malformed, not merely unverifiable.
+        if len(bytes.fromhex(pub)) != 32:  # bad hex -> refusal
+            return False
+        # Signature shape gate, twin of verify_rotation (3fbb38b): the
+        # signature is not part of the canonical form, and this verify
+        # carried NO length gate at all — bytes.fromhex ignores
+        # embedded spaces, so a 129-char signature with an inserted
+        # space decoded to the TRUE 64 bytes and the descriptor
+        # VERIFIED, a spelling every binding seat refuses on sight
+        # (resolve/dial gate len(signature) != 128). Only a 128-char
+        # string decoding to exactly 64 bytes is a signature.
+        sig = desc["signature"]
+        if not isinstance(sig, str) or len(sig) != 128:
+            return False
+        if len(bytes.fromhex(sig)) != 64:  # bad hex -> refusal
+            return False
         reach = desc["reach"]
         if not isinstance(reach, list):
             return False
@@ -939,7 +956,7 @@ def _reach_descriptor_verify(desc) -> bool:
         if expires_dt <= now_utc:
             return False
         return _fed_ed25519.checkvalid(
-            bytes.fromhex(desc["signature"]),
+            bytes.fromhex(sig),
             _reach_canonical(name, pub, reach, issued_at, expires_at),
             bytes.fromhex(pub))
     except Exception:
