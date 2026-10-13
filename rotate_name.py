@@ -223,6 +223,26 @@ def _read_seed(path) -> bytes:
     return bytes.fromhex(raw.strip())
 
 
+# Hostd-env read bound: an env file is a handful of KEY=value lines, yet
+# both env seats (promote's staging-env refresh, _installed_env_note's
+# read-only check) loaded it via read_text() unbounded. The cap matches
+# the record bound above (64KB, far over any real env) so valid envs
+# read byte-exact; anything larger is never a hostd env.
+_ENV_MAX = 65536
+
+
+def _read_env_text(path):
+    """Read a hostd env file under _ENV_MAX; None when oversize.
+
+    Raises OSError exactly as path.read_text() did, so each caller's
+    existing OSError refusal wording is untouched; oversize returns
+    None and each caller maps it to its own not-accounted-for warning,
+    never parsing or writing the file."""
+    with path.open(encoding="utf-8") as f:
+        raw = f.read(_ENV_MAX + 1)
+    return None if len(raw) > _ENV_MAX else raw
+
+
 def _post_form(url: str, fields: dict, timeout: float = 30.0
                ) -> tuple[int | None, str]:
     """POST urlencoded form; returns (status, body). status None = no HTTP
@@ -444,11 +464,16 @@ def _installed_env_note(installed_path: Path, old_hex: str,
     if not installed_path.exists():
         return ""
     try:
-        text = installed_path.read_text()
+        text = _read_env_text(installed_path)
     except OSError:
         return (f"; WARNING: installed hostd env at {installed_path} "
                 f"unreadable — check its CYBERNET_NAME_PRIVKEY manually; "
                 f"hostd reads that file, not the staging env")
+    if text is None:
+        return (f"; WARNING: installed hostd env at {installed_path} "
+                f"exceeds {_ENV_MAX} chars — check its "
+                f"CYBERNET_NAME_PRIVKEY manually; hostd reads that "
+                f"file, not the staging env")
     cur = None
     hosted = None
     for line in text.splitlines():
@@ -575,9 +600,12 @@ def promote_rotation(label: str, home: Path,
     env_path = home / "hostd" / f"{label}.env"
     if env_path.exists():
         try:
-            new_text, status = _refresh_hostd_env_text(
-                env_path.read_text(), old_priv.hex(), new_priv.hex(),
-                label)
+            _env_raw = _read_env_text(env_path)
+            if _env_raw is None:
+                status, new_text = "oversize", None
+            else:
+                new_text, status = _refresh_hostd_env_text(
+                    _env_raw, old_priv.hex(), new_priv.hex(), label)
         except OSError:
             status, new_text = "unreadable", None
         if status == "wrong-name":
@@ -595,6 +623,10 @@ def promote_rotation(label: str, home: Path,
                         f"different key — NOT touched; update its "
                         f"CYBERNET_NAME_PRIVKEY manually or hostd will "
                         f"sign with the wrong key")
+        elif status == "oversize":
+            env_note = (f"; WARNING: hostd env at {env_path} exceeds "
+                        f"{_ENV_MAX} chars — NOT touched; check its "
+                        f"CYBERNET_NAME_PRIVKEY manually")
         elif status == "unreadable":
             env_note = (f"; WARNING: hostd env at {env_path} unreadable — "
                         f"check its CYBERNET_NAME_PRIVKEY manually")
