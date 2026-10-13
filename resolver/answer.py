@@ -350,8 +350,15 @@ def handle_query(raw: bytes, *, mirror_url: str, upstream: tuple[str, int],
     if not isinstance(result, dict):
         return build_response(query, [], 3)  # NXDOMAIN: the namespace is silent
 
-    addrs = _family_addresses(str(result.get("node_url", "")), qtype)
+    # Only real strings are result fields: str() here aliased a
+    # non-string node_url whose string form is a valid URL into an
+    # answer for a URL nobody served in that form — the same alias
+    # the binding seats refuse on sight. Both helpers already gate
+    # on their own (a non-string node_url has no addresses, a
+    # non-string expires_at floors the TTL at 0), so the fields pass
+    # raw and their gates stand; absent fields keep the "" default.
+    addrs = _family_addresses(result.get("node_url", ""), qtype)
     if not addrs:
         return build_response(query, [], 0)  # NODATA: name lives, family absent
-    ttl = _ttl_for(str(result.get("expires_at", "")), ttl_cap)
+    ttl = _ttl_for(result.get("expires_at", ""), ttl_cap)
     return build_response(query, [(qtype, ttl, a) for a in addrs], 0)
