@@ -54,6 +54,26 @@ _LABEL_MAX = 63
 _DEFAULT_EXPIRY_DAYS = 364
 _EXPIRY_DAYS_CAP = 365
 
+# Key-seed read bound, twin of rotate_name's _SEED_MAX: a seed file is
+# 64 hex chars plus whitespace, yet the existing-key seat loaded it via
+# read_text() unbounded before bytes.fromhex ran. The cap is generous
+# (16x a real seed file) so padded/hand-copied seeds still read
+# byte-exact; anything larger is never a seed.
+_SEED_MAX = 1024
+
+
+def _read_seed(path) -> bytes:
+    """Read a hex seed file under _SEED_MAX; ValueError on oversize.
+
+    Raises OSError/ValueError exactly as the seat's old
+    bytes.fromhex(path.read_text().strip()) did, so the caller's
+    existing (OSError, ValueError) refusal wording is untouched."""
+    with path.open(encoding="utf-8") as f:
+        raw = f.read(_SEED_MAX + 1)
+    if len(raw) > _SEED_MAX:
+        raise ValueError(f"seed file at {path} exceeds {_SEED_MAX} chars")
+    return bytes.fromhex(raw.strip())
+
 
 def _write_secret(path, text, overwrite=False):
     """Write a secret file that is never world-readable, even briefly.
@@ -319,7 +339,7 @@ def main(argv: list[str]) -> int:
         # The file is left untouched: never overwrite a key we
         # could not read.
         try:
-            priv = bytes.fromhex(key_path.read_text().strip())
+            priv = _read_seed(key_path)
         except (OSError, ValueError):
             print(f"refused: {key_path} does not hold a hex seed — "
                   f"fix or remove it; nothing was minted and it was "
