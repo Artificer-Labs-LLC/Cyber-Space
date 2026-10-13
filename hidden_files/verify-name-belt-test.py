@@ -178,10 +178,21 @@ for bad_pin in ("zz", "ab" * 16, "zz" * 32):
     check(f"CLI malformed --expect-pubkey {bad_pin[:8]!r} -> exit 2 bad argument",
           rc == 2 and "bad argument" in err and "--expect-pubkey" in err)
 
-for bad_name in ("bad..name", "-bad", ""):
+for bad_name in ("bad..name", ""):
     rc, out, err = _run_cli_pin(b, "--expect-name", bad_name)
     check(f"CLI malformed --expect-name {bad_name!r} -> exit 2 bad argument",
           rc == 2 and "bad argument" in err and "--expect-name" in err)
+
+# A leading-hyphen label in SPACE form never reaches the gate: argparse
+# reads "-bad" as an option token, errors "expected one argument" and
+# raises SystemExit(2) — the same exit-2 bad-argument verdict, delivered
+# by argparse itself, but uncatchable here as a return code (an earlier
+# version of this loop died on that SystemExit mid-run, silently hiding
+# every later check). The =-form delivers the value to the gate, which
+# is the production behavior under test.
+rc, out, err = _run_cli_pin(b, "--expect-name=-bad")
+check("CLI malformed --expect-name '-bad' (=-form) -> exit 2 bad argument",
+      rc == 2 and "bad argument" in err and "--expect-name" in err)
 
 out, err = io.StringIO(), io.StringIO()
 with redirect_stdout(out), redirect_stderr(err):
