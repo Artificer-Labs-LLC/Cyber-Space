@@ -281,6 +281,64 @@ def _test_undialable_server():
           f"rc={rc} out={out[:80]!r}")
 
 
+# 5h. no --port: the port comes from CYBERNET_RESOLVER_PORT, exactly
+#     as the daemon and the resolver client derive it (agreement, not
+#     a second parser): env 53599 is queried, an explicit --port still
+#     wins over the env, a non-integer env falls back to 5353, and an
+#     env port above 65535 hits the same bad-argument gate as --port
+def _test_env_port_default():
+    seen = []
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        seen.append(port)
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    def _run(argv, env):
+        seen.clear()
+        real = smoke._query
+        smoke._query = _counting
+        old_argv = sys.argv
+        old_env = os.environ.get("CYBERNET_RESOLVER_PORT")
+        sys.argv = ["smoke.py", "--server", "127.0.0.1"] + argv
+        if env is None:
+            os.environ.pop("CYBERNET_RESOLVER_PORT", None)
+        else:
+            os.environ["CYBERNET_RESOLVER_PORT"] = env
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = smoke.main()
+        finally:
+            smoke._query = real
+            sys.argv = old_argv
+            if old_env is None:
+                os.environ.pop("CYBERNET_RESOLVER_PORT", None)
+            else:
+                os.environ["CYBERNET_RESOLVER_PORT"] = old_env
+        return rc, buf.getvalue()
+
+    rc, _ = _run([], "53599")
+    check("env port 53599 queried when --port omitted",
+          rc == 0 and seen and all(p == 53599 for p in seen),
+          f"rc={rc} seen={seen}")
+    rc, _ = _run(["--port", "53598"], "53599")
+    check("explicit --port wins over env port",
+          rc == 0 and seen and all(p == 53598 for p in seen),
+          f"rc={rc} seen={seen}")
+    rc, _ = _run([], "banana")
+    check("non-integer env port falls back to 5353",
+          rc == 0 and seen and all(p == 5353 for p in seen),
+          f"rc={rc} seen={seen}")
+    rc, out = _run([], "99999")
+    check("env port 99999 -> exit 1, no query, bad argument",
+          rc == 1 and not seen and "not a dialable port" in out,
+          f"rc={rc} seen={seen} out={out[:80]!r}")
+    rc, _ = _run([], None)
+    check("no env port -> 5353 (control)",
+          rc == 0 and seen and all(p == 5353 for p in seen),
+          f"rc={rc} seen={seen}")
+
+
 # 6. packet shape: _build_query header parses, qname encodes
 def _test_packet_shape():
     random.seed(0)
@@ -307,6 +365,7 @@ if __name__ == "__main__":
     _test_undialable_port()
     _test_malformed_name()
     _test_undialable_server()
+    _test_env_port_default()
     _test_packet_shape()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")

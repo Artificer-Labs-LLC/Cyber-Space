@@ -17,7 +17,7 @@ Exit 0 if all run checks pass, 1 otherwise. Prints what it saw.
 
 Usage:
   python resolver/wiring/smoke.py [--name genesis.cyberspace]
-                                  [--server 127.0.0.1] [--port 5353]
+                                  [--server 127.0.0.1] [--port N]
                                   [--tcp]
 
 --server may be an IPv6 literal, bare ("::1") or bracketed ("[::1]",
@@ -27,6 +27,7 @@ the resolver client dials; see _server_host/_server_family.
 
 import argparse
 import ipaddress
+import os
 import random
 import socket
 import struct
@@ -36,6 +37,25 @@ import sys
 _QTYPE_A = 1
 _QTYPE_AAAA = 28
 _QCLASS_IN = 1
+
+
+def _default_port() -> int:
+    """Port when --port is not given: CYBERNET_RESOLVER_PORT, else 5353.
+
+    Mirrors daemon._env_int("CYBERNET_RESOLVER_PORT", 5353, floor=1)
+    and client._default_port exactly, so all three seats derive the
+    same port from the same environment. The literal 5353 default
+    disagreed: a daemon bound on the env port was smoked on 5353 and
+    read as "unreachable" — a verdict on the daemon — when the smoke
+    simply never asked the port the operator configured. An explicit
+    --port still wins; the resolved value passes the 1..65535 gate in
+    main() like any other port."""
+
+
+    try:
+        return max(1, int(os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()))
+    except (ValueError, TypeError):
+        return 5353
 
 
 def _build_query(name: str, qtype: int) -> tuple[bytes, int]:
@@ -135,10 +155,14 @@ def main() -> int:
     ap.add_argument("--name", default="genesis.cyberspace",
                     help="registered name to resolve (default: genesis.cyberspace)")
     ap.add_argument("--server", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=5353)
+    ap.add_argument("--port", type=int, default=None,
+                    help="daemon port (default: CYBERNET_RESOLVER_PORT "
+                         "or 5353, as the daemon and client derive it)")
     ap.add_argument("--tcp", action="store_true",
                     help="run the same checks over DNS-over-TCP (RFC 7766)")
     args = ap.parse_args()
+    if args.port is None:
+        args.port = _default_port()
 
     # The port is part of the argument shape: a port outside 1..65535
     # can never be dialed (sendto raises OverflowError, create_connection
