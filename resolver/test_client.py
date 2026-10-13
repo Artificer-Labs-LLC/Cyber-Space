@@ -957,6 +957,38 @@ class ClientTests(unittest.TestCase):
                 "node.cyberspace", port=70000, timeout=1.0, tcp_only=True
             )
 
+    def test_malformed_timeout_udp_raises_resolve_error(self):
+        """A malformed timeout reached settimeout raw: negative escaped
+        as ValueError, a string as TypeError, None meant block forever,
+        True aliased to 1s, inf/NaN were blocking in disguise. Every one
+        must surface as ResolveError before any socket is touched."""
+        packet = client._build_query(0x1234, "node.cyberspace", 1)
+        for bad in (-1, 0, "2", None, True, False,
+                    float("inf"), float("nan")):
+            with self.assertRaises(client.ResolveError):
+                client._query_udp(0x1234, packet, "127.0.0.1", 5353,
+                                  bad, sock=_FakeUdpSock())
+
+    def test_malformed_timeout_resolve_tcp_raises_resolve_error(self):
+        """Same gate through resolve() on the TCP wire: the bad timeout
+        is refused as ResolveError, never a raw ValueError/TypeError
+        and never a silent forever-block on a dead daemon."""
+        for bad in (-1, 0, "2", None, True, float("inf")):
+            server = _tcp_server(_a_response)
+            with self.assertRaises(client.ResolveError):
+                client.resolve("node.cyberspace", timeout=bad,
+                               _tcp_sock=server, tcp_only=True)
+
+    def test_valid_timeout_still_resolves(self):
+        """Boundaries untouched: int and float positive timeouts work."""
+        for good in (1, 2.0, 0.5):
+            server = _tcp_server(_a_response)
+            self.assertEqual(
+                client.resolve("node.cyberspace", timeout=good,
+                               _tcp_sock=server, tcp_only=True),
+                ["10.9.8.7"],
+            )
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)

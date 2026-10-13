@@ -32,6 +32,7 @@ Env (mirrors daemon defaults):
 """
 
 import ipaddress
+import math
 import os
 import random
 import socket
@@ -386,6 +387,26 @@ def _parse_response(
     return flags, answers
 
 
+def _check_timeout(timeout: float) -> float:
+    """Gate a caller-supplied timeout before any socket sees it.
+
+    The timeout reaches settimeout/create_connection raw: a negative
+    value escaped as a raw ValueError and a string as a raw TypeError
+    (neither is the ResolveError transport contract), None meant
+    BLOCK FOREVER — a silent daemon would hang the client without
+    limit, the opposite of fail-closed — True aliased to 1 second
+    (bool is an int subclass), and inf/NaN were blocking in disguise
+    or undefined. A timeout must be a real int/float (never bool),
+    finite, and positive; anything else is a transport failure,
+    refused here on both wires — the same fail-closed shape
+    _build_query/_parse_response apply to caller-supplied txid/qtype.
+    """
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
+            or not math.isfinite(timeout) or timeout <= 0:
+        raise ResolveError(f"bad timeout {timeout!r}")
+    return timeout
+
+
 def _read_exact(sock: socket.socket, n: int) -> bytes:
     """Read exactly n bytes or raise ResolveError (EOF is a failure)."""
     buf = b""
@@ -416,6 +437,7 @@ def _query_udp(
     owner — came from a stranger who reached the ephemeral port, and
     is refused rather than parsed.
     """
+    _check_timeout(timeout)
     host = _server_host(server)
     s = sock
     try:
@@ -466,6 +488,7 @@ def _query_tcp(
     qtype: int | None = None,
 ) -> tuple[int, list[tuple[int, bytes]]]:
     """One DNS-over-TCP round trip (RFC 7766): length-prefixed frames."""
+    _check_timeout(timeout)
     s = sock
     try:
         if s is None:
