@@ -46,7 +46,11 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     out: list[str] = []
 
     # Step 0: label shape — an invalid label is a name-side failure, and
-    # the plan never goes to the network for it.
+    # the plan never goes to the network for it. A non-string address
+    # reached .strip() raw and escaped as AttributeError/TypeError,
+    # breaking plan()'s never-raises contract; it is no label at all.
+    if not isinstance(address, str):
+        return 1, ["name-side: address is not a string"]
     addr = (address or "").strip().lower()
     if addr.endswith("."):
         addr = addr[:-1]  # a single FQDN root dot, as the resolver client accepts
@@ -55,6 +59,10 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     label = addr[: -len(core.CYBERSPACE_SUFFIX)]
     if not core._valid_name_label(label):
         return 1, ["name-side: invalid label"]
+    # A non-string mirror reached .strip() raw the same way — a bad
+    # argument (exit 4), never a crash and never "mirror: silent".
+    if not isinstance(mirror, str):
+        return 4, ["args: mirror URL is not a string"]
     mirror = (mirror or "").strip().rstrip("/")
     if not mirror:
         return 4, ["args: empty mirror URL"]

@@ -93,6 +93,18 @@ class DialPlanTests(unittest.TestCase):
         code, _ = dial.plan("example.com", MIRROR)
         self.assertEqual(code, 1)
 
+    def test_nonstring_address_or_mirror_never_raises(self):
+        # plan() promises "never raises on bad input": a non-string
+        # address/mirror escaped as AttributeError/TypeError from
+        # .strip()/.endswith() before any verdict could be returned.
+        for bad in (None, 123, 1.5, True, b"foo.cyberspace"):
+            code, lines = dial.plan(bad, MIRROR)
+            self.assertEqual(code, 1, bad)
+            self.assertIn("not a string", lines[0])
+            code, lines = dial.plan(ADDR, bad)
+            self.assertEqual(code, 4, bad)
+            self.assertIn("not a string", lines[0])
+
     def test_fqdn_root_dot_is_accepted(self):
         # The resolver client accepts one trailing dot (the FQDN root
         # marker, resolver/client.py _build_query/resolve), so the
