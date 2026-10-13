@@ -13,7 +13,7 @@ from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _db_lock, _delta_payload, _countersign_payload, _hash_key,
                   _invite_payload, _leave_payload, _now, _pigeonhole_cutoff,
                   _peer_urlopen, _post_message, _read_peer_json,
-                  _removed_payload, _valid_name,
+                  _removed_payload, _touch_visitor, _valid_name,
                   _valid_node_url, ingest_reach_descriptor)
 
 router = APIRouter()
@@ -1013,6 +1013,18 @@ def fed_workspace_countersign(env: dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
     if env.get("recipient") != _NODE_PUB:
         raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe (restored 2026-10-13; step 2, second receiver — twin
+    # of fed_workspace_invite 521e601): claim the envelope's sig after
+    # verify+recipient, before the sender_pub mismatch check, the peer
+    # standing gate, the countersign_sig ed25519 verify, and the
+    # countersigned_at write. verify_envelope already established a
+    # valid sig, so the claim's ValueError is unreachable. Named
+    # post-claim edges: sender_pub mismatch, unknown peer, and bad
+    # countersign_sig all claim; genuine resends re-sign with a fresh
+    # ts (new sig) and stay idempotent success.
+    with _db_lock, _db() as conn:
+        if _claim_seen_sig(conn, env.get("sig")):
+            raise HTTPException(status_code=400, detail="replay")
     body = env.get("body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid envelope")
@@ -1078,6 +1090,13 @@ def fed_workspace_countersign(env: dict):
                 "UPDATE workspace_remote_members SET countersigned_at=? "
                 "WHERE workspace_id=? AND agent_pub=? AND node_name=?",
                 (_now(), wid, invitee_key, invitee_node))
+        # Visitors v1 item 3 (restored 2026-10-13; aac4aac's touch was
+        # lost in the core split along with the replay claim): the remote
+        # seat taken is a visit — {invitee_key}@{verified roster name},
+        # room "workspaces", never the contents; seat and touch commit
+        # together in this transaction.
+        _touch_visitor(conn, f"{invitee_key}@{invitee_node}", invitee_node,
+                       "workspaces")
     return {"countersigned": True, "workspace_id": wid, "node": NODE_NAME,
             "from_node": invitee_node, "agent_key": invitee_key,
             "charter_hash": own_hash}
