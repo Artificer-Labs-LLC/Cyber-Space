@@ -223,8 +223,25 @@ def _server_target(host: str, port: int):
     return family, sockaddr, str(ipaddress.ip_address(sockaddr[0]))
 
 
+def _check_name_read(data, off) -> None:
+    """Gate a name read's packet and offset before any indexing.
+
+    Twin of dns._read_name's gate: a non-bytes packet escaped as
+    TypeError from the index/& below (str) or len() (None/int), a
+    float/str/None offset as TypeError, True aliased to offset 1,
+    and a NEGATIVE offset silently read from the packet's tail
+    (data[-1] is its last byte) — none of them the ValueError this
+    smoke's response refusals promise. Only a real bytes packet at
+    a real, non-negative int offset (bool excluded) has a name."""
+    if not isinstance(data, (bytes, bytearray)) \
+            or not isinstance(off, int) or isinstance(off, bool) \
+            or off < 0:
+        raise ValueError("truncated DNS response — response is not ours")
+
+
 def _skip_name(data: bytes, off: int) -> int:
     """Offset just past the name at off (labels or a pointer)."""
+    _check_name_read(data, off)
     while True:
         if off >= len(data):
             raise ValueError("truncated DNS response — response is not ours")
@@ -244,6 +261,7 @@ def _skip_name(data: bytes, off: int) -> int:
 def _read_name(data: bytes, off: int) -> tuple[str, int]:
     """(dotted name, offset past it) at off — twin of dns._read_name:
     labels plus compression pointers, pointer cycles bounded."""
+    _check_name_read(data, off)
     labels: list[str] = []
     jumped = False
     end = off

@@ -1933,6 +1933,30 @@ def _test_query_port_malformed():
           and smoke._check_port(65535) == 65535)
 
 
+# 11. _skip_name/_read_name refuse a non-bytes packet and a bad
+#     offset instead of leaking TypeError or reading the tail
+#     (twin of dns._read_name): a str/None packet escaped as
+#     TypeError, True aliased to offset 1, and a negative offset
+#     silently read data[-1] from the packet tail.
+def _test_name_read_malformed():
+    pkt = b"\x03www\x00"
+    for fn in (smoke._skip_name, smoke._read_name):
+        for data, off in (("abc", 0), (None, 0), (123, 0),
+                          (pkt, -1), (pkt, True), (pkt, 1.5),
+                          (pkt, "0"), (pkt, None)):
+            try:
+                fn(data, off)
+                err = None
+            except Exception as exc:  # noqa: BLE001 - refusal is the check
+                err = exc
+            check(f"{fn.__name__}(data={data!r}, off={off!r}) -> ValueError",
+                  isinstance(err, ValueError), f"err={err}")
+    check("_skip_name/_read_name valid reads untouched",
+          smoke._skip_name(pkt, 0) == 5
+          and smoke._read_name(pkt, 0) == ("www", 5)
+          and smoke._read_name(bytearray(pkt), 0) == ("www", 5))
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -1968,6 +1992,7 @@ if __name__ == "__main__":
     _test_query_timeout_malformed()
     _test_read_exact_malformed()
     _test_query_port_malformed()
+    _test_name_read_malformed()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)
