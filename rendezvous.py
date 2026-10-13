@@ -91,8 +91,20 @@ def derive_points(now: float, name_pub_hex: str,
     if epoch is None:
         return None
     cur = derive_point_id(name_pub_hex, epoch)
-    prev = derive_point_id(name_pub_hex, epoch - 1) if epoch > 0 else None
-    if cur is None or prev is None:
+    if cur is None:
+        return None
+    # Epoch 0 has no predecessor: the first epoch began at the unix
+    # epoch, so there is no E-1 point to derive. Returning None there
+    # read a valid `now` in the first epoch as invalid input — the
+    # current point existed (derive_point_id proves it) yet the pair
+    # collapsed and point_is_current read even that point as unwilling,
+    # so rendezvous went dark for the whole first epoch. The current
+    # point is its own pair-mate at epoch 0: every caller keeps the
+    # 2-tuple shape (register both, probe both, compare both), the
+    # duplicate register/probe is idempotent, and no point from a
+    # nonexistent epoch is ever invented.
+    prev = derive_point_id(name_pub_hex, epoch - 1) if epoch > 0 else cur
+    if prev is None:
         return None
     return (cur, prev)
 

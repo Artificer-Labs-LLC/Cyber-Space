@@ -66,6 +66,22 @@ if rendezvous.epoch_for(NOW) != int(NOW // 3600):
     print("FAIL: valid epoch_for changed")
     fails += 1
 
+# Epoch 0 has no predecessor, but it is a valid epoch: the pair must
+# not collapse to None and the current point must read as current —
+# before, derive_points(100, K) was None and point_is_current read
+# even the epoch-0 point itself as unwilling.
+pair0 = rendezvous.derive_points(100, K)
+cur0 = rendezvous.derive_point_id(K, 0)
+if pair0 is None or pair0[0] != cur0:
+    print(f"FAIL: epoch-0 derive_points changed: {pair0!r}")
+    fails += 1
+elif not rendezvous.point_is_current(cur0, 100, K):
+    print("FAIL: epoch-0 current point no longer current")
+    fails += 1
+elif rendezvous.point_is_current("00" * 32, 100, K):
+    print("FAIL: stranger point read as current at epoch 0")
+    fails += 1
+
 if fails:
     print(f"test_rendezvous: {fails} FAIL")
     sys.exit(1)
