@@ -444,6 +444,16 @@ def _check_timeout(timeout: float) -> float:
 
 def _read_exact(sock: socket.socket, n: int) -> bytes:
     """Read exactly n bytes or raise ResolveError (EOF is a failure)."""
+    # n is caller-supplied at this library seat (the TCP wire passes a
+    # real int, but a direct caller can pass anything): a str/None/
+    # float escaped as a raw TypeError from the comparison/recv, True
+    # aliased to a 1-byte read, and a negative length silently
+    # returned b"" as if a frame had been read — none of them the
+    # ResolveError this function promises for a read that cannot
+    # happen. Only a real non-negative int (bool excluded, twin of
+    # daemon._read_exact's gate and dns._is_int) is a length.
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ResolveError(f"bad read length {n!r}")
     buf = b""
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))

@@ -1085,6 +1085,40 @@ class ClientTests(unittest.TestCase):
                 ["10.9.8.7"],
             )
 
+    def test_read_exact_malformed_length_raises_resolve_error(self):
+        """_read_exact's contract is ResolveError on a read that cannot
+        happen: a str/None/float length must not escape as TypeError,
+        True must not alias to a 1-byte read, and a negative length
+        must not silently return b'' as if a frame had been read."""
+        class _Sock:
+            def __init__(self):
+                self.touched = False
+
+            def recv(self, _n):
+                self.touched = True
+                return b"x"
+
+        for bad in ("2", None, 1.5, True, False, -1, [2]):
+            sock = _Sock()
+            with self.assertRaises(client.ResolveError):
+                client._read_exact(sock, bad)
+            self.assertFalse(sock.touched)
+
+    def test_read_exact_valid_lengths_still_read(self):
+        """Boundaries untouched: zero reads b'' without touching the
+        socket; a real length reads exactly that many bytes."""
+        class _Sock:
+            def __init__(self, data):
+                self.data = data
+
+            def recv(self, n):
+                chunk, self.data = self.data[:n], self.data[n:]
+                return chunk
+
+        self.assertEqual(client._read_exact(_Sock(b""), 0), b"")
+        self.assertEqual(client._read_exact(_Sock(b"hello"), 5), b"hello")
+        self.assertEqual(client._read_exact(_Sock(b"hello"), 3), b"hel")
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
