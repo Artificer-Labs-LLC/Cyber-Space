@@ -1422,6 +1422,15 @@ def names_reach(request: Request, name: str):
         reach = json.loads(row[1])
     except (ValueError, TypeError):
         raise HTTPException(status_code=404, detail="No such name.")
+    # Loaded-shape gate: only a real list is a reach — every consumer
+    # refuses any other shape on sight (_reach_descriptor_verify
+    # requires a list at resolve step 5, dial step 4, and the ingest
+    # merge, the only writer, which stores a verify-proved list). A
+    # stored string/int/dict/null was served 200 verbatim as the
+    # descriptor's reach, advertising a descriptor the dialer could
+    # never use — read as absent, exactly like malformed JSON above.
+    if not isinstance(reach, list):
+        raise HTTPException(status_code=404, detail="No such name.")
     return {"name": label, "node_pubkey": row[0], "reach": reach,
             "issued_at": row[2], "expires_at": row[3],
             "signature": row[4]}
