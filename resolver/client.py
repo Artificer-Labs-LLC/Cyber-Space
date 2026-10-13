@@ -556,6 +556,13 @@ def resolve(
     qtype_n = _QTYPES.get(qtype.upper())
     if qtype_n is None:
         raise ValueError(f"unsupported qtype {qtype!r}")
+    # server is caller-supplied text: a non-string (None, an int, bytes)
+    # escaped as a raw AttributeError/TypeError from .strip() inside
+    # _server_host — neither the ValueError a malformed name/qtype raises
+    # here nor anything main() maps to exit 2. Gate the type first, the
+    # same fail-closed shape the name/qtype gates apply.
+    if not isinstance(server, str):
+        raise ValueError(f"bad server {server!r}")
     if port is None:
         port = _default_port()
     txid = random.getrandbits(16)
