@@ -220,8 +220,14 @@ def main(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
         name = ""
+        raw = sys.stdin.read(_FETCH_MAX + 1)
+        if len(raw) > _FETCH_MAX:
+            print(f"refused: stdin exceeds {_FETCH_MAX} bytes — a rotations "
+                  "document is a handful of short hops; no verdict",
+                  file=sys.stderr)
+            return 2
         try:
-            doc = json.loads(sys.stdin.read())
+            doc = json.loads(raw)
         except (ValueError, json.JSONDecodeError) as e:
             print(f"refused: stdin is not JSON: {e}", file=sys.stderr)
             return 2
