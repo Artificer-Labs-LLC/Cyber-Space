@@ -1902,6 +1902,24 @@ def _test_read_exact_malformed():
     check("_read_exact valid lengths read exact",
           smoke._read_exact(_FakeSock(), 2, 3.0) == b"ab"
           and smoke._read_exact(_FakeSock(), 0, 3.0) == b"")
+    # The timeout argument was carried but never gated: a direct
+    # caller passing None/"3"/True/inf/NaN/0/-1 read anyway, under
+    # no refused deadline. It now passes _check_timeout first.
+    for bad_t in (None, "3", True, False, float("inf"),
+                  float("nan"), 0, -1):
+        sock = _FakeSock()
+        try:
+            smoke._read_exact(sock, 2, bad_t)
+            err = None
+        except Exception as exc:  # noqa: BLE001 - refusal is the check
+            err = exc
+        check(f"_read_exact(timeout={bad_t!r}) -> ValueError, "
+              f"socket untouched",
+              isinstance(err, ValueError) and not sock.recvd,
+              f"err={err} recvd={sock.recvd}")
+    check("_read_exact valid timeouts read exact",
+          smoke._read_exact(_FakeSock(), 2, 1) == b"ab"
+          and smoke._read_exact(_FakeSock(), 2, 0.5) == b"ab")
 
 
 # 10. _query/_query_tcp/_server_target refuse a malformed port

@@ -601,6 +601,15 @@ def _read_exact(sock, n: int, timeout: float) -> bytes:
     # touched. Valid and zero lengths are untouched.
     if isinstance(n, bool) or not isinstance(n, int) or n < 0:
         raise ValueError(f"bad read length {n!r}")
+    # The timeout is caller-supplied too — and until now it was not
+    # even gated, only carried: _query_tcp gates its own before
+    # calling, but a direct caller passing None/"3"/True/inf/NaN/0/-1
+    # got a read under a deadline this function never refused, the
+    # exact shapes _check_timeout exists to refuse (None would block
+    # forever on a socket without one). Gate it here, at the source,
+    # before the socket is touched; the socket's own timeout (set by
+    # the wire caller) still does the enforcing.
+    _check_timeout(timeout)
     buf = b""
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
