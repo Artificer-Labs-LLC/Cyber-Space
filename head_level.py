@@ -32,6 +32,33 @@ class Refused(ValueError):
     pass
 
 
+class TagModeMismatch(Refused):
+    pass
+
+
+class OperatorMismatch(Refused):
+    pass
+
+
+class SignerIndexOutOfRange(Refused):
+    pass
+
+
+class TooFewSignatures(Refused):
+    pass
+
+
+# ---- FIRST-CONTACT SWITCH (PENDING VILLHAZE RULING) ----------------------
+# What to do with prev_size/prev_root when no mark is stored yet.
+#   "tofu"                - current behavior, unchanged: accept any prev_*
+#                           on first contact; the result is labelled
+#                           first_contact=True so callers can see it.
+#   "refuse_nonzero_prev" - refuse a first-contact head whose prev_size != 0.
+# This is the single switch; nothing else reads first-contact policy.
+FIRST_CONTACT = "tofu"
+FIRST_CONTACT_CHOICES = ("tofu", "refuse_nonzero_prev")
+
+
 def log_id_of(genesis_pub_hex: str) -> bytes:
     return hashlib.sha256(bytes.fromhex(genesis_pub_hex)).digest()
 
@@ -56,7 +83,7 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
     if mode > 2:
         raise Refused("mode out of range")
     if MODES[mode] != m:
-        raise Refused("tag/mode mismatch")
+        raise TagModeMismatch("tag/mode mismatch")
     if mode != 1 and op != ZERO32:
         raise Refused("operator_id must be zero unless single-operator")
     if mode == 1 and op == ZERO32:
@@ -65,10 +92,15 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
         raise Refused("log_id")
     if mark is not None and (psize, proot) != (mark[0], mark[1]):
         raise Refused("prev_* does not match the stored mark")
+    if mark is None:
+        if FIRST_CONTACT not in FIRST_CONTACT_CHOICES:
+            raise Refused("FIRST_CONTACT switch has an unknown value")
+        if FIRST_CONTACT == "refuse_nonzero_prev" and psize != 0:
+            raise Refused("first contact with nonzero prev_size")
     if psize > size:
         raise Refused("prev_size > tree_size")
     return {"mode": mode, "level": m, "body": body, "tree_size": size, "root": root,
-            "operator_id": op, "issued_at": issued}
+            "operator_id": op, "issued_at": issued, "first_contact": mark is None}
 
 
 def select_cosigns(cosigns, keys):
@@ -111,8 +143,9 @@ def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None
         level = "unwitnessed"
     if level != h["level"]:
         raise Refused(f"marker {h['level']!r} but cosigns give {level!r}")
-    if level == "single-operator" and h["operator_id"] not in fleet_ops:
-        raise Refused("operator_id is not the cosigning fleet operator")
+    # Lodestar BLOCK: operator_id must EQUAL the operator that cosigned.
+    if level == "single-operator" and fleet_ops != {h["operator_id"]}:
+        raise OperatorMismatch("operator_id is not the cosigning fleet operator")
     return level, calls
 
 
@@ -190,12 +223,13 @@ def parse_pins(data: bytes, genesis_pub: str, sig_ok, signers=None, threshold=No
     if placeholder(signers, threshold):
         raise Refused("pin signers are a placeholder until Villhaze rules")
     idx = [i for i, _ in sigs]
+    # All count/order/range checks run before any key check or verify.
+    if len(sigs) < threshold:
+        raise TooFewSignatures("too few pin signatures")
     if idx != sorted(set(idx)):
         raise Refused("signer indices unsorted or duplicate")
     if any(i >= len(signers) for i in idx):
-        raise Refused("signer index out of range")
-    if len(sigs) < threshold:
-        raise Refused("too few pin signatures")
+        raise SignerIndexOutOfRange("signer index out of range")
     use = sigs[:threshold]                  # at most threshold-many verifies
     for i, _ in use:
         if not _key_ok(bytes.fromhex(signers[i])):

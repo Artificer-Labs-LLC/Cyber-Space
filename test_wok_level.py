@@ -59,6 +59,14 @@ def refused(fn):
 def zero_calls(fn):
     CALLS[0] = 0; r = refused(fn); return r and CALLS[0] == 0
 
+def refused_as(cls, fn):
+    """Row assertion: fn raises exactly a `cls` refusal with 0 verify calls.
+    Any other exception (IndexError etc.) is a FAILED assertion here, never
+    a pass and never something the harness counts."""
+    CALLS[0] = 0
+    try: fn(); return False
+    except Exception as e: return isinstance(e, cls) and CALLS[0] == 0
+
 # ---- Lodestar / board condition 1-2 ----
 def row_tags():
     if len(set(hl.TAGS.values())) != 3: return False
@@ -78,7 +86,7 @@ def row_accept():
     b0, b1, b2 = head(0), head(1), head(2)
     return (ver(b0, [])[0] == "unwitnessed" and ver(b1, cos([f1], b1))[0] == "single-operator"
             and ver(b2, cos([f1, o1], b2))[0] == "independent")
-def row_single_wrong_op(): b = head(1, op=OP_A); return refused(lambda: ver(b, cos([f1], b)))
+def row_single_wrong_op(): b = head(1, op=OP_A); return _refused_typed(hl.OperatorMismatch, lambda: ver(b, cos([f1], b)))
 def row_logid(): b = hl.pack_head(0, b"\x00" * 32, 7, ROOT, 5, PROOT, hl.ZERO32, 1); return zero_calls(lambda: ver(b, []))
 # ---- condition 3/4 ----
 def row_cap():
@@ -159,7 +167,38 @@ def row_failclosed():
             and refused(lambda: hl.verify_head(b1, gsig(b1), GEN, cos([f1], b1), pins, sig_ok, mark=MARK)))
 def row_triple():
     return refused(lambda: parse(pinfile(OPS, signer_ks=((0, s0), (0, s0), (0, s0)))))
-def row_oor(): return zero_calls(lambda: parse(pinfile(OPS, signer_ks=((0, s0), (7, s1)))))
+def row_oor():
+    return refused_as(hl.SignerIndexOutOfRange, lambda: parse(pinfile(OPS, signer_ks=((0, s0), (7, s1)))))
+def row_thr_one():
+    # threshold 2, exactly one VALID signature: refused before any verify
+    return refused_as(hl.TooFewSignatures, lambda: parse(pinfile(OPS, signer_ks=((0, s0),))))
+def row_tag_mode():
+    # single-operator tag over a mode-2 body (and the reverse): typed refusal, 0 verifies
+    b1, b2 = head(1), head(2)
+    t1, t2 = hl.TAGS["single-operator"], hl.TAGS["independent"]
+    a = t1 + b2[len(t2):]
+    c = t2 + b1[len(t1):]
+    return (refused_as(hl.TagModeMismatch, lambda: hl.verify_head(a, gsig(a), GEN, [], PINS, sig_ok, mark=MARK))
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(c, gsig(c), GEN, [], PINS, sig_ok, mark=MARK)))
+OP_F2 = b"\x02" * 32
+f3, F3 = K(6)
+PINS2 = parse(pinfile(sorted([(OP_FLEET, 1, [(F1, 0, 10**9)]), (OP_F2, 1, [(F3, 0, 10**9)]),
+                              (OP_A, 2, [(O1, 0, 10**9)])])))
+def row_single_two_fleet():
+    # head names OP_FLEET but OP_F2 also cosigns: operator_id must EQUAL the cosigner
+    b = head(1, op=OP_FLEET)
+    ok_one = ver(b, cos([f1], b), pins=PINS2)[0] == "single-operator"
+    return ok_one and _refused_typed(hl.OperatorMismatch, lambda: ver(b, cos([f1, f3], b), pins=PINS2))
+def _refused_typed(cls, fn):
+    try: fn(); return False
+    except Exception as e: return isinstance(e, cls)
+def row_first_contact_switch():
+    # pending Villhaze: default stays TOFU (labelled); the alternative is one switch
+    b = head(0, mark=(5, PROOT))
+    h = hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None)
+    with mock.patch.object(hl, "FIRST_CONTACT", "refuse_nonzero_prev"):
+        alt = refused(lambda: hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=None))
+    return hl.FIRST_CONTACT == "tofu" and h[0] == "unwitnessed" and alt
 def row_sig_calls():
     CALLS[0] = 0; parse(pinfile(OPS, signer_ks=((0, s0), (1, s1), (2, s2)))); return CALLS[0] <= THR
 
@@ -194,6 +233,11 @@ ROWS = [
     ("(b) three copies of one signer's sig fail threshold 2", row_triple),
     ("(b) out-of-range signer index refused, 0 verifies", row_oor),
     ("(b) at most threshold-many pin verifies", row_sig_calls),
+    ("(C1) threshold 2 with one valid signature refused (TooFewSignatures), 0 verifies", row_thr_one),
+    ("(C2) out-of-range signer index: typed SignerIndexOutOfRange, 0 verifies, never IndexError", row_oor),
+    ("(L5) tag/mode mismatch both ways: typed TagModeMismatch, 0 verifies", row_tag_mode),
+    ("(L5) single-operator with a second fleet operator cosigning: OperatorMismatch", row_single_two_fleet),
+    ("(FC) first-contact switch: default tofu unchanged; refuse_nonzero_prev refuses", row_first_contact_switch),
 ]
 # sha256 of tag||body for head(m): Genesis seed sha256("wok-level-0"), size 7,
 # root ab*32, prev (5, cd*32), operator 01*32 in mode 1, issued 1700000100.
@@ -216,51 +260,40 @@ def per_key(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
     return ORIG(blob, gs, gp, cs, p, so, mark, ruling)
 def checks_after(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
     so(gp, blob, gs); return ORIG(blob, gs, gp, cs, pins, so, mark, ruling)
-def no_dup_check(data, *a, **k):
-    with mock.patch.object(hl, "Refused", type("R", (Exception,), {})): pass
-    src = ORIG_PARSE
-    seen_patch = mock.patch("builtins.set", lambda *x: _NoSet())
-    return src(data, *a, **k)
-class _NoSet(set):
-    def __contains__(self, k): return False
-SHARED = dict(hl.TAGS); SHARED["independent"] = SHARED["single-operator"]
-def placeholder_accepts(signers=None, threshold=None): return False
-def pins_any(data, gp, so, signers=None, threshold=None):
-    return ORIG_PARSE(data, gp, lambda *a: True, signers or (S0,), threshold or 1)
-def count_no_dedup(data, gp, so, signers=None, threshold=None):
-    # signer indices counted without de-dup: skip the sorted/unique check
-    d = data
-    return ORIG_PARSE(d, gp, so, signers, threshold) if False else _nodedup(d, gp, so, signers, threshold)
-def _nodedup(data, gp, so, signers, threshold):
-    import re
-    src = open(hl.__file__).read()
-    src = src.replace("    if idx != sorted(set(idx)):\n        raise Refused", "    if False:\n        raise Refused")
-    ns = dict(hl.__dict__); exec(compile(src, "mut", "exec"), ns)
-    return ns["parse_pins"](data, gp, so, signers, threshold)
 def _mut_src(old, new, fn):
-    src = open(hl.__file__).read(); assert old in src, old
+    """Source mutant of head_level. The mutant module shares head_level's
+    Refused classes, so rows see the same exception types; no rows or
+    helpers are redefined for mutants."""
+    src = open(hl.__file__).read(); assert src.count(old) == 1, old
     ns = {"__name__": "head_level_mut"}; exec(compile(src.replace(old, new), "mut", "exec"), ns)
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures"):
+        ns[n] = getattr(hl, n)
     return ns[fn]
 def mut_parse(old, new):
     f = _mut_src(old, new, "parse_pins")
     return lambda data, gp, so, signers=None, threshold=None: f(data, gp, so, signers, threshold)
+def mut_verify(old, new):
+    f = _mut_src(old, new, "verify_head")
+    return lambda *a, **k: f(*a, **k)
 mut_dupacross = mut_parse('            if pub in seen:\n                raise Refused', '            if False:\n                raise Refused')
 mut_trailing = mut_parse('    if p != len(data):\n        raise Refused("trailing bytes")', '    pass')
-# mutants raise their own Refused class: make refused() accept it
-_R = hl.Refused
-class AnyRef(Exception): pass
 def run_mut(row, patches):
+    """KILLED only when the named row returns False (its own assertion
+    fails). Any exception escaping the row is ERROR, never a kill."""
     import contextlib
     with contextlib.ExitStack() as st:
         for p in patches: st.enter_context(p)
-        try: return not row()
-        except Exception: return True
+        try: return "KILLED" if row() is False else "SURVIVED"
+        except Exception as e: return f"ERROR({type(e).__name__})"
 def rollback_skip(path, gp, so, state, signers=None, threshold=None):
     return ORIG_LOAD(path, gp, so, state + ".fresh%d" % time.time_ns(), signers, threshold)
 ORIG_LOAD = hl.load_pins
-def wide_refused(fn):
-    try: fn(); return False
-    except Exception as e: return type(e).__name__ == "Refused"
+SHARED = dict(hl.TAGS); SHARED["independent"] = SHARED["single-operator"]
+def placeholder_accepts(signers=None, threshold=None): return False
+def pins_any(data, gp, so, signers=None, threshold=None):
+    # empty compiled signer set treated as "accept any file": every
+    # signature is accepted, against the test signer table
+    return ORIG_PARSE(data, gp, lambda *a: True, SIGNERS, THR)
 MUT = [
     ("two levels share one tag", row_tags, [mock.patch.dict(hl.TAGS, SHARED)]),
     ("verifier trusts the marker", row_indep_fleet_only, [mock.patch.object(hl, "verify_head", trust_marker)]),
@@ -272,20 +305,20 @@ MUT = [
     ("trailing bytes accepted", row_pin_trailing, [mock.patch.object(hl, "parse_pins", mut_trailing)]),
     ("rollback state ignored", row_pin_rollback, [mock.patch.object(hl, "load_pins", rollback_skip)]),
     ("placeholder = empty signer set accepting any file", row_failclosed, [mock.patch.object(hl, "placeholder", placeholder_accepts), mock.patch.object(hl, "parse_pins", pins_any)]),
-    ("sigs counted without de-duplicating by index", row_triple, [mock.patch.object(hl, "parse_pins", mut_parse('    if idx != sorted(set(idx)):\n        raise Refused', '    if False:\n        raise Refused').__call__)]),
+    ("sigs counted without de-duplicating by index", row_triple, [mock.patch.object(hl, "parse_pins", mut_parse('    if idx != sorted(set(idx)):\n        raise Refused', '    if False:\n        raise Refused'))]),
+    ("threshold-count check removed", row_thr_one, [mock.patch.object(hl, "parse_pins", mut_parse('    if len(sigs) < threshold:\n        raise TooFewSignatures', '    if False:\n        raise TooFewSignatures'))]),
+    ("signer-index range check removed", row_oor, [mock.patch.object(hl, "parse_pins", mut_parse('    if any(i >= len(signers) for i in idx):\n        raise SignerIndexOutOfRange', '    if False:\n        raise SignerIndexOutOfRange'))]),
+    ("tag/mode check removed", row_tag_mode, [mock.patch.object(hl, "cheap_head", _mut_src('    if MODES[mode] != m:\n        raise TagModeMismatch', '    if False:\n        raise TagModeMismatch', "cheap_head"))]),
+    ("operator_id checked by membership, not equality", row_single_two_fleet, [mock.patch.object(hl, "verify_head", mut_verify('fleet_ops != {h["operator_id"]}', 'h["operator_id"] not in fleet_ops'))]),
+    ("operator_id check removed", row_single_wrong_op, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
 ]
 table = []
-# mutant-source functions raise their module's Refused; map it for refused()
-_orig_refused = refused
-def refused(fn):
-    try: fn(); return False
-    except Exception as e: return type(e).__name__ == "Refused"
 for name, row, patches in MUT:
     real = row()
-    mf = run_mut(row, patches)
-    table.append((name, row.__name__, real, mf)); check(f"MUTANT {name}: real passes and mutant fails", real and mf)
-print("mutant table:\n  mutant | row | real passes | mutant fails | killed")
-for n, r, a, b in table: print(f"  {n} | {r} | {a} | {b} | {'KILLED' if a and b else 'SURVIVED'}")
+    res = run_mut(row, patches)
+    table.append((name, row.__name__, real, res)); check(f"MUTANT {name}: real passes and named row fails", real and res == "KILLED")
+print("mutant table (kill = named row fails its own assertion; exceptions are ERROR):\n  mutant | row | real passes | result")
+for n, r, a, b in table: print(f"  {n} | {r} | {a} | {b}")
 print("golden sha256(signed head bytes):", json.dumps(GOLD))
 fails = sum(1 for _, ok in R if not ok)
 print(f"wok_level: {len(R) - fails} passed, {fails} failed ({time.time() - T0:.1f}s)")
