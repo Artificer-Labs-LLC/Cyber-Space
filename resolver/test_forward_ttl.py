@@ -259,6 +259,36 @@ def test_forward_short_header_servfail():
               f"got resp={resp!r}")
 
 
+def test_forward_wrong_opcode_servfail():
+    """A reply whose opcode differs from the query's answers a
+    different kind of question: before, _forward checked source, txid,
+    QR and header length but never the opcode, so a right-source,
+    right-txid, QR-set reply with opcode 1 to an opcode-0 query was
+    relayed byte-for-byte. It SERVFAILs now. The rule is echo, not
+    zero: a query carrying opcode 1 forwarded untouched draws an
+    opcode-1 reply that passes through byte-for-byte (control)."""
+    raw = _query_packet("example.com")
+    wrong = struct.pack(">HHHHHH", 0x4321, 0x8800, 0, 0, 0, 0) + b"wrong-opcode answer"
+    resp = _with_socket_factory(
+        lambda: _CannedSocket(wrong),
+        lambda: answer.handle_query(
+            raw, mirror_url="http://mirror.invalid",
+            upstream=("8.8.8.8", 53)))
+    check("forward: wrong-opcode reply -> SERVFAIL (rcode 2), not relayed",
+          resp != wrong and len(resp) > 3 and _rcode(resp) == 2,
+          f"got resp={resp!r}")
+    raw1 = bytearray(_query_packet("example.com"))
+    raw1[2:4] = struct.pack(">H", 0x0900)  # opcode 1 + RD
+    canned1 = struct.pack(">HHHHHH", 0x4321, 0x8880, 0, 0, 0, 0) + b"opcode-1 answer"
+    resp1 = _with_socket_factory(
+        lambda: _CannedSocket(canned1),
+        lambda: answer.handle_query(
+            bytes(raw1), mirror_url="http://mirror.invalid",
+            upstream=("8.8.8.8", 53)))
+    check("forward: matching non-zero opcode reply passes through untouched",
+          resp1 == canned1, f"got {resp1!r}")
+
+
 def test_forward_unresolvable_hostname_servfail():
     """An unresolvable hostname upstream raises gaierror in
     _upstream_target, which _forward already reads as SERVFAIL."""
@@ -370,6 +400,7 @@ def main():
     test_forward_wrong_txid_servfail()
     test_forward_qr_clear_servfail()
     test_forward_short_header_servfail()
+    test_forward_wrong_opcode_servfail()
     test_forward_unresolvable_hostname_servfail()
     test_forward_failure_servfail()
     test_ttl_cap()

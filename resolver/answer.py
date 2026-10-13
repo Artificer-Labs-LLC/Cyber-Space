@@ -176,6 +176,17 @@ def _forward(raw: bytes, upstream: tuple[str, int]) -> bytes:
             # counts — is not a response at all, however well addressed.
             if len(reply) < 12 or not reply[2] & 0x80:
                 return error_response(raw, 2)
+            # The reply's OPCODE must echo the query's (byte 2, bits
+            # 6-3 — mask 0x78): an opcode is part of what was asked, so
+            # a response carrying a different one answers a different
+            # kind of question, however well addressed (client refuses
+            # any opcode but the standard-query one on daemon replies;
+            # a forwarder is generic — parse_query admits any opcode —
+            # so the rule here is echo, not zero). A mismatched-opcode
+            # reply is a failed forward: SERVFAIL, never a borrowed
+            # answer.
+            if reply[2] & 0x78 != raw[2] & 0x78:
+                return error_response(raw, 2)
             return bytes(reply)
         finally:
             sock.close()
