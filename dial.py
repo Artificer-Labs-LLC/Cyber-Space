@@ -63,9 +63,19 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # argument. Shape only, mirroring resolverd's mirror warning:
     # loopback is honest here, no public-address gate. Never echo the
     # value (it is operator config, not the caller's to see repeated).
+    # The port is part of the shape: urlsplit does not validate it, so
+    # a mirror naming an undialable port (0, >65535, or non-numeric —
+    # parts.port raises for the last two) passed this gate and read as
+    # the same false "silent". A port no dial can ever attempt is a
+    # bad argument, exactly as core._valid_node_url ruled for node URLs.
     try:
         parts = urllib.parse.urlsplit(mirror)
-        mirror_ok = parts.scheme in ("http", "https") and bool(parts.hostname)
+        port = parts.port
+        mirror_ok = (
+            parts.scheme in ("http", "https")
+            and bool(parts.hostname)
+            and (port is None or 1 <= port <= 65535)
+        )
     except ValueError:
         mirror_ok = False
     if not mirror_ok:

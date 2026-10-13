@@ -99,6 +99,17 @@ class DialPlanTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertTrue(lines[0].startswith("mirror:"))
 
+    def test_undialable_mirror_port_is_bad_argument(self):
+        # urlsplit does not validate the port: 99999 / non-numeric make
+        # parts.port raise, 0 parses clean — all three are ports no
+        # dial can ever attempt, so they are exit 4 (bad argument),
+        # never exit 2 (a well-formed mirror that is merely silent).
+        for mirror in ("http://127.0.0.1:99999", "http://127.0.0.1:abc",
+                       "http://127.0.0.1:0"):
+            code, lines = dial.plan(ADDR, mirror)
+            self.assertEqual(code, 4, mirror)
+            self.assertIn("malformed mirror URL", lines[0])
+
     def test_no_binding_is_name_side(self):
         with _fixture():
             code, lines = dial.plan(ADDR, MIRROR)
