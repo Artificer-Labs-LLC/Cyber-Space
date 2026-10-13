@@ -968,20 +968,33 @@ class ClientTests(unittest.TestCase):
             ["10.9.8.7"],
         )
 
-    def test_oversize_port_udp_fallback_raises_resolve_error(self):
-        """Port >65535: sendto raises OverflowError, not OSError — it
-        must surface as ResolveError (after the TCP wire fails the
-        same way), never as a raw OverflowError out of resolve()."""
-        with self.assertRaises(client.ResolveError):
-            client.resolve("node.cyberspace", port=70000, timeout=1.0)
+    def test_malformed_port_raises_value_error_not_type_error(self):
+        """An explicit port is caller-supplied: a string/float/bytes
+        port escaped as a raw TypeError from the transport, True
+        aliased to port 1 and False to port 0, and 0 / negative /
+        oversize ports passed through as misleading transport
+        verdicts — not the ValueError a malformed name/qtype/server
+        raises in resolve(). Every malformed explicit port must read
+        as ValueError, on both wires."""
+        for bad in ("5353", 5353.0, b"5353", True, False, 0,
+                    -1, 65536, 70000):
+            with self.assertRaises(ValueError, msg=f"port={bad!r}"):
+                client.resolve("node.cyberspace", port=bad, timeout=0.2)
+            with self.assertRaises(ValueError, msg=f"port={bad!r} tcp"):
+                client.resolve("node.cyberspace", port=bad, timeout=0.2,
+                               tcp_only=True)
 
-    def test_oversize_port_tcp_only_raises_resolve_error(self):
-        """Port >65535 on the TCP wire alone: whatever the transport
-        raises for it, the contract is ResolveError, no fallback."""
-        with self.assertRaises(client.ResolveError):
-            client.resolve(
-                "node.cyberspace", port=70000, timeout=1.0, tcp_only=True
-            )
+    def test_env_oversize_port_still_raises_resolve_error(self):
+        """port=None keeps the documented env semantics: an env port
+        above 65535 is honored (see _client_port_warnings) and fails
+        as a transport ResolveError — sendto raises OverflowError,
+        not OSError, and it must never escape raw."""
+        os.environ["CYBERNET_RESOLVER_PORT"] = "70000"
+        try:
+            with self.assertRaises(client.ResolveError):
+                client.resolve("node.cyberspace", timeout=1.0)
+        finally:
+            del os.environ["CYBERNET_RESOLVER_PORT"]
 
     def test_malformed_timeout_udp_raises_resolve_error(self):
         """A malformed timeout reached settimeout raw: negative escaped

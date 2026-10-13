@@ -563,6 +563,21 @@ def resolve(
     # same fail-closed shape the name/qtype gates apply.
     if not isinstance(server, str):
         raise ValueError(f"bad server {server!r}")
+    # port is caller-supplied too (when given): a string/float/bytes
+    # port escaped as a raw TypeError from the transport, True aliased
+    # to port 1 and False to port 0 (bool is an int subclass), and 0 /
+    # a negative port passed through to fail as a misleading transport
+    # verdict — none of them the ValueError a malformed name/qtype/
+    # server raises here, nor anything main() maps to exit 2. An
+    # explicit port must be a real int (never bool) in 1..65535, the
+    # same range main() gates --port to. port=None is untouched: the
+    # env derivation keeps its documented semantics (an env port above
+    # 65535 is honored and fails as a transport ResolveError, warned
+    # by _client_port_warnings).
+    if port is not None and (isinstance(port, bool)
+                              or not isinstance(port, int)
+                              or not 1 <= port <= 65535):
+        raise ValueError(f"bad port {port!r}")
     if port is None:
         port = _default_port()
     txid = random.getrandbits(16)
