@@ -297,9 +297,23 @@ def hold_open_cycle(relay_url: str, token: str, name_priv_hex: str,
     fail closed silent at the relay). Never raises."""
     if not _keepalive_every_ok(keepalive_every):
         keepalive_every = _KEEPALIVE_EVERY
-    if name_pub_hex is not None and (
-            not isinstance(name_pub_hex, str) or len(name_pub_hex) != 64):
-        name_pub_hex = None
+    if name_pub_hex is not None:
+        # Decoded-length gate, twin of _name_pub_from_priv /
+        # rendezvous._name_pub_bytes: the string-length check alone
+        # admitted a spaced 64-char pub (bytes.fromhex ignores spaces,
+        # 31-byte decode) and any non-hex 64-char string — both passed
+        # here, suppressed the derivation below, then derive_points
+        # refused them, so no rendezvous points were ever registered
+        # and the hoster read as absent though the true pub was
+        # derivable from the seed. Only a 32-byte decode is a name key.
+        try:
+            _pub_ok = (isinstance(name_pub_hex, str)
+                       and len(name_pub_hex) == 64
+                       and len(bytes.fromhex(name_pub_hex)) == 32)
+        except ValueError:
+            _pub_ok = False
+        if not _pub_ok:
+            name_pub_hex = None
     if name_pub_hex is None:
         name_pub_hex = _name_pub_from_priv(name_priv_hex)
     epoch_len = _rendezvous_epoch_len()
