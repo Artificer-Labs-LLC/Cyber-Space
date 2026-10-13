@@ -166,5 +166,19 @@ _h, _r = rb.snapshot_refused_bindings([_good], ["goodname", 123, ["x"]])
 check("snapshot mixed manifest: valid row still holds",
       len(_h) == 1 and _r == [])
 
+print("non-string name refuses as grammar, never aliases to a hold")
+for bad_name in (123456, 123456.0, None, b"goodname", ["goodname"], True):
+    check(f"classify non-string name {bad_name!r} -> grammar",
+          rb.classify_binding(row(bad_name), {"123456", "goodname"})
+          == "grammar")
+_h, _r = rb.snapshot_refused_bindings([row(123456), row("goodname")],
+                                      {"123456", "goodname"})
+check("snapshot int-name row: no hold for it, valid row still holds",
+      len(_h) == 1 and _h[0]["name"] == "goodname")
+check("snapshot int-name row: one grammar leaf, no str() alias hash",
+      len(_r) == 1 and _r[0][1] == "grammar"
+      and _r[0][0].split(b"\n")[1]
+      == b"name=sha256:" + hashlib.sha256(b"").hexdigest().encode())
+
 print(f"\n{__file__}: {PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)

@@ -175,7 +175,14 @@ def classify_binding(row: dict, manifest_labels) -> str | None:
     # grammar-refused, exactly like the empty label str() yields below.
     if not isinstance(row, dict):
         return "grammar"
-    label = str(row.get("name", ""))
+    # A non-string name has no label: str() would alias a DB/gossip-
+    # carried int name (123456) to the valid label "123456" and grant
+    # it a hold its string twin alone should earn. Grammar-refuse it,
+    # exactly like the nameless rows above.
+    raw_name = row.get("name", "")
+    if not isinstance(raw_name, str):
+        return "grammar"
+    label = raw_name
     # B1 (Q1 fix, ART-29): grammar before length, per spec §7.3.9.
     if not _grammar_ok(label):
         return "grammar"
@@ -227,6 +234,11 @@ def snapshot_refused_bindings(rows, manifest_labels):
             # contributes the empty name/pubkey to its grammar leaf
             # (refused_leaf hashes the name field for grammar anyway).
             leaf_name = row.get("name", "") if isinstance(row, dict) else ""
+            if not isinstance(leaf_name, str):
+                # Twin of classify's gate: a non-string name contributes
+                # no label to its grammar leaf (refused_leaf would
+                # otherwise hash the str() alias, e.g. "123456").
+                leaf_name = ""
             leaf_pub = (row.get("node_pubkey", "")
                         if isinstance(row, dict) else "")
             refused.append((refused_leaf(leaf_name, leaf_pub,
