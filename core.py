@@ -2820,10 +2820,19 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
                            "hold_query": "/relay/hold_query"})
     if not strategies:
         return None  # no honest reach to advertise — stay silent, not wrong
-    try:
-        ttl = max(600, int(os.environ.get("CYBERNET_REACH_TTL", "86400") or 86400))
-    except ValueError:
+    # ASCII digits only, one optional leading sign -- twin of
+    # daemon._env_int's gate (1212c00): bare int() parses Unicode
+    # decimal digits (an Arabic-Indic/fullwidth spelling of 3600
+    # became 3600) and accepts underscore separators (3_600 became
+    # 3600), so a non-ASCII or underscored spelling aliased to a
+    # descriptor lifetime the operator never wrote in ASCII. The
+    # sign stays so negatives still reach the 600 floor as before.
+    _ttl_raw = os.environ.get("CYBERNET_REACH_TTL", "86400").strip()
+    _ttl_digits = _ttl_raw[1:] if _ttl_raw[:1] in ("+", "-") else _ttl_raw
+    if not _ttl_digits or not _ttl_digits.isascii() or not _ttl_digits.isdigit():
         ttl = 86400
+    else:
+        ttl = max(600, int(_ttl_raw))
     # Upper clamp, twin of the descriptor lifetime cap in
     # _reach_descriptor_verify: a TTL over NAME_EXPIRY_DAYS minted a
     # descriptor every seat refused as overlong — the hoster announced

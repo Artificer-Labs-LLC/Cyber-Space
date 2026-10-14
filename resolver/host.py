@@ -400,11 +400,14 @@ def _reach_ttl_warnings() -> list[str]:
     raw = os.environ.get("CYBERNET_REACH_TTL", "").strip()
     if not raw:
         return []
-    try:
-        ttl = int(raw)
-    except (ValueError, TypeError):
+    # Mirror _reach_build's ASCII gate exactly: bare int() parses
+    # Unicode decimal digits and accepts underscore separators, so
+    # the warnings would bless a spelling _reach_build falls back on.
+    _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not _digits or not _digits.isascii() or not _digits.isdigit():
         return ["CYBERNET_REACH_TTL is not an integer — the 86400 "
                 "default will be advertised instead"]
+    ttl = int(raw)
     if ttl < 600:
         return ["CYBERNET_REACH_TTL is below the 600 floor — 600 "
                 "will be advertised instead"]
