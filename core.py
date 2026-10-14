@@ -2723,6 +2723,19 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
     if _valid_name_label(name) is not True:
         return None
     try:
+        # String-length gate, twin of _reach_mint (07d9447) and this
+        # function's own relay-pub seat below: bytes.fromhex ignores
+        # embedded whitespace, so a 65-char inserted-space (or wrapped,
+        # or tabbed) seed decoded to the TRUE 32 bytes and derived the
+        # true pubkey — then went verbatim into _reach_mint, whose
+        # string gate RAISED, and the exception escaped this seat,
+        # breaking its fail-closed None contract (an unguarded caller
+        # like _reach_out died on a spelling host._config,
+        # hold_open._sign_challenge and fed make_envelope all refuse
+        # quietly). Only the exact 64-char spelling builds; case is
+        # left alone (uppercase builds today and still does).
+        if not isinstance(name_priv_hex, str) or len(name_priv_hex) != 64:
+            return None
         # Decoded-length gate: bytes.fromhex ignores embedded spaces,
         # so a 64-char spaced seed decodes to 31 bytes and publickey()
         # would silently derive a pubkey that is NOT the name's key —
