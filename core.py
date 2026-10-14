@@ -2074,7 +2074,14 @@ def ingest_gossiped_binding(binding: dict) -> str:
 
     Returns one of "inserted", "replaced", "kept", "conflict",
     "dropped-malformed", "dropped-unverifiable", "dropped-expired",
-    "dropped-stale", "dropped-over-cap", "dropped-full". Never raises."""
+    "dropped-stale", "dropped-over-cap", "dropped-full". Never raises.
+
+    Exception to the live-incumbent rule: a binding carrying a valid
+    rotation designation from the stored key (binding["rotation"] or
+    binding["rotation_chain"], verified by _gossiped_rotation_designates
+    / _gossiped_rotation_chain_designates) replaces the incumbent and
+    the hops are recorded into name_rotations so this mirror can
+    re-gossip the proof onward."""
     try:
         if not isinstance(binding, dict):
             return "dropped-malformed"
@@ -2166,6 +2173,42 @@ def ingest_gossiped_binding(binding: dict) -> str:
             # Same-key updates (renewals) flow through _old_binding_beaten.
             if (_incumbent_is_live(old, now_dt)
                     and old["node_pubkey"].lower() != node_pubkey.lower()):
+                # Primitive 4 (identity): a designated successor is NOT a
+                # foreign challenger — the stored key's own signed rotation
+                # record (or chain) designating this binding's key overrides
+                # the live-incumbent rule, exactly as the helpers' docstrings
+                # promise. This seat was the helpers' only intended caller
+                # and it never called them, so rotated names could never
+                # federate past a mirror still holding the live old binding.
+                # Fail-closed: no/invalid proof falls through to conflict.
+                _chain = binding.get("rotation_chain")
+                _single = binding.get("rotation")
+                _designated = (
+                    _gossiped_rotation_chain_designates(
+                        _chain, name, old["node_pubkey"], node_pubkey,
+                        issued_at)
+                    or _gossiped_rotation_designates(
+                        _single, name, old["node_pubkey"], node_pubkey,
+                        issued_at))
+                if _designated:
+                    _hops = _chain if isinstance(_chain, list) and _chain \
+                        else [_single]
+                    for _hop in _hops:
+                        if isinstance(_hop, dict):
+                            conn.execute(
+                                "INSERT OR IGNORE INTO name_rotations "
+                                "(name, old_pubkey, new_pubkey, issued_at,"
+                                " signature, accepted_at) VALUES (?,?,?,?,?,?)",
+                                (name, _hop["old_pubkey"].strip().lower(),
+                                 _hop["new_pubkey"].strip().lower(),
+                                 _hop["issued_at"], _hop["signature"],
+                                 now_dt.strftime(
+                                     "%Y-%m-%dT%H:%M:%S+00:00")))
+                    conn.execute(
+                        "UPDATE name_bindings SET node_pubkey=?, issued_at=?,"
+                        " expires_at=?, signature=? WHERE name=?",
+                        (node_pubkey, issued_at, expires_at, signature, name))
+                    return "replaced"
                 _log_name_conflict(conn, name, old, new,
                                    "live-foreign-incumbent")
                 return "conflict"
@@ -2619,10 +2662,26 @@ def _names_gossip_out() -> int:
         if not isinstance(r["node_pubkey"], str) \
                 or len(r["node_pubkey"]) != 64:
             continue
-        payloads.append(
-            {"name": r["name"], "node_pubkey": r["node_pubkey"],
-             "issued_at": r["issued_at"], "expires_at": r["expires_at"],
-             "signature": r["signature"]})
+        _payload = {"name": r["name"], "node_pubkey": r["node_pubkey"],
+                    "issued_at": r["issued_at"], "expires_at": r["expires_at"],
+                    "signature": r["signature"]}
+        # Primitive 4 (identity): attach the rotation lineage so a mirror
+        # still holding a live earlier key can verify the designation and
+        # yield (see _gossiped_rotation_chain_designates). Without this the
+        # proof never left the origin mirror and rotation never federated.
+        # Oldest first, capped like the receiver's chain gate.
+        with _db_lock, _db() as conn:
+            _rots = conn.execute(
+                "SELECT old_pubkey, new_pubkey, issued_at, signature "
+                "FROM name_rotations WHERE name=? "
+                "ORDER BY accepted_at ASC, rowid ASC LIMIT ?",
+                (r["name"], _ROTATION_CHAIN_CAP)).fetchall()
+        if _rots:
+            _payload["rotation_chain"] = [
+                {"name": r["name"], "old_pubkey": _x[0],
+                 "new_pubkey": _x[1], "issued_at": _x[2],
+                 "signature": _x[3]} for _x in _rots]
+        payloads.append(_payload)
     if not payloads:
         return 0
     payloads = payloads[:NAMES_GOSSIP_BATCH_CAP]
