@@ -1600,6 +1600,15 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
         sig = _sig_raw.lower()
         if len(challenge) != 64 or len(sig) != 128:
             return False
+        # Decoded-length gate, twin of verify_name/_name_binding_verify:
+        # bytes.fromhex ignores embedded spaces, so a 64-char challenge
+        # with two spaces decoded to 31 bytes and a genuine signature
+        # over those 31 bytes verified — live-proof for a challenge
+        # that is not the 32-byte challenge any relay serves.
+        # checkvalid gates the sig/pubkey lengths, never the message's.
+        if len(bytes.fromhex(challenge)) != 32 \
+                or len(bytes.fromhex(sig)) != 64:
+            return False
         return _fed_ed25519.checkvalid(
             bytes.fromhex(sig), bytes.fromhex(challenge),
             bytes.fromhex(node_pubkey))
