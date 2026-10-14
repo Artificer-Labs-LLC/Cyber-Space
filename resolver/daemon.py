@@ -113,7 +113,16 @@ def _parse_upstream(raw: str) -> tuple[str, int]:
     else:
         host, _, port_s = raw.partition(":")
         host = host.strip()
-    port_n = int(port_s.strip()) if port_s.strip().isdigit() else 0
+    # ASCII digits only (B1 twin of core._NODE_URL_RE's port class):
+    # isdigit() matches Unicode decimal digits and int() parses them,
+    # so an Arabic-Indic/fullwidth spelling of 5353 aliased to that
+    # port; worse, isdigit() also accepts characters int() refuses
+    # (superscripts: '²'.isdigit() is True, int('²') raises), so such
+    # a port escaped here as a raw ValueError through
+    # _daemon_config_warnings/_config -- documented never-crash seats
+    # whose malformed fate is this function's default fallback.
+    _port_txt = port_s.strip()
+    port_n = int(_port_txt) if _port_txt.isascii() and _port_txt.isdigit() else 0
     if not host or not (1 <= port_n <= 65535):
         return ("1.1.1.1", 53)
     return (host, port_n)
