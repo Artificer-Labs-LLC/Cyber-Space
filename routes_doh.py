@@ -154,6 +154,10 @@ async def doh_post(request: Request):
     return Response(content=wire, media_type="application/dns-message")
 
 
+_B64URL_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
 def _decode_dns_param(dns: str) -> bytes:
     # Bound the *encoded* length first: a 4096-byte DNS message base64url-encodes
     # to at most 5464 chars (ceil(4096/3)*4), so anything longer can only ever
@@ -162,8 +166,21 @@ def _decode_dns_param(dns: str) -> bytes:
     # decoded-bytes bound below.
     if not dns or len(dns) > 5464:
         raise HTTPException(status_code=400, detail="Bad dns parameter")
+    # Canonical-spelling gate, twin of the hex string-length gates:
+    # urlsafe_b64decode (validate=False) silently DISCARDS characters
+    # outside the alphabet and also accepts the standard-base64 '+'/'/'
+    # spellings, so a junk-inserted or standard-base64 ?dns= decoded to
+    # the TRUE wire bytes and was answered — a spelling RFC 8484 (which
+    # mandates base64url) and every strict DoH peer refuse on sight.
+    # Only base64url characters, plus at most two trailing '=' pads,
+    # are a dns parameter; anything else is a bad parameter.
+    core_part = dns.rstrip("=")
+    if len(dns) - len(core_part) > 2 or not core_part \
+            or any(c not in _B64URL_ALPHABET for c in core_part):
+        raise HTTPException(status_code=400, detail="Bad dns parameter")
     try:
-        raw = base64.urlsafe_b64decode(dns + "=" * (-len(dns) % 4))
+        raw = base64.urlsafe_b64decode(
+            core_part + "=" * (-len(core_part) % 4))
     except Exception:
         raise HTTPException(status_code=400, detail="Bad dns parameter")
     if not raw or len(raw) > 4096:
