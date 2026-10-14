@@ -29,14 +29,20 @@ genesis.cyberspace live and refused a one-character-tampered binding.
 Windows machine: the extension in her browser is the path (NRPT to HQ's
 daemon is the same false success — not offered).
 
-When both gates open, run these steps in order. Every step fails closed —
+Gate 1 (genesis redeploy) was APPROVED by Villhaze 2026-10-12 under the
+standing governance (Research Board recommends, Villhaze rules, fleet
+executes); gate 2 (name-key attestation) is held by cryptography —
+fail-closed stands until the key is available. Run these steps in order
+when the fleet executes the gate-1 redeploy. Every step fails closed —
 stop at the first red line and fix it before moving on.
 
 ## Step 0 — preconditions on HQ
 
-- `pushes are batched and approval-gated`: the current tree (333 commits
-  locally, ~141 unpushed since the approved 07:45 batch push) must reach
-  `~/cybernet/node` with her manual approval. No other way.
+- The current tree must reach `~/cybernet/node` via the fleet push path:
+  O.R.A.C.L.E. holds the GitHub push path (ART-37); sandbox/cron runs have
+  no push credentials and do not push. No approval from Her Grace is
+  required or awaited — Cyberspace decisions are Villhaze's under the
+  standing hands-off order.
 
 ## Step 1 — deploy runs the script
 

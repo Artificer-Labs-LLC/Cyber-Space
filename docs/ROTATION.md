@@ -124,5 +124,7 @@ expiry, 2027-10-08.
 - `hidden_files/claim-verify-agreement-belt-test.py` 29/29 — mirror/verifier parity
 
 Primitive 4 (identity) is complete end-to-end: mint, submit, promote, read,
-walk. The next primitive-4 work is split-horizon resolver wiring (gated:
-name-key attestation for the genesis mirror is Her Grace's call).
+walk. The next primitive-4 work is split-horizon resolver wiring (gate 2:
+name-key attestation for the genesis mirror is held by cryptography —
+fail-closed stands until the key is available; it is not a decision
+awaiting Her Grace, per the standing governance ruled 2026-10-12).
