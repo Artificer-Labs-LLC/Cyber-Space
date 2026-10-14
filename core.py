@@ -876,6 +876,20 @@ def _reach_mint(privkey_hex: str, node_pubkey: str, name: str, reach,
     """Mint a reach descriptor: the name key signs the canonical form.
     The descriptor rides the name-key-signed /fed/announce (announce half);
     mirrors merge it like directory rows. Never the master identity."""
+    # String-length gate, twin of fed make_envelope (5cb3d5b) and
+    # mint/rotate _read_seed (db659a5): bytes.fromhex ignores embedded
+    # whitespace, so a 65-char seed/pubkey with an inserted space (or
+    # a line wrap, or a tab) decodes to the TRUE 32 bytes and passes
+    # the decoded-length gate below — but the descriptor carries
+    # node_pubkey VERBATIM, so the minted descriptor bore a 65-char
+    # identity string _reach_descriptor_verify itself refuses on
+    # sight (len != 64): minted-but-unverifiable, a second spelling
+    # of the same key. Only the exact 64-char spellings mint; case is
+    # left alone (uppercase mints today and still does).
+    if not isinstance(privkey_hex, str) or len(privkey_hex) != 64 \
+            or not isinstance(node_pubkey, str) \
+            or len(node_pubkey) != 64:
+        raise ValueError("name key seed and pubkey must be 64 hex chars")
     msg = _reach_canonical(name, node_pubkey, reach, issued_at, expires_at)
     priv_b = bytes.fromhex(privkey_hex)
     pub_b = bytes.fromhex(node_pubkey)
