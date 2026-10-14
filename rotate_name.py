@@ -854,7 +854,10 @@ def main(argv: list[str]) -> int:
                          "mirror's /api/v1/names/rotate (default: "
                          f"{_DEFAULT_MIRROR}), then verify the mirror moved "
                          "the name")
-    ap.add_argument("--expiry-days", type=int, default=None,
+    # No type=int: argparse would bare-int() the value (see the gate
+    # in main) -- the raw string reaches main and is gated there so
+    # bad spellings refuse with return 2, not argparse's SystemExit.
+    ap.add_argument("--expiry-days", default=None,
                     help="liveness window of the new binding on submit "
                          f"(default {_DEFAULT_EXPIRY_DAYS}; submit only)")
     ap.add_argument("--promote", action="store_true",
@@ -918,23 +921,45 @@ def main(argv: list[str]) -> int:
     # combination and range here, before any file or wire use, exit 2.
     expiry_days = _DEFAULT_EXPIRY_DAYS
     if args.expiry_days is not None:
+        # ASCII digits only, one optional leading sign (twin of
+        # mint_name's --expiry-days gate aa8d2d0 / daemon._env_int):
+        # argparse type=int bare-int()ed this value, and int() parses
+        # Unicode decimal digits (an Arabic-Indic/fullwidth spelling
+        # of 365 became 365) and accepts underscore separators
+        # (3_65 became 365), so a non-ASCII or underscored spelling
+        # set a binding lifetime the operator never wrote in ASCII.
+        # The parse gate comes first, exactly where type=int refused,
+        # before the combination/range gates below; the sign and
+        # surrounding whitespace stay so valid spellings keep their
+        # exact behaviour.
+        _expiry_txt = args.expiry_days.strip()
+        _expiry_digits = (_expiry_txt[1:]
+                          if _expiry_txt[:1] in ("+", "-")
+                          else _expiry_txt)
+        if (not _expiry_digits or not _expiry_digits.isascii()
+                or not _expiry_digits.isdigit()):
+            print("refused: --expiry-days must be an integer — "
+                  "bad argument, nothing was minted, promoted or sent",
+                  file=sys.stderr)
+            return 2
+        _expiry_val = int(_expiry_txt)
         if args.submit is None:
             print("refused: --expiry-days only applies with --submit — "
                   "bad argument, nothing was minted or promoted",
                   file=sys.stderr)
             return 2
-        if args.expiry_days < 1:
-            print(f"refused: --expiry-days={args.expiry_days} is below "
+        if _expiry_val < 1:
+            print(f"refused: --expiry-days={_expiry_val} is below "
                   f"the 1-day floor — bad argument, nothing was sent",
                   file=sys.stderr)
             return 2
-        if args.expiry_days > _EXPIRY_DAYS_CAP:
-            print(f"refused: --expiry-days={args.expiry_days} exceeds "
+        if _expiry_val > _EXPIRY_DAYS_CAP:
+            print(f"refused: --expiry-days={_expiry_val} exceeds "
                   f"the namespace's {_EXPIRY_DAYS_CAP}-day "
                   f"binding-lifetime cap — bad argument, nothing was sent",
                   file=sys.stderr)
             return 2
-        expiry_days = args.expiry_days
+        expiry_days = _expiry_val
     home = Path.home() / ".cyberspace"
     if args.submit is not None:
         if not _valid_mirror(args.submit):
