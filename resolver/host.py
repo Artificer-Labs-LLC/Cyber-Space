@@ -97,10 +97,16 @@ import rendezvous
 
 def _env_int(name: str, default: int, floor: int = 1) -> int:
     """Bad env values fall back, never crash the daemon."""
-    try:
-        return max(floor, int(os.environ.get(name, "").strip()))
-    except (ValueError, TypeError):
+    raw = os.environ.get(name, "").strip()
+    # ASCII digits only, one optional leading sign -- twin of
+    # daemon._env_int's gate (1212c00): bare int() parses Unicode
+    # decimal digits and accepts underscore separators, so a
+    # non-ASCII or underscored spelling of CYBERNET_HOSTD_REFRESH
+    # aliased to a cadence the operator never wrote in ASCII.
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not digits or not digits.isascii() or not digits.isdigit():
         return default
+    return max(floor, int(raw))
 
 
 def _config() -> tuple[str, str, str | None, int, bool]:
@@ -420,11 +426,11 @@ def _hostd_refresh_warnings() -> list[str]:
     raw = os.environ.get("CYBERNET_HOSTD_REFRESH", "").strip()
     if not raw:
         return []
-    try:
-        refresh = int(raw)
-    except (ValueError, TypeError):
+    _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not _digits or not _digits.isascii() or not _digits.isdigit():
         return ["CYBERNET_HOSTD_REFRESH is not an integer — the 600 "
                 "default will be used instead"]
+    refresh = int(raw)
     if refresh < 1:
         return ["CYBERNET_HOSTD_REFRESH is below the 1 floor — 1 "
                 "will be used instead (re-announce is never disabled "

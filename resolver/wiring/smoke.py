@@ -55,10 +55,15 @@ def _default_port() -> int:
     main() like any other port."""
 
 
-    try:
-        return max(1, int(os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()))
-    except (ValueError, TypeError):
+    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
+    # Mirror daemon._env_int's ASCII gate exactly (1212c00): bare int()
+    # parses Unicode decimal digits and underscore separators, so a
+    # non-ASCII/underscored spelling aliased to a port the daemon
+    # itself refuses -- the smoke tested a port nobody listened on.
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not digits or not digits.isascii() or not digits.isdigit():
         return 5353
+    return max(1, int(raw))
 
 
 def _port_warnings() -> list[str]:
@@ -72,12 +77,12 @@ def _port_warnings() -> list[str]:
     raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
     if not raw:
         return []
-    try:
-        port = int(raw)
-    except (ValueError, TypeError):
+    _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not _digits or not _digits.isascii() or not _digits.isdigit():
         return [
             "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
             "default will be smoked instead"]
+    port = int(raw)
     if port < 1:
         return [
             "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 will be "

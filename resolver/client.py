@@ -54,10 +54,15 @@ def _default_port() -> int:
     """Mirror daemon._env_int("CYBERNET_RESOLVER_PORT", 5353, floor=1)
     exactly, so client and daemon derive the same port from the same
     environment — agreement, not a second parser that drifts."""
-    try:
-        return max(1, int(os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()))
-    except (ValueError, TypeError):
+    raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
+    # Mirror daemon._env_int's ASCII gate exactly (1212c00): bare int()
+    # parses Unicode decimal digits and underscore separators, so a
+    # non-ASCII/underscored spelling aliased to a port the daemon
+    # itself refuses -- the client queried a port nobody listened on.
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not digits or not digits.isascii() or not digits.isdigit():
         return 5353
+    return max(1, int(raw))
 
 
 def _client_port_warnings() -> list[str]:
@@ -70,12 +75,12 @@ def _client_port_warnings() -> list[str]:
     raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
     if not raw:
         return []
-    try:
-        port = int(raw)
-    except (ValueError, TypeError):
+    _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not _digits or not _digits.isascii() or not _digits.isdigit():
         return [
             "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
             "default will be queried instead"]
+    port = int(raw)
     if port < 1:
         return [
             "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 will be "
