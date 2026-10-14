@@ -68,12 +68,18 @@ def _rendezvous_epoch_len() -> int:
     kind (CYBERNET_RENDEZVOUS_EPOCH_LEN), so hoster and dialer compute
     the same meeting math. Fail-closed to the frozen default when the
     env is missing or out of the 60..86400 bounds."""
-    try:
-        val = int(os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "") or 0)
+    # ASCII digits only, one optional leading sign -- mirror
+    # core._reach_build's gate exactly: bare int() parses Unicode
+    # decimal digits and accepts underscore separators, so an
+    # aliasing spelling would hold points under an epoch_len the
+    # operator never wrote in ASCII (and the descriptor seat now
+    # refuses to advertise).
+    raw = os.environ.get("CYBERNET_RENDEZVOUS_EPOCH_LEN", "").strip()
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if digits and digits.isascii() and digits.isdigit():
+        val = int(raw)
         if rendezvous._epoch_len_ok(val):
             return val
-    except (ValueError, TypeError):
-        pass
     return rendezvous.EPOCH_LEN_DEFAULT
 
 

@@ -373,10 +373,14 @@ def _rendezvous_warnings() -> list[str]:
             "rendezvous will not be advertised (the descriptor entry "
             "rides on the relay strategy)")
     if epoch_raw:
-        try:
-            epoch_ok = rendezvous._epoch_len_ok(int(epoch_raw))
-        except (ValueError, TypeError):
-            epoch_ok = False
+        # Mirror _reach_build's ASCII gate exactly: bare int() parses
+        # Unicode decimal digits and accepts underscore separators,
+        # so the warnings would bless a spelling both other seats
+        # fall back on.
+        _digits = epoch_raw[1:] if epoch_raw[:1] in ("+", "-") else epoch_raw
+        epoch_ok = bool(
+            _digits and _digits.isascii() and _digits.isdigit()
+            and rendezvous._epoch_len_ok(int(epoch_raw)))
         if not epoch_ok:
             problems.append(
                 "CYBERNET_RENDEZVOUS_EPOCH_LEN is not an integer in "

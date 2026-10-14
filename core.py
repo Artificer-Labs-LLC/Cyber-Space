@@ -2810,8 +2810,20 @@ def _reach_build(name: str, name_priv_hex: str) -> tuple[dict, str] | None:
     if (os.environ.get("CYBERNET_RENDEZVOUS", "").strip() == "1"
             and any(s.get("kind") == "relay" for s in strategies)):
         try:
-            rz_len = int(os.environ.get(
-                "CYBERNET_RENDEZVOUS_EPOCH_LEN", "") or 0)
+            # ASCII digits only, one optional leading sign -- twin of
+            # the _reach_build TTL gate below: bare int() parses
+            # Unicode decimal digits (an Arabic-Indic/fullwidth
+            # spelling of 600 became 600) and accepts underscore
+            # separators (6_00 became 600), so a non-ASCII or
+            # underscored spelling set an epoch_len the operator
+            # never wrote in ASCII and signed it into the descriptor.
+            _rz_raw = os.environ.get(
+                "CYBERNET_RENDEZVOUS_EPOCH_LEN", "").strip()
+            _rz_digits = _rz_raw[1:] if _rz_raw[:1] in ("+", "-") else _rz_raw
+            if (not _rz_digits or not _rz_digits.isascii()
+                    or not _rz_digits.isdigit()):
+                raise ValueError("epoch_len not an ASCII integer")
+            rz_len = int(_rz_raw)
             if not rendezvous._epoch_len_ok(rz_len):
                 raise ValueError("epoch_len out of bounds")
         except (ValueError, TypeError):
