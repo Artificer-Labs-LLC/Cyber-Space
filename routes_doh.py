@@ -183,6 +183,15 @@ def _decode_dns_param(dns: str) -> bytes:
             core_part + "=" * (-len(core_part) % 4))
     except Exception:
         raise HTTPException(status_code=400, detail="Bad dns parameter")
+    # Trailing-bit gate, completing the canonical-spelling gate above:
+    # urlsafe_b64decode DISCARDS the unused low bits of the final
+    # character, so 'AB' decoded to the same byte as canonical 'AA'
+    # (and '_x' to 0xff, canonical '_w') and was answered -- two
+    # spellings, one wire message. Only the spelling that re-encodes
+    # to itself is canonical (RFC 4648); anything else is a bad
+    # parameter, twin of the alphabet/pad refusals above.
+    if base64.urlsafe_b64encode(raw).decode().rstrip("=") != core_part:
+        raise HTTPException(status_code=400, detail="Bad dns parameter")
     if not raw or len(raw) > 4096:
         raise HTTPException(status_code=400, detail="Bad DNS message")
     return raw
