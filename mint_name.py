@@ -310,11 +310,28 @@ def main(argv: list[str]) -> int:
               f"(lowercase alnum/hyphen, 1-{_LABEL_MAX} chars, no dots, no edge hyphens)",
               file=sys.stderr)
         return 2
-    try:
-        expiry_days = int(opts.get("--expiry-days", _DEFAULT_EXPIRY_DAYS))
-    except ValueError:
-        print("refused: --expiry-days must be an integer", file=sys.stderr)
-        return 2
+    _expiry_raw = opts.get("--expiry-days")
+    if _expiry_raw is None:
+        expiry_days = _DEFAULT_EXPIRY_DAYS
+    else:
+        # ASCII digits only, one optional leading sign (twin of
+        # daemon._env_int's gate): bare int() parses Unicode decimal
+        # digits (an Arabic-Indic/fullwidth spelling of 365 became
+        # 365) and accepts underscore separators (3_65 became 365),
+        # so a non-ASCII or underscored spelling minted a binding
+        # lifetime the operator never wrote in ASCII. The sign and
+        # surrounding whitespace stay so valid spellings and the
+        # below-floor refusal below keep their exact behaviour.
+        _expiry_txt = _expiry_raw.strip()
+        _expiry_digits = (_expiry_txt[1:]
+                          if _expiry_txt[:1] in ("+", "-")
+                          else _expiry_txt)
+        if (not _expiry_digits or not _expiry_digits.isascii()
+                or not _expiry_digits.isdigit()):
+            print("refused: --expiry-days must be an integer",
+                  file=sys.stderr)
+            return 2
+        expiry_days = int(_expiry_txt)
     if expiry_days < 1:
         # No silent clamp: max(1, ...) turned 0/negative into a 1-day
         # binding the operator never asked for, wrote the key, and read
