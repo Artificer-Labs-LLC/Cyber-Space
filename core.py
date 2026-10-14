@@ -1614,6 +1614,20 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
         sig = _sig_raw.lower()
         if len(challenge) != 64 or len(sig) != 128:
             return False
+        # String-length gate on the verification key itself, twin of
+        # _name_binding_verify's helper gate: this seat gated the
+        # challenge and the sig spellings but handed node_pubkey to
+        # checkvalid ungated, and bytes.fromhex ignores embedded
+        # whitespace, so a 65-char inserted-space (or wrapped, or
+        # tabbed) pubkey decoded to the TRUE 32 bytes and VERIFIED —
+        # a second spelling of the name key accepted as live-proof,
+        # a spelling every binding seat refuses on sight (len != 64).
+        # The production caller passes the step-2-gated binding key,
+        # so no live path changes. Only the exact 64-char spelling
+        # proves; case is left alone (uppercase verified before and
+        # still does).
+        if not isinstance(node_pubkey, str) or len(node_pubkey) != 64:
+            return False
         # Decoded-length gate, twin of verify_name/_name_binding_verify:
         # bytes.fromhex ignores embedded spaces, so a 64-char challenge
         # with two spaces decoded to 31 bytes and a genuine signature
@@ -1621,7 +1635,8 @@ def _relay_open_session(relay_url: str, label: str, node_pubkey: str,
         # that is not the 32-byte challenge any relay serves.
         # checkvalid gates the sig/pubkey lengths, never the message's.
         if len(bytes.fromhex(challenge)) != 32 \
-                or len(bytes.fromhex(sig)) != 64:
+                or len(bytes.fromhex(sig)) != 64 \
+                or len(bytes.fromhex(node_pubkey)) != 32:
             return False
         return _fed_ed25519.checkvalid(
             bytes.fromhex(sig), bytes.fromhex(challenge),
