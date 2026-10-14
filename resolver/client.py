@@ -763,7 +763,10 @@ def main(argv: list[str] | None = None) -> int:
         "--server", default=DEFAULT_SERVER, help="daemon host (default 127.0.0.1)"
     )
     parser.add_argument(
-        "--port", type=int, default=None,
+        # No type=int: argparse would bare-int() the value (see the
+        # gate in main) -- the raw string reaches main and is gated
+        # there so bad spellings refuse with return 2, not SystemExit.
+        "--port", default=None,
         help="daemon port (default: CYBERNET_RESOLVER_PORT or 5353, "
              "as the daemon derives it)",
     )
@@ -771,6 +774,31 @@ def main(argv: list[str] | None = None) -> int:
         "--tcp-only", action="store_true", help="skip UDP, speak DNS-over-TCP only"
     )
     args = parser.parse_args(argv)
+
+    if args.port is not None:
+        # ASCII digits only, one optional leading sign (twin of
+        # rotate_name's --expiry-days gate f97a2c9 / daemon._env_int):
+        # argparse type=int bare-int()ed this value, and int() parses
+        # Unicode decimal digits (an Arabic-Indic/fullwidth spelling
+        # of 5353 became 5353) and accepts underscore separators
+        # (5_353 became 5353), so a non-ASCII or underscored spelling
+        # queried a port the operator never wrote in ASCII, where the
+        # env seat (_default_port) refuses those spellings. The parse
+        # gate comes first, exactly where type=int refused; the sign
+        # and surrounding whitespace stay so valid spellings keep
+        # their exact behaviour through the range gate below.
+        _port_txt = args.port.strip()
+        _port_digits = (_port_txt[1:]
+                        if _port_txt[:1] in ("+", "-") else _port_txt)
+        if (not _port_digits or not _port_digits.isascii()
+                or not _port_digits.isdigit()):
+            print(
+                "error: --port must be an integer — "
+                "not a dialable port (must be 1..65535)",
+                flush=True,
+            )
+            return 2
+        args.port = int(_port_txt)
 
     # A name that is not exactly one valid label under .cyberspace can
     # never be claimed (core._valid_name_label's grammar), so querying

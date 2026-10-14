@@ -713,12 +713,36 @@ def main() -> int:
     ap.add_argument("--name", default="genesis.cyberspace",
                     help="registered name to resolve (default: genesis.cyberspace)")
     ap.add_argument("--server", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=None,
+    # No type=int: argparse would bare-int() the value (see the gate
+    # in main) -- the raw string reaches main and is gated there so
+    # bad spellings refuse with return 1, not argparse's SystemExit.
+    ap.add_argument("--port", default=None,
                     help="daemon port (default: CYBERNET_RESOLVER_PORT "
                          "or 5353, as the daemon and client derive it)")
     ap.add_argument("--tcp", action="store_true",
                     help="run the same checks over DNS-over-TCP (RFC 7766)")
     args = ap.parse_args()
+    if args.port is not None:
+        # ASCII digits only, one optional leading sign (twin of
+        # client.main's --port gate / rotate_name f97a2c9): argparse
+        # type=int bare-int()ed this value, and int() parses Unicode
+        # decimal digits (an Arabic-Indic/fullwidth spelling of 5353
+        # became 5353) and accepts underscore separators (5_353 became
+        # 5353), so a non-ASCII or underscored spelling smoked a port
+        # the operator never wrote in ASCII, where the env seat
+        # (_default_port) refuses those spellings. The sign and
+        # surrounding whitespace stay so valid spellings keep their
+        # exact behaviour through the range gate below.
+        _port_txt = args.port.strip()
+        _port_digits = (_port_txt[1:]
+                        if _port_txt[:1] in ("+", "-") else _port_txt)
+        if (not _port_digits or not _port_digits.isascii()
+                or not _port_digits.isdigit()):
+            print(f"FAIL: --port {args.port} must be an integer — "
+                  f"not a dialable port (must be 1..65535) — "
+                  f"bad argument, no query attempted")
+            return 1
+        args.port = int(_port_txt)
     if args.port is None:
         # --port wins over the env derivation, and the env warnings
         # (which describe the port the env WOULD have derived) stay
