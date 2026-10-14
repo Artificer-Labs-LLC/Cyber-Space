@@ -15,7 +15,8 @@ from core import (CAP_RE, IS_GENESIS, MAX_BODY, NAME_RE, NODE_NAME, _NODE_PRIV,
                   _invite_payload, _leave_payload, _now, _pigeonhole_cutoff,
                   _peer_urlopen, _post_message, _read_peer_json,
                   _removed_payload, _touch_visitor, _valid_name,
-                  _valid_node_url, ingest_reach_descriptor)
+                  _valid_node_url, NAMES_GOSSIP_BATCH_CAP,
+                  ingest_gossiped_binding, ingest_reach_descriptor)
 
 router = APIRouter()
 
@@ -466,6 +467,58 @@ def fed_gossip(env: dict):
             else:
                 ignored += 1
     return {"ok": True, "merged": merged, "ignored": ignored}
+
+
+@router.post("/fed/names/gossip")
+def fed_names_gossip(env: dict):
+    """Name-binding gossip receive half (.cyberspace Phase 1 build item 6):
+    the twin of core._names_gossip_out, which has been POSTing signed
+    binding batches to this path. Signed envelope, recipient must be this
+    node's own pubkey (direct), and body.from_node_pub must equal
+    sender_pub. The sender must already be a known, unretired peer (twin
+    of fed_gossip) — untrusted strangers cannot make this node do merge
+    work. The envelope authenticates only the carrier: every binding is
+    re-verified and merged by core.ingest_gossiped_binding itself
+    (signature, freshness, 365-day cap, registry growth gate, live
+    foreign incumbent always kept), so a lying carrier can withhold a
+    binding but never plant or displace one. Batch capped at the
+    sender's own NAMES_GOSSIP_BATCH_CAP; per-binding verdicts are
+    tallied, never fatal — one bad binding never sinks the batch."""
+    if not isinstance(env, dict) or not _fed_env.verify_envelope(env):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    if env.get("recipient") != _NODE_PUB:
+        raise HTTPException(status_code=400, detail="not addressed to this node")
+    # Replay dedupe, twin of fed_gossip: claim the envelope's sig after
+    # verify+recipient, before every later gate, so a replay can never
+    # redo the merge work or burn fednamesgossip: quota.
+    with _db_lock, _db() as conn:
+        try:
+            replayed = _claim_seen_sig(conn, env.get("sig"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid envelope")
+        if replayed:
+            raise HTTPException(status_code=400, detail="replay")
+    body = env.get("body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="invalid envelope")
+    sender_pub = env.get("sender_pub")
+    if body.get("from_node_pub") != sender_pub:
+        raise HTTPException(status_code=400, detail="sender_pub mismatch")
+    _check_rate(f"fednamesgossip:{sender_pub}")
+    with _db_lock, _db() as conn:
+        known = conn.execute(
+            "SELECT 1 FROM peers WHERE node_pub=? AND retired_at=''",
+            (sender_pub,)).fetchone()
+    if not known:
+        raise HTTPException(status_code=404, detail="unknown peer")
+    bindings = body.get("bindings")
+    if not isinstance(bindings, list):
+        raise HTTPException(status_code=400, detail="bindings must be a list")
+    results = {}
+    for binding in bindings[:NAMES_GOSSIP_BATCH_CAP]:
+        verdict = ingest_gossiped_binding(binding)
+        results[verdict] = results.get(verdict, 0) + 1
+    return {"ok": True, "results": results}
 
 
 DIR_SYNC_ROSTER_CAP = 128
