@@ -886,8 +886,22 @@ def main(argv: list[str]) -> int:
                   "rotation — drop it for --submit/--promote",
                   file=sys.stderr)
             return 2
+        # String-length gate, twin of _read_seed / mint_name._read_seed:
+        # bytes.fromhex ignores embedded whitespace, so a 65-char
+        # inserted-space (or line-wrapped, or tabbed) seed argument
+        # decoded to the TRUE 32 bytes and passed the decoded-length
+        # gate below — a spelling every seed-file seat and hostd
+        # refuse on sight (their seed must be exactly 64 hex chars),
+        # leaving the name rotated but unhostable. _normalize has
+        # already stripped outer padding and lowercased, so only the
+        # exact 64-char spelling is a seed; uppercase reads byte-exact.
+        _seed_norm = _normalize(args.new_key_seed)
+        if len(_seed_norm) != 64:
+            print("refused: --new-key-seed is not a 64-hex-char seed — "
+                  "bad argument, nothing was minted", file=sys.stderr)
+            return 2
         try:
-            new_priv = bytes.fromhex(_normalize(args.new_key_seed))
+            new_priv = bytes.fromhex(_seed_norm)
         except ValueError:
             print("refused: --new-key-seed is not hex — bad argument, "
                   "nothing was minted", file=sys.stderr)
