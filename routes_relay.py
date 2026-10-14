@@ -163,8 +163,16 @@ def _resolve_rendezvous_token(point_id) -> str | None:
     if not isinstance(point_id, str) or len(point_id) != 64:
         return None
     try:
-        bytes.fromhex(point_id)
+        raw = bytes.fromhex(point_id)
     except Exception:
+        return None
+    # Decoded-length gate, twin of _valid_rendezvous in this file:
+    # bytes.fromhex ignores embedded spaces, so a spaced 64-char
+    # point decoded to 31 bytes passed this shape gate and was only
+    # refused downstream (index miss / epoch compare) — the seat's
+    # own malformed -> None contract must hold at the seat, whatever
+    # writer populated the index. Only a 32-byte decode is a point.
+    if len(raw) != 32:
         return None
     with _relay_lock:
         _reap_relay(time.monotonic())
@@ -238,7 +246,11 @@ async def relay_hold_query(request: Request, point_id: str = ""):
     try:
         if not isinstance(point_id, str) or len(point_id) != 64:
             return {"held": False}
-        bytes.fromhex(point_id)
+        # Decoded-length gate, twin of _valid_rendezvous: a spaced
+        # 64-char point decodes to 31 bytes — malformed, held:false
+        # at this seat, not merely by downstream index/epoch miss.
+        if len(bytes.fromhex(point_id)) != 32:
+            return {"held": False}
         now_mono = time.monotonic()
         with _relay_lock:
             _reap_relay(now_mono)
