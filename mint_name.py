@@ -72,7 +72,18 @@ def _read_seed(path) -> bytes:
         raw = f.read(_SEED_MAX + 1)
     if len(raw) > _SEED_MAX:
         raise ValueError(f"seed file at {path} exceeds {_SEED_MAX} chars")
-    return bytes.fromhex(raw.strip())
+    stripped = raw.strip()
+    # String-length gate, twin of resolver/host._config's seed gate:
+    # bytes.fromhex ignores embedded whitespace, so a 65-char
+    # inserted-space (or line-wrapped, or tabbed) seed decoded to the
+    # TRUE 32 bytes and minted happily — a key file hostd refuses on
+    # sight (its seed must be exactly 64 hex chars), leaving the name
+    # minted but unhostable. Only the exact 64-char spelling is a seed;
+    # outer padding still strips above, uppercase still reads
+    # byte-exact (fromhex is case-insensitive, length unchanged).
+    if len(stripped) != 64:
+        raise ValueError(f"seed file at {path} is not a 64-hex-char seed")
+    return bytes.fromhex(stripped)
 
 
 def _write_secret(path, text, overwrite=False):
