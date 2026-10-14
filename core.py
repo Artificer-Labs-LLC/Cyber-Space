@@ -2657,7 +2657,22 @@ def _gossip_loop() -> None:
             # and gossip never ran. Fall back to the 600 default, the
             # resolver _env_int semantics: bad values degrade, never spin.
             try:
-                base = max(60, int(os.environ.get("CYBERNET_GOSSIP_INTERVAL", "600")))
+                # ASCII digits only, one optional leading sign -- twin
+                # of daemon._env_int's gate (1212c00): bare int() parses
+                # Unicode decimal digits (an Arabic-Indic/fullwidth
+                # spelling of 900 became 900) and accepts underscore
+                # separators (9_00 became 900), so a non-ASCII or
+                # underscored spelling set a gossip cadence the operator
+                # never wrote in ASCII. The sign stays so negatives
+                # still reach the 60 floor as before.
+                _gi_raw = os.environ.get(
+                    "CYBERNET_GOSSIP_INTERVAL", "600").strip()
+                _gi_digits = (_gi_raw[1:] if _gi_raw[:1] in ("+", "-")
+                              else _gi_raw)
+                if (not _gi_digits or not _gi_digits.isascii()
+                        or not _gi_digits.isdigit()):
+                    raise ValueError("gossip interval not an ASCII integer")
+                base = max(60, int(_gi_raw))
             except (ValueError, TypeError):
                 base = 600
             time.sleep(base * random.uniform(0.8, 1.2))
@@ -2939,7 +2954,22 @@ def _reannounce_loop() -> None:
             # default (resolver _env_int semantics: bad values degrade,
             # never spin), floor 300 intact.
             try:
-                base = max(300, int(os.environ.get("CYBERNET_ANNOUNCE_INTERVAL", "3600")))
+                # ASCII digits only, one optional leading sign -- twin
+                # of the _gossip_loop gate above: bare int() parses
+                # Unicode decimal digits (an Arabic-Indic spelling of
+                # 7200 became 7200) and accepts underscore separators
+                # (7_200 became 7200), so a non-ASCII or underscored
+                # spelling set an announce cadence the operator never
+                # wrote in ASCII. The sign stays so negatives still
+                # reach the 300 floor as before.
+                _ai_raw = os.environ.get(
+                    "CYBERNET_ANNOUNCE_INTERVAL", "3600").strip()
+                _ai_digits = (_ai_raw[1:] if _ai_raw[:1] in ("+", "-")
+                              else _ai_raw)
+                if (not _ai_digits or not _ai_digits.isascii()
+                        or not _ai_digits.isdigit()):
+                    raise ValueError("announce interval not an ASCII integer")
+                base = max(300, int(_ai_raw))
             except (ValueError, TypeError):
                 base = 3600
             time.sleep(base * random.uniform(0.8, 1.2))
