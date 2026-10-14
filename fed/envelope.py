@@ -39,6 +39,20 @@ def make_envelope(privkey_hex: str, sender_pub_hex: str, recipient: str,
     payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     body_hash = hashlib.sha256(payload).digest()
     msg = _canonical(ts, recipient, body_hash)
+    # String-length gate, twin of verify_envelope below and
+    # mint/rotate _read_seed (db659a5): bytes.fromhex ignores embedded
+    # whitespace, so a 65-char seed/pubkey with an inserted space (or
+    # a line wrap, or a tab) decodes to the TRUE 32 bytes and passes
+    # the decoded-length gate below — but the envelope carries
+    # sender_pub VERBATIM, so the minted envelope bore a 65-char
+    # identity string verify_envelope itself refuses on sight
+    # (len != 64): minted-but-unverifiable, a second spelling of the
+    # same key. Only the exact 64-char spellings mint; case is left
+    # alone (uppercase mints today and still does).
+    if not isinstance(privkey_hex, str) or len(privkey_hex) != 64 \
+            or not isinstance(sender_pub_hex, str) \
+            or len(sender_pub_hex) != 64:
+        raise ValueError("sender seed and pubkey must be 64 hex chars")
     priv_b = bytes.fromhex(privkey_hex)
     pub_b = bytes.fromhex(sender_pub_hex)
     # Decoded-length gates, twin of core._reach_mint: bytes.fromhex
