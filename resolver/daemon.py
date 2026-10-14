@@ -87,10 +87,18 @@ def _env_str(name: str, default: str) -> str:
 
 def _env_int(name: str, default: int, floor: int = 0) -> int:
     """Bad env values fall back, never crash the daemon."""
-    try:
-        return max(floor, int(os.environ.get(name, "").strip()))
-    except (ValueError, TypeError):
+    raw = os.environ.get(name, "").strip()
+    # ASCII digits only, one optional leading sign (B1 twin of
+    # _parse_upstream's port gate): bare int() parses Unicode decimal
+    # digits (an Arabic-Indic/fullwidth spelling of 5354 became 5354)
+    # and accepts underscore separators (5_354 became 5354), so a
+    # non-ASCII or underscored spelling aliased to a value the
+    # operator never wrote in ASCII. The sign stays so negative
+    # values still reach the floor exactly as before.
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not digits or not digits.isascii() or not digits.isdigit():
         return default
+    return max(floor, int(raw))
 
 
 def _parse_upstream(raw: str) -> tuple[str, int]:
@@ -223,13 +231,16 @@ def _daemon_config_warnings() -> list[str]:
     problems: list[str] = []
     raw = os.environ.get("CYBERNET_RESOLVER_PORT", "").strip()
     if raw:
-        try:
-            port = int(raw)
-        except (ValueError, TypeError):
+        # Mirror _env_int's ASCII gate exactly: a Unicode-digit or
+        # underscored spelling is not an integer here either, or the
+        # warnings would bless a value _env_int falls back on.
+        _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+        if not _digits or not _digits.isascii() or not _digits.isdigit():
             problems.append(
                 "CYBERNET_RESOLVER_PORT is not an integer — the 5353 "
                 "default will be used instead")
         else:
+            port = int(raw)
             if port < 1:
                 problems.append(
                     "CYBERNET_RESOLVER_PORT is below the 1 floor — 1 "
@@ -240,13 +251,13 @@ def _daemon_config_warnings() -> list[str]:
                     "will fail (no valid port can be derived from it)")
     raw = os.environ.get("CYBERNET_TTL_CAP", "").strip()
     if raw:
-        try:
-            ttl = int(raw)
-        except (ValueError, TypeError):
+        _digits = raw[1:] if raw[:1] in ("+", "-") else raw
+        if not _digits or not _digits.isascii() or not _digits.isdigit():
             problems.append(
                 "CYBERNET_TTL_CAP is not an integer — the 300 default "
                 "will be used instead")
         else:
+            ttl = int(raw)
             if ttl < 0:
                 problems.append(
                     "CYBERNET_TTL_CAP is below the 0 floor — 0 will be "
