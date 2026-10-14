@@ -97,7 +97,8 @@ Rotating slots and multi-point fan-out stay reserved as the follow-on.
 The derived-point dial strategy, fully specified so code time is pure
 implementation. The mirror, hoster, dialer, and descriptor halves are
 all WIRED 2026-10-09 (Status below); only the public-relay e2e remains
-gated (gate 1, her call).
+gated on the gate-1 HQ redeploy (APPROVED by Villhaze 2026-10-12;
+execution rides the fleet/O.R.A.C.L.E. deploy path).
 
 Reach entry, name-key-signed in the descriptor:
 
@@ -215,7 +216,8 @@ the routing (reach-relay-dial-e2e-test.py 13/13, reach-hostd-test.py
 rendezvous path — the held point routes and the name-key challenge
 signature is the auth; token silence stays the legacy-relay behavior.
 The public-relay e2e and the
-deployed genesis build remain gated (gate 1, her call).
+deployed genesis build remain gated on the gate-1 HQ redeploy (APPROVED by Villhaze 2026-10-12;
+execution rides the fleet/O.R.A.C.L.E. deploy path).
 
 **Rendezvous is a REAL descriptor kind (2026-10-09).** The reservation
 is lifted: `_reach_build` mints `{ "kind": "rendezvous",

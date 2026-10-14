@@ -59,8 +59,10 @@ the client tries them in order and keeps the first that verifies:
   session BY THE HELD POINT — the descriptor token never leaves the
   hoster. Harnesses: kdf 18/18, holdquery 19/19, open-bypoint 15/15,
   epochlen 19/19, dialer-extract belt 39/39, e2e dial triangle 13/13.
-  The public-relay e2e (real public URL, not loopback) is gated (gate 1,
-  her call).
+  The public-relay e2e (real public URL, not loopback) awaits the gate-1
+  HQ redeploy (APPROVED by Villhaze 2026-10-12; execution rides the
+  fleet/O.R.A.C.L.E. deploy path). Loopback e2e re-verified 13/13
+  2026-10-13.
 
 Verification discipline mirrors the name binding: canonical-serialize the
 descriptor fields (excluding `signature`), ed25519-verify against
@@ -186,11 +188,11 @@ noticing; the first scaling cost is wait-poll sockets, not state.
 Next: a NAT-hidden hoster end-to-end across a public relay (daemon
 hold-open + dialer session through a real public URL, not loopback) —
 currently BLOCKED: live genesis still 404s /relay/register (deployed build
-predates the relay routes; needs the approved HQ redeploy, gate 1, her
-call). Meanwhile rendezvous went from design stub to wired primitive
+predates the relay routes; needs the gate-1 HQ redeploy, APPROVED by
+Villhaze 2026-10-12, execution with the fleet/O.R.A.C.L.E.). Meanwhile rendezvous went from design stub to wired primitive
 2026-10-09 (docs/RENDEZVOUS.md): the derived-point shape was chosen and
 frozen, the mirror, hoster, and dialer halves are coded and harnessed —
 only the public-relay e2e remains (same gate 1).
-Her Grace's gates hold: nothing here touches the namespace contract, the
+The standing gates hold: nothing here touches the namespace contract, the
 fail-closed posture, or the name key. No named projects or protocols in
 artifacts; the pattern is described, not branded.
