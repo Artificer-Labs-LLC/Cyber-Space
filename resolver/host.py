@@ -118,7 +118,16 @@ def _config() -> tuple[str, str, str | None, int, bool]:
     ok = bool(name) and core._valid_name_label(name) is True
     if ok:
         try:
-            ok = len(bytes.fromhex(name_priv)) == 32
+            # String-length gate alongside the decoded gate, twin of
+            # hold_open._sign_challenge (which gates len != 64):
+            # bytes.fromhex ignores embedded spaces, so a 65-char seed
+            # with an inserted space decoded to the TRUE 32 bytes and
+            # this seat called the daemon runnable — the reach announce
+            # minted fine (its seats decode-gate too) but the relay
+            # hold-open could never sign a challenge, so the name
+            # advertised relay reach it could never answer for.
+            ok = (len(name_priv) == 64
+                  and len(bytes.fromhex(name_priv)) == 32)
         except Exception:
             ok = False
     mirror_raw = os.environ.get("CYBERNET_MIRROR_URL", "").strip()
@@ -149,7 +158,11 @@ def _startup_problems() -> list[str]:
         problems.append("CYBERNET_NAME_PRIVKEY unset")
     else:
         try:
-            if len(bytes.fromhex(name_priv)) != 32:
+            # String-length half of the stated rule, twin of _config:
+            # a 65-char inserted-space seed decoded to the true 32
+            # bytes and passed this seat silently, though the message
+            # below already claimed 64 hex chars.
+            if len(name_priv) != 64 or len(bytes.fromhex(name_priv)) != 32:
                 problems.append("CYBERNET_NAME_PRIVKEY must be a "
                                 "64-hex-char (32-byte) seed")
         except Exception:
