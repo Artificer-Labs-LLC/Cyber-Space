@@ -1358,6 +1358,20 @@ def names_rotations(request: Request, name: str):
             "SELECT old_pubkey, new_pubkey, issued_at, signature, accepted_at "
             "FROM name_rotations WHERE name=? ORDER BY accepted_at ASC, rowid ASC", (label,))
         rows = cur.fetchall()
+    # String-length gate, twin of names_resolve (379568b): this seat
+    # serves the stored rows VERBATIM, and bytes.fromhex ignores
+    # embedded spaces, so a legacy row with a 129-char inserted-space
+    # sig (or a 65-char spaced pubkey) decoded to the TRUE bytes yet
+    # was served in a non-canonical spelling every consumer refuses
+    # on sight (rotate_name's verify_rotation gates
+    # len(old_pubkey/new_pubkey) != 64 / len(signature) != 128).
+    # Only exact 128/64 spellings are served; case is left alone
+    # (uppercase served before and still does). A name whose rows are
+    # all non-canonical reads as absent, like a name with no rows.
+    rows = [r for r in rows
+            if isinstance(r[0], str) and len(r[0]) == 64
+            and isinstance(r[1], str) and len(r[1]) == 64
+            and isinstance(r[3], str) and len(r[3]) == 128]
     if not rows:
         raise HTTPException(status_code=404, detail="No rotations recorded for this name.")
     return {"name": label,
