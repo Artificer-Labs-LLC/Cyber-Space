@@ -1316,10 +1316,19 @@ def _workspace_entry_cap() -> int:
     CYBERNET_WORKSPACE_ENTRY_CAP env override, default 1000. When an append
     would exceed it, the oldest unstruck entries are struck first — pruning
     is announced on the response, never silent."""
-    try:
-        cap = int(os.environ.get("CYBERNET_WORKSPACE_ENTRY_CAP", "1000"))
-    except ValueError:
+    # ASCII digits only, one optional leading sign -- twin of
+    # daemon._env_int's gate (1212c00): bare int() parses Unicode
+    # decimal digits (an Arabic-Indic/fullwidth spelling of 2000
+    # became 2000) and accepts underscore separators (2_000 became
+    # 2000), so a non-ASCII or underscored spelling set an entry cap
+    # the operator never wrote in ASCII. The sign stays so negative
+    # values still reach the floor exactly as before.
+    raw = os.environ.get("CYBERNET_WORKSPACE_ENTRY_CAP", "1000").strip()
+    digits = raw[1:] if raw[:1] in ("+", "-") else raw
+    if not digits or not digits.isascii() or not digits.isdigit():
         cap = 1000
+    else:
+        cap = int(raw)
     return max(cap, 1)
 
 def _workspace_row(wid: int):
