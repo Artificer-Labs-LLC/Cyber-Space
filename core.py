@@ -1249,9 +1249,12 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
       - every hop verifies (old key's signature, shapes, label, not
         future-dated — the same verify_rotation the route uses);
       - every hop names this label;
-      - linkage: hop[0].old IS the mirror's stored key, and each later
-        hop's old == the previous hop's new (a gap is a broken lineage,
-        fail-closed);
+      - linkage: the mirror's stored key IS some hop's old (the head
+        hop for a mirror that never followed the rotation, a later
+        hop for one that is only part-way down the lineage), each
+        later hop's old == the previous hop's new (a gap is a broken
+        lineage, fail-closed), so the suffix from the stored key to
+        the tail is one contiguous signed path;
       - the tail hop's new IS the gossiped binding's key;
       - every hop was issued at or before the binding (the chain moves
         forward in time, twin of the single-hop rule).
@@ -1272,6 +1275,7 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
     if len(chain) > _ROTATION_CHAIN_CAP:
         return False
     prev_new = None
+    anchored = False
     for i, rec in enumerate(chain):
         if not isinstance(rec, dict):
             return False
@@ -1286,12 +1290,13 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
             return False
         old = rec["old_pubkey"].strip().lower()
         new = rec["new_pubkey"].strip().lower()
-        if i == 0:
-            if old != stored_pubkey.lower():
-                return False
-        elif old != prev_new:
+        if i > 0 and old != prev_new:
             return False
+        if old == stored_pubkey.lower():
+            anchored = True
         prev_new = new
+    if not anchored:
+        return False
     if prev_new != new_pubkey.lower():
         return False
     return True
