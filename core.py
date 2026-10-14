@@ -266,7 +266,13 @@ def _node_keypair() -> tuple[str, str]:
 
 _NODE_PRIV, _NODE_PUB = _node_keypair()
 
-_NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::(\d{1,5}))?(/[a-zA-Z0-9_./-]*)?$")
+# The port class is [0-9], NOT \d (B1 twin of the timestamp seats in
+# core_serve/verify_name): \d matches Unicode decimal digits on str
+# patterns and int() below parses them, so an Arabic-Indic/fullwidth
+# spelling of 5353 passed both gates and was stored verbatim -- while
+# urllib's port parser (the dialer) refuses that string on sight.
+# Blessed-but-undialable is refused here instead.
+_NODE_URL_RE = re.compile(r"^https?://(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9_.-]+)(?::([0-9]{1,5}))?(/[a-zA-Z0-9_./-]*)?$")
 
 
 def _valid_node_url(url: str) -> str:
