@@ -191,6 +191,17 @@ def _name_pub_from_priv(name_priv_hex: str) -> str | None:
     the seed is unusable; the hold-open still works without rendezvous
     points (degraded, not broken)."""
     try:
+        # String-length gate, twin of _sign_challenge below (which
+        # refuses len != 64) and resolver/host._config: bytes.fromhex
+        # ignores embedded whitespace, so a 65-char inserted-space (or
+        # wrapped, or tabbed) seed decoded to the TRUE 32 bytes and
+        # derived the true pubkey here -- while the same hold-open
+        # cycle's _sign_challenge refused that exact spelling on
+        # sight. Points were registered under a key the hoster would
+        # not sign for: advertised at the relay, absent to dialers.
+        # Only a 64-char string is a seed spelling.
+        if not isinstance(name_priv_hex, str) or len(name_priv_hex) != 64:
+            return None
         raw = bytes.fromhex(name_priv_hex)
         # Decoded-length gate, twin of rendezvous._name_pub_bytes:
         # bytes.fromhex ignores embedded spaces, so a 64-char string
