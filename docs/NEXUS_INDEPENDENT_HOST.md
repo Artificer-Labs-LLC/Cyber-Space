@@ -55,6 +55,16 @@ not argued from convenience in the moment.
 - Eligibility asserted from a registry or list rather than from
   the machine itself.
 
+## Evaluating a candidate
+
+Run `nexus_host_check.py` with the evidence recorded at standup
+(machine ids, operators, evidence source, feed, pin source, and
+the HQ / claim-key flags where they apply). It is offline and
+fail-closed: ELIGIBLE requires all five bars on the evidence
+supplied, and any missing or disqualifying value reads NOT
+ELIGIBLE. The tool evaluates supplied evidence only — it does not
+create it, name a host, or authorize provisioning or spend.
+
 ## Current state (2026-10-15)
 
 No candidate host has cleared this bar; the witness set is short
