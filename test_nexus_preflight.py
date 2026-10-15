@@ -98,6 +98,26 @@ with tempfile.TemporaryDirectory() as td:
     pub3, problems = np.check_key_file(key)
     _check(pub3 is None and problems, "malformed seed must be refused")
 
+    # Non-UTF-8 key bytes: a named problem, never a raised
+    # UnicodeDecodeError — check_key_file promises "never raises on
+    # bad input", and status/claim call preflight in-process, so a
+    # raise would silence all three verdicts at once.
+    key.write_bytes(b"\xff\xfe" + b"A" * 62)
+    pub4, problems = np.check_key_file(key)
+    _check(pub4 is None and problems,
+           "non-UTF-8 key must be refused, not raised")
+    _ready, _pub, _bl = np.preflight("nexus", key, bak, ROOT)
+    _check(not _ready and _bl,
+           "non-UTF-8 key must block READY with named blockers")
+
+    # Non-UTF-8 tree file: missing-route blocker, never a crash.
+    troot = td / "troot"
+    troot.mkdir(exist_ok=True)
+    (troot / "federation.py").write_bytes(b"\xff\xfe binary")
+    (troot / "verify_name.py").write_text("--expect-pubkey")
+    _check(np.check_tree(troot),
+           "non-UTF-8 federation.py must block, not raise")
+
     # Tree checks pass on the real tree (gossip route + pin present).
     _check(np.check_tree(ROOT) == [], "real tree must pass tree checks")
 

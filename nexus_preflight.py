@@ -57,12 +57,17 @@ def check_key_file(path):
         problems.append(f"key file {p} is group/other-accessible "
                         f"(mode {mode:04o}); name keys are born 0600")
     try:
-        with p.open(encoding="utf-8") as f:
-            raw = f.read(_SEED_MAX + 1)
+        with p.open("rb") as f:
+            raw_bytes = f.read(_SEED_MAX + 1)
     except OSError as e:
         return None, problems + [f"key file unreadable: {e}"]
-    if len(raw) > _SEED_MAX:
+    if len(raw_bytes) > _SEED_MAX:
         return None, problems + [f"key file {p} exceeds {_SEED_MAX} chars"]
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, problems + [f"key file {p} is not UTF-8 text — "
+                                 f"a name key is one 64-hex-char seed"]
     seed_hex = raw.strip()
     if len(seed_hex) != 64:
         return None, problems + [f"key file {p} is not a 64-hex-char seed"]
@@ -122,7 +127,7 @@ def check_tree(root):
     fed = Path(root) / "federation.py"
     try:
         fed_text = fed.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         fed_text = ""
     if '"/fed/names/gossip"' not in fed_text:
         problems.append("federation.py lacks the /fed/names/gossip "
@@ -130,7 +135,7 @@ def check_tree(root):
     verify = Path(root) / "verify_name.py"
     try:
         verify_text = verify.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         verify_text = ""
     if "--expect-pubkey" not in verify_text:
         problems.append("verify_name.py lacks the --expect-pubkey pin — "
