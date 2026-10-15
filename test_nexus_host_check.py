@@ -65,6 +65,16 @@ for key, bad, why in [
      "case-respelled same operator must fail"),
     ("candidate_operator", " ",
      "whitespace-only operator must fail as missing"),
+    ("candidate_machine_id", "machine-​a",
+     "zero-width-respelled same machine must fail"),
+    ("candidate_machine_id", "ｍachine-a",
+     "fullwidth-respelled same machine must fail"),
+    ("candidate_machine_id", "​",
+     "zero-width-only machine id must fail as missing"),
+    ("candidate_operator", "op-​a",
+     "zero-width-respelled same operator must fail"),
+    ("candidate_operator", "ｏp-a",
+     "fullwidth-respelled same operator must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad

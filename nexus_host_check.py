@@ -36,6 +36,7 @@ Usage: ./venv/bin/python nexus_host_check.py \
 """
 
 import sys
+import unicodedata
 
 _FEEDS = ("gossip", "direct-claim", "file-copy", "db-copy",
           "none-yet", "unknown")
@@ -46,10 +47,17 @@ _EVIDENCE = ("machine-itself", "registry", "list", "asserted",
 
 
 def _norm(v):
-    """Identity evidence compares stripped and case-folded: a seat
-    respelled by surrounding whitespace or letter case is the same
-    seat, and a whitespace-only value is no value at all."""
-    return v.strip().casefold() if isinstance(v, str) else v
+    """Identity evidence compares canonically: NFKC-folded (fullwidth
+    and other compatibility spellings become the characters they
+    render as), format characters removed (zero-width spaces, joiners
+    and BOMs are invisible -- a seat respelled with them is the same
+    seat), whitespace runs collapsed and ends stripped, and case
+    folded. A value with nothing visible left is no value at all."""
+    if not isinstance(v, str):
+        return v
+    v = unicodedata.normalize("NFKC", v)
+    v = "".join(ch for ch in v if unicodedata.category(ch) != "Cf")
+    return " ".join(v.split()).casefold()
 
 
 def evaluate(c):
