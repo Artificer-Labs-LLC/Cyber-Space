@@ -26,7 +26,9 @@ This tool enforces that shape:
      range, ::1, and the unspecified 0.0.0.0 / ::) all name the
      same node, the inet_aton spellings of an IPv4 address
      (127.1, 2130706433, 0x7f000001, 0177.0.0.1) dial the same
-     address as its dotted quad, and a URL path never does — a node is its
+     address as its dotted quad, the IPv4-mapped IPv6 spellings
+     ([::ffff:10.0.0.9], [::ffff:0a00:0009]) dial the same IPv4
+     address too, and a URL path never does — a node is its
      scheme/host/port, so the same host wearing a path suffix is
      still the claim origin, not a second node. When the
      canonical origin equals the canonical node, the check
@@ -108,8 +110,13 @@ def _canonical(url):
     0x7f000001) are not dotted quads, so ipaddress rejected them
     and they compared as foreign hosts while dialing loopback --
     any aton-parseable host is normalized to the address it
-    dials. A node is its scheme/host/port; the path is dropped
-    here entirely.
+    dials. A fourth family survived all three: an IPv4-mapped
+    IPv6 host ([::ffff:10.0.0.9], or its hex form
+    [::ffff:0a00:0009]) is not loopback when the mapped address
+    is remote, inet_aton refuses it, and it compared as a foreign
+    IPv6 host while dialing the plain IPv4 address -- a mapped
+    host is normalized to the IPv4 address it dials. A node is
+    its scheme/host/port; the path is dropped here entirely.
     Unparseable input falls back to its raw base; the caller has
     already validated both URLs, so this only shapes the compare."""
     if not isinstance(url, str):
@@ -124,9 +131,16 @@ def _canonical(url):
     if _is_loopback_host(host):
         host = "loopback"
     else:
-        aton = _aton_ipv4(host)
-        if aton is not None:
-            host = str(aton)
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            host = str(ip.ipv4_mapped)
+        else:
+            aton = _aton_ipv4(host)
+            if aton is not None:
+                host = str(aton)
     if port is None or (scheme, port) in (("http", 80), ("https", 443)):
         port_part = ""
     else:

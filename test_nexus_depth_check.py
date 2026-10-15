@@ -120,6 +120,21 @@ with tempfile.TemporaryDirectory() as td:
     _check(code == 0, "inet_aton loopback on a DIFFERENT port is a "
                       "different node and must still PASS")
 
+    code, _ = nd.depth_check("http://[::ffff:10.0.0.9]:8471", pub,
+                             "http://10.0.0.9:8471", get=serve(binding))
+    _check(code == 1, "[::ffff:10.0.0.9] dials 10.0.0.9: IPv4-mapped "
+                      "form is that same node (exit 1)")
+
+    code, _ = nd.depth_check("http://[::ffff:0a00:0009]:8471", pub,
+                             "http://10.0.0.9:8471", get=serve(binding))
+    _check(code == 1, "[::ffff:0a00:0009] dials 10.0.0.9: hex-mapped "
+                      "form is that same node (exit 1)")
+
+    code, _ = nd.depth_check("http://[::ffff:10.0.0.9]:8472", pub,
+                             "http://10.0.0.9:8471", get=serve(binding))
+    _check(code == 0, "IPv4-mapped form on a DIFFERENT port is a "
+                      "different node and must still PASS")
+
     code, _ = nd.depth_check(node, pub, node + "/claimed",
                              get=serve(binding))
     _check(code == 1, "origin wearing a path suffix is still the "
