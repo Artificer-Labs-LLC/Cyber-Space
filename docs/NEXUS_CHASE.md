@@ -20,6 +20,9 @@ Never reclaim it, never substitute it, never work around the lock.
   turns it into a PASS except a live witness.
 - NEXT step is step 1, under supervision. Key generation is a
   deliberate supervised act, never a cron improvisation.
+- The full sequence below is rehearsed offline by
+  `test_nexus_rehearsal.py` (step 0). A rehearsal PASS proves the
+  tools compose in this order; it is not a claim and not depth.
 
 ## Hard rules (fail-closed, no exceptions in this packet)
 
@@ -37,6 +40,25 @@ Never reclaim it, never substitute it, never work around the lock.
 5. Independence is judged per machine and per operator. A second
    process, port, or login identity on the same host or under the
    same operator is not an independent node.
+
+## Step 0 — offline rehearsal (unsupervised, safe to run first)
+
+Run from the repo root before any supervised step:
+
+`./venv/bin/python test_nexus_rehearsal.py`
+
+It chains the whole packet on a throwaway key in a temp dir —
+never the real `~/.cyberspace`: status NOT READY -> keygen ->
+status/preflight READY with the pin printed -> claim `--dry-run`
+leaves mirrors and env untouched -> claim posts to a fake origin
+mirror -> depth check FAILs before the gossip leg -> a
+byte-identical JSON-round-trip gossip copy feeds the fake
+independent node -> `nexus_host_check` ELIGIBLE for that seat ->
+depth check PASSes against the out-of-band pin. Exit 0 is the
+expected result. Real state is unchanged by a rehearsal:
+`nexus_status.py` still reads NOT READY afterwards. If the
+rehearsal fails, stop — do not start step 1 on a sequence whose
+wiring is broken, and report the rehearsal failure as itself.
 
 ## Supervised sequence
 
@@ -72,7 +94,8 @@ the current blockers at any time; it is read-only and offline.
 
 ## First hour back (board / fleet executor checklist)
 
-1. Run `nexus_status.py`; confirm it matches the state above or
+1. Run step 0 (`test_nexus_rehearsal.py`), then
+   `nexus_status.py`; confirm status matches the state above or
    supersedes it (a kept key changes NEXT to step 3).
 2. Confirm the push path has taken the local Nexus commits
    (keygen, preflight, claim, depth check, status) — the sequence
