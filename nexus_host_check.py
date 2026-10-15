@@ -46,19 +46,30 @@ _EVIDENCE = ("machine-itself", "registry", "list", "asserted",
              "unknown")
 
 
+# Characters with letter/symbol categories that nonetheless render
+# as a blank: the Hangul fillers (U+115F, U+1160, U+3164 and its
+# halfwidth twin U+FFA0), the Braille Pattern Blank (U+2800), and
+# the Object Replacement Character (U+FFFC). Inserted into the
+# origin's spelling they draw nothing in a log or a reviewer's
+# eye, so a seat respelled with one is the same seat -- and a
+# filler-only id is no id at all.
+_BLANK = frozenset({0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0, 0xFFFC})
+
+
 def _invisible(ch):
     """Characters that render as nothing in an id or a log: format
     (Cf: zero-width spaces, joiners, BOMs, tags), control (Cc: NUL,
     DEL and friends -- invisible and log-truncating), surrogates
-    (Cs), and the default-ignorable non-spacing marks -- variation
+    (Cs), the default-ignorable non-spacing marks -- variation
     selectors (U+FE00-FE0F, U+E0100-E01EF) and the combining
-    grapheme joiner (U+034F). Other combining marks stay: an accent
-    is part of a name, a variation selector is not."""
+    grapheme joiner (U+034F) -- and the blank-rendering fillers in
+    _BLANK. Other combining marks stay: an accent is part of a
+    name, a variation selector is not."""
     if unicodedata.category(ch) in ("Cf", "Cc", "Cs"):
         return True
     o = ord(ch)
     return o == 0x034F or 0xFE00 <= o <= 0xFE0F \
-        or 0xE0100 <= o <= 0xE01EF
+        or 0xE0100 <= o <= 0xE01EF or o in _BLANK
 
 
 # Cross-script look-alikes: Cyrillic and Greek letters whose shape

@@ -137,6 +137,20 @@ for key, bad, why in [
      "hyphen-respelled same operator must fail"),
     ("candidate_operator", "op−a",
      "minus-sign-respelled same operator must fail"),
+    ("candidate_machine_id", "machine-⠀a",
+     "braille-blank-respelled same machine must fail"),
+    ("candidate_machine_id", "machine-ᅟa",
+     "hangul-choseong-filler-respelled same machine must fail"),
+    ("candidate_machine_id", "machine-ᅠa",
+     "hangul-filler-respelled same machine must fail"),
+    ("candidate_operator", "op-⠀a",
+     "braille-blank-respelled same operator must fail"),
+    ("candidate_machine_id", "⠀",
+     "braille-blank-only machine id must fail as missing"),
+    ("candidate_machine_id", "ᅠ",
+     "hangul-filler-only machine id must fail as missing"),
+    ("candidate_machine_id", "machine-￼a",
+     "object-replacement-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
