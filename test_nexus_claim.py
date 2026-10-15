@@ -4,15 +4,19 @@
 Proves, with a throwaway keygen'd key in a temp dir and fake mirror
 functions (no network, never the real ~/.cyberspace): a NOT READY
 seat sends nothing; a dry-run signs a verifiable binding and sends
-nothing; a READY seat claims, verifies the resolve-back pub, and
-writes the hostd env born-0600; 409 and resolve-mismatch each
-refuse with no env written.
+nothing; a READY seat claims, verifies the resolve-back binding in
+full (verify_name.verify: name, pinned kept pub, signature, live
+window), and writes the hostd env born-0600; 409, resolve-mismatch,
+a pub-only resolve-back, a forged-signature resolve-back and a
+properly signed but expired resolve-back each refuse with no env
+written.
 """
 import json
 import os
 import stat
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,13 +40,16 @@ with tempfile.TemporaryDirectory() as td:
     env_dir = td / "hostd"
     calls = []
 
+    posted = {}
+
     def post_spy(url, fields):
         calls.append(("post", url))
+        posted.update(fields)
         return 200, '{"status": "claimed"}'
 
     def get_spy(url):
         calls.append(("get", url))
-        return {"node_pubkey": pub}
+        return dict(posted)
 
     # Missing key: preflight gate refuses before any network.
     code, binding, notes = nc.claim(key, bak, "http://127.0.0.1:9",
@@ -94,6 +101,37 @@ with tempfile.TemporaryDirectory() as td:
                           get=lambda u: {"node_pubkey": "00" * 32})
     _check(code == 1 and not (env3 / "nexus.env").exists(),
            "resolve mismatch must refuse with no env written")
+
+    # Pub-only resolve-back: the RIGHT pub with no signature, name
+    # or window vouches for nothing — refusal, no env. (Pub equality
+    # alone accepted exactly this before the full-verify fix.)
+    env4 = td / "hostd4"
+    code, _, _ = nc.claim(key, bak, "http://127.0.0.1:9", env4,
+                          post=post_spy,
+                          get=lambda u: {"node_pubkey": pub})
+    _check(code == 1 and not (env4 / "nexus.env").exists(),
+           "pub-only resolve-back must refuse with no env written")
+
+    # Forged resolve-back: right pub, complete shape, bad signature.
+    forged = dict(posted)
+    forged["signature"] = ("0" if forged["signature"][0] != "0"
+                           else "1") + forged["signature"][1:]
+    env5 = td / "hostd5"
+    code, _, _ = nc.claim(key, bak, "http://127.0.0.1:9", env5,
+                          post=post_spy, get=lambda u: dict(forged))
+    _check(code == 1 and not (env5 / "nexus.env").exists(),
+           "forged-signature resolve-back must refuse, no env")
+
+    # Expired resolve-back: properly signed by the kept key, but
+    # its live window closed before this claim.
+    priv = bytes.fromhex(key.read_text().strip())
+    stale = nc.build_binding(
+        priv, 30, now=datetime.now(timezone.utc) - timedelta(days=60))
+    env6 = td / "hostd6"
+    code, _, _ = nc.claim(key, bak, "http://127.0.0.1:9", env6,
+                          post=post_spy, get=lambda u: dict(stale))
+    _check(code == 1 and not (env6 / "nexus.env").exists(),
+           "expired resolve-back must refuse with no env written")
 
     # Bad mirror / bad expiry: usage refusals, nothing sent.
     calls.clear()

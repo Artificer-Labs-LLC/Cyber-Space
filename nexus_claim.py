@@ -16,7 +16,11 @@ Third split step of the Nexus root claim, after nexus_keygen.py
      name key itself) and POSTed to the mirror's /api/v1/names/claim.
      409 = already claimed (exit 1). The claim is verified by
      resolving the name back at the same mirror and requiring the
-     served pub to equal the kept key's pub.
+     served binding to pass verify_name.verify in full — name,
+     the kept key's pub pinned, self-authenticating signature,
+     live window. A served pub alone proves nothing: a mirror
+     answering with just the right pubkey (or a forged or expired
+     binding carrying it) has not stored a verifiable claim.
   3. Only after that verification is the hostd env written
      (mint_name._hostd_env_text, born-0600, overwrite).
 
@@ -41,6 +45,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mint_name as mn  # noqa: E402
 import nexus_preflight as np  # noqa: E402
+import verify_name as vn  # noqa: E402
 from fed.ed25519 import publickey, sign  # noqa: E402
 
 _LABEL = "nexus"
@@ -103,12 +108,16 @@ def claim(key_path, backup_path, mirror, env_dir,
     if not isinstance(result, dict):
         return 1, binding, [f"unparseable claim response: {body[:120]!r}"]
     resolved = get(mirror.rstrip("/") + f"/api/v1/names/{_LABEL}")
-    resolved_pub = resolved.get("node_pubkey") if resolved else None
-    if (not isinstance(resolved_pub, str)
-            or resolved_pub.lower() != pub_hex):
-        return 1, binding, ["name does not resolve back to the kept "
-                            "key — mirror accepted but did not store; "
-                            "no env written"]
+    reason = (vn.verify(resolved, expect_name=_LABEL,
+                         expect_pubkey=pub_hex)
+              if isinstance(resolved, dict)
+              else "mirror serves no binding object")
+    if reason is not None:
+        return 1, binding, [f"name does not resolve back as a valid "
+                            f"live binding vouched for by the kept "
+                            f"key ({reason}) — mirror accepted but "
+                            f"did not store a verifiable claim; "
+                            f"no env written"]
     env_dir = Path(env_dir)
     env_dir.mkdir(parents=True, exist_ok=True)
     env_path = env_dir / f"{_LABEL}.env"
@@ -116,8 +125,9 @@ def claim(key_path, backup_path, mirror, env_dir,
                      mn._hostd_env_text(_LABEL, priv.hex(), mirror),
                      overwrite=True)
     return 0, binding, [f"claimed: {result.get('status')}",
-                        f"verified: {_LABEL}.cyberspace resolves to "
-                        f"the kept key",
+                        f"verified: {_LABEL}.cyberspace resolves back "
+                        f"as a valid live binding vouched for by the "
+                        f"kept key",
                         f"hostd env written to {env_path} (0600)"]
 
 

@@ -64,7 +64,10 @@ with tempfile.TemporaryDirectory() as td:
         return 200, '{"status": "claimed"}'
 
     def get_origin(url):
-        return {"node_pubkey": origin_store.get("node_pubkey")}
+        # The resolve endpoint serves the full stored binding —
+        # the claim's resolve-back verification runs verify_name
+        # in full, so a pub-only answer would (and must) refuse.
+        return dict(origin_store) if origin_store else None
 
     def get_indep(url):
         return indep_store or None
