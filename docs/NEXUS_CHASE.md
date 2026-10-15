@@ -60,7 +60,8 @@ the current blockers at any time; it is read-only and offline.
   node (rule 5) that is short in the current witness set. This
   packet does not authorize provisioning or spend, and does not
   name a host. Until one exists, step 5 cannot be run honestly —
-  report that, do not simulate it.
+  report that, do not simulate it. What a candidate must be to
+  count is specified in docs/NEXUS_INDEPENDENT_HOST.md.
 - Naming window: if the window is closed when step 4 is attempted,
   the claim does not go through; that is the window working, not a
   fault in the sequence. Record the refusal and stop.
