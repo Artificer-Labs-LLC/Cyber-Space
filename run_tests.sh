@@ -22,6 +22,7 @@ TESTS=(
   "test_nexus_depth_check.py"
   "test_nexus_status.py"
   "test_nexus_host_check.py"
+  "test_nexus_rehearsal.py"
   "test_rendezvous.py"
   "test_hold_open.py"
   "resolver/test_answer_aaaa.py"
