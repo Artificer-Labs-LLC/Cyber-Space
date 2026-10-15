@@ -95,6 +95,31 @@ with tempfile.TemporaryDirectory() as td:
     _check(code == 1, "0.0.0.0 dials the local host: same node "
                       "as 127.0.0.1 (exit 1)")
 
+    code, _ = nd.depth_check("http://127.1:8471", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 1, "127.1 dials 127.0.0.1: inet_aton shorthand "
+                      "is the same loopback machine (exit 1)")
+
+    code, _ = nd.depth_check("http://2130706433:8471", pub,
+                             "http://127.0.0.1:8471", get=serve(binding))
+    _check(code == 1, "2130706433 dials 127.0.0.1: integer form is "
+                      "the same loopback machine (exit 1)")
+
+    code, _ = nd.depth_check("http://0x7f000001:8471", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 1, "0x7f000001 dials 127.0.0.1: hex form is the "
+                      "same loopback machine (exit 1)")
+
+    code, _ = nd.depth_check("http://167772169:8471", pub,
+                             "http://10.0.0.9:8471", get=serve(binding))
+    _check(code == 1, "167772169 dials 10.0.0.9: integer form of a "
+                      "remote address is that same node (exit 1)")
+
+    code, _ = nd.depth_check("http://127.1:8472", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 0, "inet_aton loopback on a DIFFERENT port is a "
+                      "different node and must still PASS")
+
     code, _ = nd.depth_check(node, pub, node + "/claimed",
                              get=serve(binding))
     _check(code == 1, "origin wearing a path suffix is still the "

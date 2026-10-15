@@ -24,7 +24,9 @@ This tool enforces that shape:
      case, a trailing host dot, a default port spelled or omitted,
      the loopback spellings (localhost, the whole 127.0.0.0/8
      range, ::1, and the unspecified 0.0.0.0 / ::) all name the
-     same node, and a URL path never does — a node is its
+     same node, the inet_aton spellings of an IPv4 address
+     (127.1, 2130706433, 0x7f000001, 0177.0.0.1) dial the same
+     address as its dotted quad, and a URL path never does — a node is its
      scheme/host/port, so the same host wearing a path suffix is
      still the claim origin, not a second node. When the
      canonical origin equals the canonical node, the check
@@ -42,6 +44,7 @@ Usage: ./venv/bin/python nexus_depth_check.py <independent_url> \
 
 import ipaddress
 import os
+import socket
 import sys
 import urllib.parse
 from pathlib import Path
@@ -60,6 +63,21 @@ def _base(url):
 _LOOPBACK_NAMES = {"localhost"}
 
 
+def _aton_ipv4(host):
+    """The IPv4 address a host string DIALS as, or None.
+
+    ipaddress only accepts the dotted-quad spelling, but the
+    resolver (getaddrinfo/inet_aton) also accepts the shorthand,
+    integer, hex and octal spellings -- 127.1, 2130706433,
+    0x7f000001, 0177.0.0.1 all dial 127.0.0.1. inet_aton parses
+    exactly those numeric forms and refuses names, so a successful
+    parse is the address the fetch would actually reach."""
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        return None
+
+
 def _is_loopback_host(host):
     """localhost, any 127.0.0.0/8 address, ::1, an IPv4-mapped form
     of one of those, and the unspecified 0.0.0.0 / :: (which dial
@@ -69,7 +87,9 @@ def _is_loopback_host(host):
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        ip = _aton_ipv4(host)
+        if ip is None:
+            return False
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
     return bool(ip.is_loopback or ip.is_unspecified)
@@ -83,8 +103,13 @@ def _canonical(url):
     Two spellings survived that pass: any other 127/8 address (or
     0.0.0.0) is the same loopback machine as localhost, and the
     path was part of the compare, so the origin wearing a path
-    suffix compared unequal to the bare node. A node is its
-    scheme/host/port; the path is dropped here entirely.
+    suffix compared unequal to the bare node. A third family
+    survived both passes: inet_aton spellings (127.1, 2130706433,
+    0x7f000001) are not dotted quads, so ipaddress rejected them
+    and they compared as foreign hosts while dialing loopback --
+    any aton-parseable host is normalized to the address it
+    dials. A node is its scheme/host/port; the path is dropped
+    here entirely.
     Unparseable input falls back to its raw base; the caller has
     already validated both URLs, so this only shapes the compare."""
     if not isinstance(url, str):
@@ -98,6 +123,10 @@ def _canonical(url):
     host = (parts.hostname or "").rstrip(".").lower()
     if _is_loopback_host(host):
         host = "loopback"
+    else:
+        aton = _aton_ipv4(host)
+        if aton is not None:
+            host = str(aton)
     if port is None or (scheme, port) in (("http", 80), ("https", 443)):
         port_part = ""
     else:
