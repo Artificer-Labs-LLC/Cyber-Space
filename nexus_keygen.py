@@ -27,7 +27,17 @@ key we cannot read is how keys get lost twice) and the exit is 1.
 
 Usage: ./venv/bin/python nexus_keygen.py [--key PATH] [--backup PATH]
 Exit codes: 0 = key + backup generated and verified, 1 = generated
-but verification failed, 2 = usage / refused (nothing written).
+but verification failed (or the backup write failed AFTER the
+primary was written — the primary is left in place, named in the
+output, and must not be claimed from), 2 = usage / refused
+(nothing written).
+
+The same-file refusal compares RESOLVED paths: --key and --backup
+spelled differently for one file (a `sub/../` detour, a symlinked
+parent) are the same file. Raw Path equality missed those, the
+first O_EXCL write succeeded, the second failed "File exists",
+and the run reported a clean refusal (exit 2, nothing written)
+while leaving a lone primary with NO backup — the genesis shape.
 """
 
 import os
@@ -42,13 +52,23 @@ from mint_name import _write_secret  # noqa: E402
 _LABEL = "nexus"
 
 
+def _same_file(a, b):
+    """True when two paths name the same file once resolved —
+    `sub/../x`, `./x` and symlinked parents included."""
+    return Path(a).resolve() == Path(b).resolve()
+
+
 def generate(key_path, backup_path):
     """Write key + backup, verify via the preflight's own checks.
 
     Return (pub_hex | None, problems). Both files are written before
     any verification runs; a refusal (existing file, unwritable dir)
-    raises OSError to the caller, which reports it as exit 2.
+    raises OSError to the caller. Key and backup naming the same
+    resolved file raises ValueError before anything is written.
     """
+    if _same_file(key_path, backup_path):
+        raise ValueError("key and backup resolve to the same file — "
+                         "a backup must be a second copy")
     seed = os.urandom(32)
     seed_hex = seed.hex()
     key_path = Path(key_path)
@@ -87,8 +107,8 @@ def main(argv):
             print(f"refused: unknown argument {a!r}", file=sys.stderr)
             return 2
         i += 1
-    if key_path == backup_path:
-        print("refused: --key and --backup are the same path — a backup "
+    if _same_file(key_path, backup_path):
+        print("refused: --key and --backup are the same file — a backup "
               "must be a second copy, not the same file", file=sys.stderr)
         return 2
     for p in (key_path, backup_path):
@@ -99,6 +119,13 @@ def main(argv):
     try:
         pub_hex, problems = generate(key_path, backup_path)
     except OSError as e:
+        if key_path.exists() and not backup_path.exists():
+            print(f"PARTIAL: the primary key WAS written to {key_path} "
+                  f"but the backup failed: {e} — the key is left in "
+                  f"place with NO backup; do NOT claim from it, and "
+                  f"do not delete it; add a verified backup first",
+                  file=sys.stderr)
+            return 1
         print(f"refused: key generation failed: {e}", file=sys.stderr)
         return 2
     print(f"Nexus name key written: {key_path} (0600)")

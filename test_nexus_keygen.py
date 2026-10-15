@@ -64,6 +64,32 @@ with tempfile.TemporaryDirectory() as td:
            "key == backup must be refused")
     _check(not (td / "same").exists(), "same-path refusal writes nothing")
 
+    # The same file spelled through a sub/../ detour is still one
+    # file: raw Path equality missed it, the primary write landed,
+    # the backup write failed "File exists", and the run reported
+    # a clean refusal while leaving a lone key with NO backup.
+    (td / "sub").mkdir()
+    _check(nk.main(["--key", str(td / "alias"),
+                    "--backup", str(td / "sub" / ".." / "alias")]) == 2,
+           "key == backup via a sub/../ spelling must be refused")
+    _check(not (td / "alias").exists(),
+           "aliased same-file refusal must write nothing")
+
+    # A backup write that fails AFTER the primary lands (here: a
+    # dangling symlink -- exists() passes it, O_EXCL refuses it)
+    # is a PARTIAL generation, exit 1 -- never a clean "nothing
+    # written" refusal -- and the primary is left in place, alone,
+    # for a backup to be added to.
+    lone = td / "lone.key"
+    dangling = td / "lone.key.bak"
+    dangling.symlink_to(td / "no-such-target")
+    _check(nk.main(["--key", str(lone),
+                    "--backup", str(dangling)]) == 1,
+           "backup failure after the primary write is exit 1 (partial)")
+    _check(lone.exists(), "partial generation leaves the primary in place")
+    _check(not dangling.exists(),
+           "partial generation has no backup copy (dangling link only)")
+
 if fails:
     print(f"{fails} FAILURES")
     sys.exit(1)
