@@ -61,17 +61,44 @@ def _invisible(ch):
         or 0xE0100 <= o <= 0xE01EF
 
 
+# Cross-script look-alikes: Cyrillic and Greek letters whose shape
+# duplicates a Latin letter (the well-known UTS #39 confusables for
+# Latin). A machine id or operator spelled with one of these renders
+# identically to the Latin spelling, so it IS the Latin spelling for
+# comparison purposes -- the origin may not pass as its own
+# independent host or operator by switching alphabets. Scope is
+# these two scripts' single-letter Latin duplicates; within-Latin
+# look-alikes (l/1, O/0) are font questions, not script spoofing,
+# and are deliberately not folded.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+    "у": "y", "х": "x", "ѕ": "s", "і": "i", "ј": "j",
+    "һ": "h",
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M",
+    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T",
+    "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+    "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "χ": "x",
+    "ν": "v",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H",
+    "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
+    "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
     render as), invisible characters removed (see _invisible -- a
-    seat respelled with them is the same seat), whitespace runs
-    collapsed and ends stripped, and case folded. A value with
-    nothing visible left is no value at all."""
+    seat respelled with them is the same seat), cross-script
+    look-alikes folded to the Latin letters they render as (see
+    _CONFUSABLES), whitespace runs collapsed and ends stripped, and
+    case folded. A value with nothing visible left is no value
+    at all."""
     if not isinstance(v, str):
         return v
     v = unicodedata.normalize("NFKC", v)
     v = "".join(ch for ch in v if not _invisible(ch))
+    v = v.translate(_CONFUSABLES)
     return " ".join(v.split()).casefold()
 
 

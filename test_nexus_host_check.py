@@ -38,6 +38,12 @@ ok, blockers = nh.evaluate(padded)
 _check(ok and not blockers,
        f"padded but distinct seat must stay ELIGIBLE: {blockers}")
 
+foreign = dict(GOOD, candidate_machine_id="machine-б")
+ok, blockers = nh.evaluate(foreign)
+_check(ok and not blockers,
+       "a non-look-alike foreign letter is a genuinely distinct "
+       f"seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -91,6 +97,14 @@ for key, bad, why in [
      "variation-selector-respelled same operator must fail"),
     ("candidate_operator", "op-a\x00",
      "NUL-suffixed same operator must fail"),
+    ("candidate_machine_id", "machine-а",
+     "cyrillic-a-respelled same machine must fail"),
+    ("candidate_machine_id", "machine-А",
+     "cyrillic-capital-a-respelled same machine must fail"),
+    ("candidate_operator", "оp-a",
+     "cyrillic-o-respelled same operator must fail"),
+    ("candidate_operator", "οp-a",
+     "greek-omicron-respelled same operator must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
