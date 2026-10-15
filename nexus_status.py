@@ -24,6 +24,11 @@ This aggregator answers that, read-only and offline:
      from an independent node, cannot be known without the
      network, and this tool touches none. It never guesses a
      PASS -- a status that invents depth is the rigged shape.
+  5. Independent-host state is reported as NOT EVALUATED: this
+     tool holds no candidate evidence, so step 5's host bar
+     (nexus_host_check.py, docs/NEXUS_INDEPENDENT_HOST.md) is
+     named as unevaluated, never as cleared. A READY preflight
+     does not imply an eligible independent host exists.
 
 It sends nothing, claims nothing, generates nothing, writes
 nothing.
@@ -71,6 +76,10 @@ def status(key_path, backup_path, root):
     lines.append("Depth state: UNKNOWN (offline -- "
                  "nexus_depth_check.py from an independent node, "
                  "never the claim origin, is the only witness)")
+    lines.append("Independent host: NOT EVALUATED (offline -- no "
+                 "candidate evidence held here; step 5 needs "
+                 "nexus_host_check.py ELIGIBLE on supplied "
+                 "evidence, see docs/NEXUS_INDEPENDENT_HOST.md)")
     lines.append("Supervised sequence:")
     for i, step in enumerate(_SEQUENCE, 1):
         lines.append(f"  {i}. {step}")

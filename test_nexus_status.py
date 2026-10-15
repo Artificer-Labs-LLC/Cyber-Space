@@ -38,6 +38,10 @@ with tempfile.TemporaryDirectory() as td:
     _check("nexus_keygen.py" in text and "NEXT:" in text,
            "no-key seat must name keygen as NEXT")
     _check("UNKNOWN (offline" in text, "offline seats must say UNKNOWN")
+    _check("Independent host: NOT EVALUATED" in text,
+           "host bar must read NOT EVALUATED, never silently absent")
+    _check("Independent host: ELIGIBLE" not in text,
+           "status must never claim an eligible independent host")
     _check("DEPTH PASS" not in text and "Claim state: claimed" not in text,
            "status must never invent a claim or a depth PASS")
 
@@ -51,6 +55,9 @@ with tempfile.TemporaryDirectory() as td:
     _check("--dry-run" in text, "ready seat must name claim --dry-run NEXT")
     _check("UNKNOWN (offline" in text,
            "even READY, claim/depth stay UNKNOWN until witnessed live")
+    _check("Independent host: NOT EVALUATED" in text
+           and "Independent host: ELIGIBLE" not in text,
+           "even READY, host stays NOT EVALUATED -- READY is not depth")
 
     bak.unlink()
     code, lines = ns.status(key, bak, ROOT)
