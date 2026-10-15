@@ -1,0 +1,465 @@
+"""Belt: EIGHTEEN-HOP gossip chain + same-key RENEWAL + RENDEZVOUS resolve e2e
+(primitives 1 naming + 2 resolution + 3 hosting + 4 identity).
+
+Eighteen-hop base matrix is complete (eb3abbd) and renewal+direct
+(ff2f323) and renewal+relay (6a09964) are proven at eighteen hops;
+renewal+rendezvous was proven at seventeen hops. This joins
+renewal x rendezvous at eighteen hops, completing the eighteen-hop
+renewal matrix: a NAT-hidden owner renews, and the far end must
+keep resolving via the relay -- renewal must not orphan the
+relay+rendezvous descriptor (unlike rotation), the relay must keep
+holding the derived rendezvous point under the advertised
+600-math, and the renewed window must ride the resolve.
+
+Twenty INDEPENDENT nodes: A owner (NAT-hidden), B..R in series,
+S far resolver, T relay.
+
+  1. A claims v1 under K1; gossip in series to R byte-identical;
+     belt re-verifies K1 at S; binding-only resolve is silence
+  2. A holds at T under TOK1, announces K1 relay+rendezvous
+     descriptor (epoch_len 600); S serves relay + rendezvous, no
+     direct; T holds a derived point under advertised 600-math
+     only; resolve via S returns K1 via_relay TOK1 carrying v1
+  3. A renews same-key v2; gossip replaces v1 hop by hop in series
+     (B first while C..S still v1); stale v1 merge on S kept;
+     R leg carries v2 to S byte-identical re-verified vs K1;
+     S still serves relay + rendezvous, T still holds the derived
+     point, resolve via S returns K1 via_relay TOK1 carrying
+     the V2 window
+  4. Unclaimed label silence. Genesis never touched.
+Run: cd ~/workspace/cybernet && ./venv/bin/python hidden_files/eighteen-hop-renewal-rendezvous-resolve-e2e-belt-test.py
+"""
+
+import json
+import os
+import secrets
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+
+from fed.ed25519 import checkvalid, publickey, sign  # noqa: E402
+import core  # noqa: E402
+import hold_open  # noqa: E402
+import rendezvous as _rz  # noqa: E402
+from core import _name_claim_payload  # noqa: E402
+
+CASES = {"passed": 0, "failed": 0}
+NAMES = ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S")
+PORTS = {n: 23471 + i for i, n in enumerate(NAMES)}
+PORT_T = 23490
+URL_T = f"http://127.0.0.1:{PORT_T}"
+ALL_URLS = tuple(f"http://127.0.0.1:{23471+i}" for i in range(19)) + (URL_T,)
+EPOCH_LEN = 600
+os.environ["CYBERNET_RENDEZVOUS_EPOCH_LEN"] = str(EPOCH_LEN)
+TOK1 = "tok1-" + secrets.token_hex(8)
+URLS = {n: f"http://127.0.0.1:{PORTS[n]}" for n in NAMES}
+LABEL = "eighteenhoprenewrz"
+
+_real_gate = core._reject_nonpublic_node_url
+
+
+def _gate(url):
+    if isinstance(url, str) and url.startswith(ALL_URLS):
+        return None
+    return _real_gate(url)
+
+
+core._reject_nonpublic_node_url = _gate
+
+
+def check(name, cond, extra=""):
+    if cond:
+        CASES["passed"] += 1
+        print(f"  ok  {name}")
+    else:
+        CASES["failed"] += 1
+        print(f"  FAIL {name} {extra}")
+
+
+def ts(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def get(port, path):
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}{path}", timeout=10) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {}
+    except Exception:
+        return 0, {}
+
+
+def boot(tmp, priv, port):
+    env = dict(os.environ, CYBERNET_DB_DIR=tmp,
+               CYBERNET_NODE_PRIVKEY=priv)
+    proc = subprocess.Popen(
+        [os.path.join(REPO, "venv/bin/python"), "-m", "uvicorn",
+         "app:app", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=REPO, env=env, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
+    for _ in range(60):
+        code, _ = get(port, "/api/v1/node")
+        if code == 200:
+            return proc, True
+        time.sleep(0.5)
+    return proc, False
+
+
+def seed_peer(tmp, pub, url, name):
+    conn = sqlite3.connect(os.path.join(tmp, "cybernet.db"))
+    conn.execute(
+        "INSERT INTO peers (node_pub, name, network, version, genesis,"
+        " capabilities, announced_at, first_seen, retired_at, node_url)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (pub, name, "cybernet", "0.1.0", 0, "[]",
+         ts(datetime.now(timezone.utc)),
+         ts(datetime.now(timezone.utc)), "", url))
+    conn.commit()
+    conn.close()
+
+
+def unseed_peer(tmp, pub):
+    conn = sqlite3.connect(os.path.join(tmp, "cybernet.db"))
+    conn.execute("DELETE FROM peers WHERE node_pub=?", (pub,))
+    conn.commit()
+    conn.close()
+
+
+def ingest_on(tmp, priv, binding):
+    helper = (
+        "import core\n"
+        f"print(core.ingest_gossiped_binding({binding!r}))\n")
+    env = dict(os.environ, CYBERNET_DB_DIR=tmp,
+               CYBERNET_NODE_PRIVKEY=priv)
+    return subprocess.run(
+        [os.path.join(REPO, "venv/bin/python"), "-c", helper],
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+
+
+def run_helper(tmp, priv, extra_env, call):
+    urls = ", ".join(repr(u) for u in ALL_URLS)
+    helper = (
+        "import time, core\n"
+        "_real = core._reject_nonpublic_node_url\n"
+        "def _gate(url):\n"
+        f"    return None if url.startswith(({urls})) else _real(url)\n"
+        "core._reject_nonpublic_node_url = _gate\n"
+        f"n = {call}\n"
+        "print('sent:', n)\n"
+        "time.sleep(4)\n")
+    env = dict(os.environ, CYBERNET_DB_DIR=tmp,
+               CYBERNET_NODE_PRIVKEY=priv, **extra_env)
+    return subprocess.run(
+        [os.path.join(REPO, "venv/bin/python"), "-c", helper],
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+
+
+def claim(port, label, name_priv, name_pub, issued_dt, expires_dt):
+    issued, expires = ts(issued_dt), ts(expires_dt)
+    sig = sign(_name_claim_payload(label, name_pub, issued, expires),
+               name_priv, bytes.fromhex(name_pub)).hex()
+    body = urllib.parse.urlencode(
+        {"name": label, "node_pubkey": name_pub,
+         "issued_at": issued, "expires_at": expires,
+         "signature": sig}).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/v1/names/claim",
+        data=body, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, sig, issued, expires
+    except urllib.error.HTTPError as e:
+        return e.code, sig, issued, expires
+
+
+def wait_served(port, label, sig):
+    served, code = {}, 0
+    for _ in range(20):
+        code, served = get(port, f"/api/v1/names/{label}")
+        if code == 200 and served.get("signature") == sig:
+            return code, served
+        time.sleep(0.5)
+    return code, served
+
+
+def wait_reach(port, label, pub):
+    desc, code = {}, 0
+    for _ in range(20):
+        code, desc = get(port, f"/api/v1/names/{label}/reach")
+        if code == 200 and desc.get("node_pubkey") == pub:
+            return code, desc
+        time.sleep(0.5)
+    return code, desc
+
+
+def verify(pub_hex, sig_hex, label, issued, expires):
+    try:
+        return checkvalid(
+            bytes.fromhex(sig_hex),
+            _name_claim_payload(label, pub_hex, issued, expires),
+            bytes.fromhex(pub_hex)) is True
+    except Exception:
+        return False
+
+
+def resolve_fresh(label, base):
+    core._resolve_memo.clear()
+    return core.resolve_cyberspace(label + ".cyberspace", base)
+
+
+def held_point(pub_hex, epoch_len, tries=1):
+    pts = []
+    for _ in range(tries):
+        pts = _rz.derive_points(time.time(), pub_hex, epoch_len) or []
+        if any(get(PORT_T, "/relay/hold_query?point_id=" + p)[1]
+               .get("held") is True for p in pts):
+            return True, pts
+        time.sleep(1.0)
+    return False, pts
+
+
+def main():
+    tmps, privs, pubs, procs = {}, {}, {}, {}
+    for n in NAMES:
+        tmps[n] = tempfile.mkdtemp(prefix=f"18hop-renewrz-{n.lower()}-")
+        privs[n] = secrets.token_hex(32)
+        pubs[n] = publickey(bytes.fromhex(privs[n])).hex()
+    k1_priv = bytes.fromhex(secrets.token_hex(32))
+    k1_pub = publickey(k1_priv).hex()
+
+    tmp_t = tempfile.mkdtemp(prefix="18hop-renewrz-t-")
+    t_priv = secrets.token_hex(32)
+    t_pub = publickey(bytes.fromhex(t_priv)).hex()
+    ups = {}
+    for n in NAMES:
+        procs[n], ups[n] = boot(tmps[n], privs[n], PORTS[n])
+    proc_t, up_t = boot(tmp_t, t_priv, PORT_T)
+    stop1 = threading.Event()
+    try:
+        check("twenty independent nodes boot", all(ups.values()) and up_t)
+        if not (all(ups.values()) and up_t):
+            return
+        # strict chain seeding: each node knows only its neighbours
+        for i, n in enumerate(NAMES):
+            if i > 0:
+                seed_peer(tmps[n], pubs[NAMES[i - 1]],
+                          URLS[NAMES[i - 1]],
+                          f"belt-node-{NAMES[i - 1].lower()}")
+            if i < len(NAMES) - 1:
+                seed_peer(tmps[n], pubs[NAMES[i + 1]],
+                          URLS[NAMES[i + 1]],
+                          f"belt-node-{NAMES[i + 1].lower()}")
+
+        now = datetime.now(timezone.utc)
+        code, sig1, issued1, expires1 = claim(
+            PORTS["A"], LABEL, k1_priv, k1_pub,
+            now - timedelta(minutes=10), now + timedelta(days=30))
+        check("A claims kept-key name under K1 via real route",
+              code == 200, f"got {code}")
+        code, _ = get(PORTS["S"], f"/api/v1/names/{LABEL}")
+        check("S has never heard of it before gossip", code == 404,
+              f"got {code}")
+
+        # serial federation: A->B (1 recipient), then each interior
+        # node gossips onward to its 2 known peers
+        legs = (("A", 1), ("B", 2), ("C", 2), ("D", 2), ("E", 2), ("F", 2), ("G", 2), ("H", 2), ("I", 2), ("J", 2), ("K", 2), ("L", 2), ("M", 2), ("N", 2), ("O", 2), ("P", 2), ("Q", 2), ("R", 2))
+        for src, want in legs:
+            dst = NAMES[NAMES.index(src) + 1]
+            out = run_helper(tmps[src], privs[src], {},
+                             "core._names_gossip_out()")
+            check(f"{src} gossip K1 ran to {want} recipient(s)",
+                  f"sent: {want}" in out.stdout,
+                  f"stdout={out.stdout!r} stderr={out.stderr[-400:]!r}")
+            code, served = wait_served(PORTS[dst], LABEL, sig1)
+            check(f"{dst} serves K1 byte-identical (learned via {src})",
+                  code == 200 and served.get("node_pubkey") == k1_pub
+                  and served.get("issued_at") == issued1
+                  and served.get("expires_at") == expires1,
+                  f"got {code} {served}")
+            nxt_i = NAMES.index(dst) + 1
+            if nxt_i < len(NAMES):
+                nxt = NAMES[nxt_i]
+                code, _ = get(PORTS[nxt], f"/api/v1/names/{LABEL}")
+                check(f"{nxt} still 404 before {dst}'s leg runs",
+                      code == 404, f"got {code}")
+        code, served_f1 = get(PORTS["S"], f"/api/v1/names/{LABEL}")
+        check("belt re-verifies S's K1 binding against K1",
+              verify(k1_pub, served_f1.get("signature", ""), LABEL,
+                     issued1, expires1))
+
+        code, _ = get(PORTS["S"], f"/api/v1/names/{LABEL}/reach")
+        check("S serves no reach descriptor before announce",
+              code == 404, f"got {code}")
+        check("resolve via S with binding only is silence",
+              resolve_fresh(LABEL, URLS["S"]) is None)
+
+        seed_peer(tmps["A"], pubs["S"], URLS["S"], "belt-node-s")
+        daemon1 = threading.Thread(
+            target=hold_open.hold_open_cycle,
+            args=(URL_T, TOK1, k1_priv.hex(), stop1),
+            kwargs={"keepalive_every": 60.0}, daemon=True)
+        daemon1.start()
+        time.sleep(1.0)
+        out = run_helper(
+            tmps["A"], privs["A"],
+            {"CYBERNET_HOSTED_NAME": LABEL,
+             "CYBERNET_NAME_PRIVKEY": k1_priv.hex(),
+             "CYBERNET_PUBLIC_URL": "",
+             "CYBERNET_RELAY_URL": URL_T,
+             "CYBERNET_RELAY_PUBKEY": t_pub,
+             "CYBERNET_RELAY_TOKEN": TOK1,
+             "CYBERNET_RENDEZVOUS": "1",
+             "CYBERNET_RENDEZVOUS_EPOCH_LEN": str(EPOCH_LEN)},
+            "core._reach_out()")
+        check("A reach announce under K1 ran to 2 recipients",
+              "sent: 2" in out.stdout,
+              f"stdout={out.stdout!r} stderr={out.stderr[-400:]!r}")
+        code, desc = wait_reach(PORTS["S"], LABEL, k1_pub)
+        check("S serves the K1 rendezvous descriptor", code == 200
+              and desc.get("node_pubkey") == k1_pub,
+              f"got {code} {desc}")
+        strats = [s for s in (desc.get("reach") or [])
+                  if isinstance(s, dict)]
+        relay_s = [x for x in strats if x.get("kind") == "relay"]
+        rz_s = [x for x in strats if x.get("kind") == "rendezvous"]
+        check("S descriptor carries relay + rendezvous, no direct",
+              len(strats) == 2 and len(relay_s) == 1
+              and relay_s[0].get("url") == URL_T
+              and relay_s[0].get("relay") == t_pub
+              and relay_s[0].get("token") == TOK1,
+              f"reach={desc.get('reach')}")
+        check("rendezvous strategy advertises epoch_len=600 + hold_query",
+              len(rz_s) == 1 and rz_s[0].get("epoch_len") == EPOCH_LEN
+              and rz_s[0].get("hold_query") == "/relay/hold_query",
+              f"reach={desc.get('reach')}")
+        held, pts = held_point(k1_pub, EPOCH_LEN, tries=15)
+        check("relay T holds a derived point under K1 600-math",
+              held, f"points={pts}")
+        held3600, pts3600 = held_point(k1_pub, 3600)
+        check("no point held under frozen 3600-math (advertised only)",
+              not held3600, f"points={pts3600}")
+        got = resolve_fresh(LABEL, URLS["S"])
+        check("resolve via eighteenth hop S returns K1 via relay T"
+              " (rendezvous) carrying v1",
+              isinstance(got, dict) and got.get("node_pubkey") == k1_pub
+              and got.get("node_url") == URL_T
+              and got.get("via_relay") == {"relay_pub": t_pub, "token": TOK1}
+              and got.get("issued_at") == issued1
+              and got.get("expires_at") == expires1,
+              f"got {got}")
+        unseed_peer(tmps["A"], pubs["S"])
+        code, sig2, issued2, expires2 = claim(
+            PORTS["A"], LABEL, k1_priv, k1_pub,
+            now - timedelta(minutes=5), now + timedelta(days=60))
+        check("A renews same-key v2 via real route (fresher, same K1)",
+              code == 200 and sig2 != sig1, f"got {code}")
+        out = run_helper(tmps["A"], privs["A"], {},
+                         "core._names_gossip_out()")
+        check("A gossip v2 ran to 1 recipient",
+              "sent: 1" in out.stdout,
+              f"stdout={out.stdout!r} stderr={out.stderr[-400:]!r}")
+        code, served_b2 = wait_served(PORTS["B"], LABEL, sig2)
+        check("B REPLACED live v1 with renewed v2",
+              code == 200 and served_b2.get("node_pubkey") == k1_pub
+              and served_b2.get("issued_at") == issued2
+              and served_b2.get("expires_at") == expires2,
+              f"got {code} {served_b2}")
+        for n in ("C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S"):
+            code, served_x = get(PORTS[n], f"/api/v1/names/{LABEL}")
+            check(f"{n} still serves v1 (renewal crossed one hop only)",
+                  code == 200 and served_x.get("signature") == sig1,
+                  f"got {code} {served_x}")
+        stale = {"name": LABEL, "node_pubkey": k1_pub,
+                 "issued_at": issued1, "expires_at": expires1,
+                 "signature": sig1}
+        res = ingest_on(tmps["S"], privs["S"], stale)
+        check("stale v1 merge on S returns kept (forward only)",
+              res.stdout.strip().endswith("kept"),
+              f"stdout={res.stdout!r} stderr={res.stderr[-400:]!r}")
+        code, served_fx = get(PORTS["S"], f"/api/v1/names/{LABEL}")
+        check("S still serves v1 after stale attempt",
+              code == 200 and served_fx.get("signature") == sig1,
+              f"got {code} {served_fx}")
+        for src in ("B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"):
+            dst = NAMES[NAMES.index(src) + 1]
+            out = run_helper(tmps[src], privs[src], {},
+                             "core._names_gossip_out()")
+            check(f"{src} gossip v2 onward ran to 2 recipients",
+                  "sent: 2" in out.stdout,
+                  f"stdout={out.stdout!r} stderr={out.stderr[-400:]!r}")
+            code, served_d2 = wait_served(PORTS[dst], LABEL, sig2)
+            check(f"{dst} REPLACED live v1 with v2 learned onward"
+                  f" from {src}",
+                  code == 200
+                  and served_d2.get("node_pubkey") == k1_pub
+                  and served_d2.get("issued_at") == issued2
+                  and served_d2.get("expires_at") == expires2,
+                  f"got {code} {served_d2}")
+        code, served_f2 = get(PORTS["S"], f"/api/v1/names/{LABEL}")
+        check("belt re-verifies S's renewed binding against K1",
+              verify(k1_pub, served_f2.get("signature", ""), LABEL,
+                     issued2, expires2))
+        code, desc2 = wait_reach(PORTS["S"], LABEL, k1_pub)
+        strats2 = [s for s in (desc2.get("reach") or [])
+                   if isinstance(s, dict)]
+        relay2 = [x for x in strats2 if x.get("kind") == "relay"]
+        rz2 = [x for x in strats2 if x.get("kind") == "rendezvous"]
+        check("S still serves relay + rendezvous, no direct,"
+              " after renewal",
+              code == 200 and len(strats2) == 2
+              and len(relay2) == 1
+              and relay2[0].get("url") == URL_T
+              and relay2[0].get("relay") == t_pub
+              and relay2[0].get("token") == TOK1
+              and len(rz2) == 1
+              and rz2[0].get("epoch_len") == EPOCH_LEN,
+              f"got {code} reach={desc2.get('reach')}")
+        held, pts = held_point(k1_pub, EPOCH_LEN, tries=15)
+        check("relay T still holds a derived point under K1"
+              " 600-math after renewal", held, f"points={pts}")
+        got = resolve_fresh(LABEL, URLS["S"])
+        check("resolve via eighteenth hop S returns K1 via relay T"
+              " (rendezvous) carrying the V2 window",
+              isinstance(got, dict) and got.get("node_pubkey") == k1_pub
+              and got.get("node_url") == URL_T
+              and got.get("via_relay") == {"relay_pub": t_pub, "token": TOK1}
+              and got.get("issued_at") == issued2
+              and got.get("expires_at") == expires2,
+              f"got {got}")
+        check("unclaimed label resolves via S to silence",
+              resolve_fresh("nobodyclaimedit", URLS["S"]) is None)
+    finally:
+        stop1.set()
+        for p in procs.values():
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        proc_t.terminate()
+        try:
+            proc_t.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc_t.kill()
+
+    print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
+    sys.exit(1 if CASES["failed"] else 0)
+
+
+if __name__ == "__main__":
+    main()
