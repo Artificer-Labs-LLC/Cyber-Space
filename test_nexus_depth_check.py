@@ -60,6 +60,31 @@ with tempfile.TemporaryDirectory() as td:
     code, _ = nd.depth_check(node, pub, "", get=serve(binding))
     _check(code == 2, "empty origin is usage (exit 2), not a verdict")
 
+    code, _ = nd.depth_check(node, pub, "not-a-url", get=serve(binding))
+    _check(code == 2, "unparseable origin is usage (exit 2): it "
+                      "compares unequal to everything, so a good "
+                      "binding must not PASS on an uncompared node")
+
+    code, _ = nd.depth_check("http://127.0.0.1:8471", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 1, "localhost vs 127.0.0.1 is the same node "
+                      "(exit 1), not an independent checker")
+
+    code, _ = nd.depth_check("http://10.0.0.9", pub,
+                             "http://10.0.0.9:80", get=serve(binding))
+    _check(code == 1, "default port spelled vs omitted is the same "
+                      "node (exit 1)")
+
+    code, _ = nd.depth_check("http://LOCALHOST.:8471", pub,
+                             "http://127.0.0.1:8471", get=serve(binding))
+    _check(code == 1, "case + trailing host dot do not make a "
+                      "second node (exit 1)")
+
+    code, _ = nd.depth_check("http://127.0.0.1:8472", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 0, "loopback on a DIFFERENT port is a different "
+                      "node and must still PASS")
+
     code, _ = nd.depth_check(node, "00" * 32, origin, get=serve(binding))
     _check(code == 1, "wrong pin must fail")
 

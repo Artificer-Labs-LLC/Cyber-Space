@@ -17,9 +17,15 @@ This tool enforces that shape:
   2. --origin-url (where the claim was hosted) is REQUIRED, like
      the pin: without it the checked node cannot be compared
      against the claim origin, so independence would be asserted
-     but never established (exit 2, no verdict). When it normalizes
-     to the same base as the node being checked, the check
-     refuses: same-node is not depth (exit 1).
+     but never established (exit 2, no verdict). It must be a
+     dialable http(s) URL like the node — an unparseable origin
+     compares unequal to everything, which is no comparison.
+     The comparison is CANONICAL, not raw-string: scheme/host
+     case, a trailing host dot, a default port spelled or omitted,
+     and the loopback spellings (localhost / 127.0.0.1 / ::1) all
+     name the same node. When the canonical origin equals the
+     canonical node, the check refuses: same-node is not depth
+     (exit 1).
   3. The binding served by the independent node must pass
      verify_name.verify with expect_name="nexus" and the pin:
      self-authenticating signature, live window, pinned key.
@@ -33,6 +39,7 @@ Usage: ./venv/bin/python nexus_depth_check.py <independent_url> \
 
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +51,34 @@ _LABEL = "nexus"
 
 def _base(url):
     return url.rstrip("/").lower() if isinstance(url, str) else ""
+
+
+_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+
+def _canonical(url):
+    """Canonical base for the same-node comparison ONLY (the fetch
+    still uses _base). Raw-string equality let one node wear two
+    spellings — localhost vs 127.0.0.1, :80 vs no port, case, a
+    trailing host dot — and pass as its own 'independent' checker.
+    Unparseable input falls back to its raw base; the caller has
+    already validated both URLs, so this only shapes the compare."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return _base(url)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").rstrip(".").lower()
+    if host in _LOOPBACK:
+        host = "loopback"
+    if port is None or (scheme, port) in (("http", 80), ("https", 443)):
+        port_part = ""
+    else:
+        port_part = f":{port}"
+    return f"{scheme}://{host}{port_part}{parts.path.rstrip('/')}"
 
 
 def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
@@ -64,7 +99,11 @@ def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
         return 2, ["refused: --origin-url is required — without the "
                    "claim origin, the checked node cannot be shown "
                    "independent of it, so no verdict is possible"]
-    if _base(origin_url) == _base(node_url):
+    if not mn._valid_mirror(origin_url):
+        return 2, ["refused: --origin-url is not a dialable http(s) "
+                   "URL — an unparseable origin compares unequal to "
+                   "every node, so independence is not established"]
+    if _canonical(origin_url) == _canonical(node_url):
         return 1, ["REFUSED: checked node is the claim origin — "
                    "asking a node about itself is not a Depth Test"]
     binding = get(_base(node_url) + f"/api/v1/names/{_LABEL}")
