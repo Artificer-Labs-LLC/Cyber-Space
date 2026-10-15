@@ -14,9 +14,12 @@ This tool enforces that shape:
   1. --expect-pubkey is REQUIRED and must be 64 hex chars. There is
      no default and it is never taken from the fetched binding —
      a pin read off the answer is integrity, not authenticity.
-  2. If --origin-url (where the claim was hosted) is given and
-     normalizes to the same base as the node being checked, the
-     check refuses: same-node is not depth (exit 1).
+  2. --origin-url (where the claim was hosted) is REQUIRED, like
+     the pin: without it the checked node cannot be compared
+     against the claim origin, so independence would be asserted
+     but never established (exit 2, no verdict). When it normalizes
+     to the same base as the node being checked, the check
+     refuses: same-node is not depth (exit 1).
   3. The binding served by the independent node must pass
      verify_name.verify with expect_name="nexus" and the pin:
      self-authenticating signature, live window, pinned key.
@@ -25,7 +28,7 @@ It sends nothing, claims nothing, and writes nothing.
 Exit codes: 0 = DEPTH PASS, 1 = refused / not verified,
             2 = usage / bad argument (no verdict).
 Usage: ./venv/bin/python nexus_depth_check.py <independent_url> \
-         --expect-pubkey <64hex> [--origin-url <claim_host_url>]
+         --expect-pubkey <64hex> --origin-url <claim_host_url>
 """
 
 import os
@@ -57,7 +60,11 @@ def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
         return 2, ["--expect-pubkey is not a 64-hex name key — "
                    "the pin must come out-of-band, never from the "
                    "binding being checked"]
-    if origin_url is not None and _base(origin_url) == _base(node_url):
+    if not origin_url:
+        return 2, ["refused: --origin-url is required — without the "
+                   "claim origin, the checked node cannot be shown "
+                   "independent of it, so no verdict is possible"]
+    if _base(origin_url) == _base(node_url):
         return 1, ["REFUSED: checked node is the claim origin — "
                    "asking a node about itself is not a Depth Test"]
     binding = get(_base(node_url) + f"/api/v1/names/{_LABEL}")
@@ -98,18 +105,24 @@ def main(argv):
             node_url = a
         else:
             print("usage: nexus_depth_check.py <independent_url> "
-                  "--expect-pubkey <64hex> [--origin-url URL]",
+                  "--expect-pubkey <64hex> --origin-url URL",
                   file=sys.stderr)
             return 2
         i += 1
     if node_url is None:
         print("usage: nexus_depth_check.py <independent_url> "
-              "--expect-pubkey <64hex> [--origin-url URL]",
+              "--expect-pubkey <64hex> --origin-url URL",
               file=sys.stderr)
         return 2
     if expect_pubkey is None:
         print("refused: --expect-pubkey is required — a depth check "
               "without an out-of-band pin is no check", file=sys.stderr)
+        return 2
+    if origin_url is None:
+        print("refused: --origin-url is required — a depth check "
+              "that cannot compare the checked node against the "
+              "claim origin cannot establish independence",
+              file=sys.stderr)
         return 2
     code, notes = depth_check(node_url, expect_pubkey, origin_url)
     for n in notes:

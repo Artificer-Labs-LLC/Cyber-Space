@@ -5,7 +5,9 @@ Proves, with a throwaway keygen'd key and fake node functions (no
 network): a good binding from an independent node passes against
 the out-of-band pin; the same node as the claim origin refuses;
 a wrong pin, a tampered binding, and a missing binding each fail;
-a malformed pin is a usage refusal (exit 2), never a verdict.
+a malformed pin is a usage refusal (exit 2), never a verdict --
+and so is a missing or empty claim origin, without which the
+checked node's independence was never established at all.
 """
 import os
 import sys
@@ -49,6 +51,14 @@ with tempfile.TemporaryDirectory() as td:
 
     code, _ = nd.depth_check(node, pub, node, get=serve(binding))
     _check(code == 1, "same node as origin must refuse (not depth)")
+
+    code, _ = nd.depth_check(node, pub, None, get=serve(binding))
+    _check(code == 2, "missing origin is usage (exit 2): independence "
+                      "cannot be established, so a good binding must "
+                      "not PASS on an uncompared node")
+
+    code, _ = nd.depth_check(node, pub, "", get=serve(binding))
+    _check(code == 2, "empty origin is usage (exit 2), not a verdict")
 
     code, _ = nd.depth_check(node, "00" * 32, origin, get=serve(binding))
     _check(code == 1, "wrong pin must fail")
