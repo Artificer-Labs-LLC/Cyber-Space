@@ -75,6 +75,24 @@ with tempfile.TemporaryDirectory() as td:
            f"kept key + matching backup + this tree must be READY, "
            f"got blockers={blockers}")
 
+    # Same physical file as backup: NOT a second copy — preflight
+    # must block READY for the path itself, a sub/../ alias, a
+    # symlink, and a hardlink (one file lost is the genesis shape).
+    sub = td / "sub"
+    sub.mkdir(exist_ok=True)
+    link = td / "link.key"
+    if not link.exists():
+        link.symlink_to(key)
+    hard = td / "hard.key"
+    if not hard.exists():
+        os.link(key, hard)
+    for seat in (key, sub / ".." / key.name, link, hard):
+        _check(np.check_backup(key, seat),
+               f"same-file backup {seat} must block")
+        _ready, _pub, _bl = np.preflight("nexus", key, seat, ROOT)
+        _check(not _ready and any("same file" in b for b in _bl),
+               f"same-file backup {seat} must block READY by name")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)

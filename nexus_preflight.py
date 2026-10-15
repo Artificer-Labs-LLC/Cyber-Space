@@ -75,6 +75,18 @@ def check_key_file(path):
     return publickey(seed).hex().lower(), problems
 
 
+def _same_file(a, b):
+    """True when two paths name one physical file — resolved-path
+    equality (sub/../ detours, symlinked parents, symlinks) or, when
+    both exist, the same inode (hardlinks included)."""
+    if Path(a).resolve() == Path(b).resolve():
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def check_backup(primary_path, backup_path):
     """Backup must exist, be tight, and match the primary byte-for-byte."""
     if backup_path is None:
@@ -82,6 +94,10 @@ def check_backup(primary_path, backup_path):
                 "Nexus key must exist before any claim is broadcast "
                 "(genesis was lost exactly this way)"]
     b = Path(backup_path)
+    if _same_file(primary_path, b):
+        return ["backup is the same file as the primary key — a backup "
+                "must be a second copy, not the same file (one file "
+                "lost is the genesis shape)"]
     if not b.exists():
         return [f"backup key file missing: {b}"]
     mode = stat.S_IMODE(b.stat().st_mode)
