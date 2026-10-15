@@ -105,6 +105,18 @@ for key, bad, why in [
      "cyrillic-o-respelled same operator must fail"),
     ("candidate_operator", "οp-a",
      "greek-omicron-respelled same operator must fail"),
+    ("candidate_machine_id", b"machine-a",
+     "bytes-spelled same machine must fail as missing"),
+    ("candidate_machine_id", b"machine-b",
+     "bytes machine id must fail as missing, not pass as distinct"),
+    ("candidate_operator", b"op-b",
+     "bytes operator must fail as missing, not pass as distinct"),
+    ("candidate_machine_id", 123,
+     "integer machine id must fail as missing"),
+    ("candidate_machine_id", ["machine-b"],
+     "list machine id must fail as missing"),
+    ("candidate_operator", True,
+     "boolean operator must fail as missing"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad

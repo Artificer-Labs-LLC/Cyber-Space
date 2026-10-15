@@ -93,9 +93,13 @@ def _norm(v):
     look-alikes folded to the Latin letters they render as (see
     _CONFUSABLES), whitespace runs collapsed and ends stripped, and
     case folded. A value with nothing visible left is no value
-    at all."""
+    at all. Evidence that is not text at all is no value either:
+    a bytes/int/list seat returned untouched compared UNEQUAL to
+    the origin's text spelling (b"machine-a" != "machine-a") and
+    counted as present, so a type-confused seat cleared bars 1-2
+    as its own origin's 'distinct' host/operator."""
     if not isinstance(v, str):
-        return v
+        return ""
     v = unicodedata.normalize("NFKC", v)
     v = "".join(ch for ch in v if not _invisible(ch))
     v = v.translate(_CONFUSABLES)
