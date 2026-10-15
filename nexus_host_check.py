@@ -82,6 +82,15 @@ _CONFUSABLES = str.maketrans({
     "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H",
     "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
     "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+    # The dash family UTS #39 lists as confusable with the ASCII
+    # hyphen-minus that separates id parts: hyphen, non-breaking
+    # hyphen (NFKC first lands it on U+2010), figure dash, en/em
+    # dash, horizontal bar, and the mathematical minus. A seat
+    # whose separator is one of these renders as the same id in
+    # a log or a reviewer's eye, so it IS that id. (NFKC already
+    # folds the fullwidth and small hyphen-minus spellings.)
+    "‐": "-", "‑": "-", "‒": "-", "–": "-",
+    "—": "-", "―": "-", "−": "-",
 })
 
 
@@ -90,8 +99,9 @@ def _norm(v):
     and other compatibility spellings become the characters they
     render as), invisible characters removed (see _invisible -- a
     seat respelled with them is the same seat), cross-script
-    look-alikes folded to the Latin letters they render as (see
-    _CONFUSABLES), whitespace runs collapsed and ends stripped, and
+    look-alikes folded to the Latin letters they render as and
+    dash look-alikes folded to the hyphen-minus they render as
+    (see _CONFUSABLES), whitespace runs collapsed and ends stripped, and
     case folded. A value with nothing visible left is no value
     at all. Evidence that is not text at all is no value either:
     a bytes/int/list seat returned untouched compared UNEQUAL to
