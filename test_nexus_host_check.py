@@ -151,9 +151,43 @@ for key, bad, why in [
      "hangul-filler-only machine id must fail as missing"),
     ("candidate_machine_id", "machine-￼a",
      "object-replacement-respelled same machine must fail"),
+    ("candidate_machine_id", "mαchine-A",
+     "greek-alpha-respelled same machine must fail"),
+    ("candidate_machine_id", "machιne-A",
+     "greek-iota-respelled same machine must fail"),
+    ("candidate_machine_id", "macηine-A",
+     "greek-eta-respelled same machine must fail"),
+    ("candidate_machine_id", "μachine-A",
+     "greek-mu-respelled same machine must fail"),
+    ("candidate_machine_id", "мachine-A",
+     "cyrillic-em-respelled same machine must fail"),
+    ("candidate_machine_id", "macнine-A",
+     "cyrillic-en-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
+    ok, blockers = nh.evaluate(seat)
+    _check(not ok and blockers, f"{why} (bar blockers: {blockers})")
+
+for cand, orig, why in [
+    ("op-в", "op-b",
+     "cyrillic-ve-respelled same operator must fail"),
+    ("op-к", "op-k",
+     "cyrillic-ka-respelled same operator must fail"),
+    ("op-т", "op-t",
+     "cyrillic-te-respelled same operator must fail"),
+    ("op-β", "op-b",
+     "greek-beta-respelled same operator must fail"),
+    ("op-ε", "op-e",
+     "greek-epsilon-respelled same operator must fail"),
+    ("op-ζ", "op-z",
+     "greek-zeta-respelled same operator must fail"),
+    ("op-κ", "op-k",
+     "greek-kappa-respelled same operator must fail"),
+    ("op-π", "op-n",
+     "greek-pi-respelled same operator must fail"),
+]:
+    seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
     _check(not ok and blockers, f"{why} (bar blockers: {blockers})")
 

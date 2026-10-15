@@ -104,6 +104,21 @@ _CONFUSABLES = str.maketrans({
     "—": "-", "―": "-", "−": "-",
 })
 
+# Lowercase counterparts of the capitals above. _norm translates
+# BEFORE it case-folds, and case-folding maps a capital down to
+# its lowercase, never the reverse -- so a table holding the
+# capitals (plus only the lowercase letters first listed) let a
+# seat respelled with a lowercase Cyrillic ve/ka/em/en/te or a
+# lowercase Greek alpha/beta/epsilon/zeta/eta/iota/kappa/mu
+# compare distinct from the Latin original its capital already
+# folded to. Pi joins the Greek set: UTS #39 lists it against
+# Latin n, the letter it renders as in common fonts.
+_CONFUSABLES.update(str.maketrans({
+    "в": "b", "к": "k", "м": "m", "н": "h", "т": "t",
+    "α": "a", "β": "b", "ε": "e", "ζ": "z", "η": "h",
+    "ι": "i", "κ": "k", "μ": "m", "π": "n",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
