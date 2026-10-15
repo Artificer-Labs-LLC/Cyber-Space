@@ -36,6 +36,14 @@ This tool enforces that shape:
   3. The binding served by the independent node must pass
      verify_name.verify with expect_name="nexus" and the pin:
      self-authenticating signature, live window, pinned key.
+  4. The fetch itself must not be redirected. urllib's default
+     opener follows 3xx silently, so a node that answers
+     /api/v1/names/nexus with a redirect to the claim origin
+     would have the ORIGIN's binding verified as if the checked
+     node served it — independence lost at the transport layer,
+     below every URL comparison. The real fetch therefore uses
+     a no-redirect opener: any 3xx is an HTTP error, reads as
+     "serves no binding", and the check fails (exit 1).
 
 It sends nothing, claims nothing, and writes nothing.
 Exit codes: 0 = DEPTH PASS, 1 = refused / not verified,
@@ -45,10 +53,12 @@ Usage: ./venv/bin/python nexus_depth_check.py <independent_url> \
 """
 
 import ipaddress
+import json
 import os
 import socket
 import sys
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -148,9 +158,36 @@ def _canonical(url):
     return f"{scheme}://{host}{port_part}"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx instead of following it. A depth check
+    that follows a redirect to the claim origin verifies the
+    origin's own answer under the checked node's name."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
+def _get_json_no_redirect(url, timeout=30.0):
+    """mn._get_json's shape (bounded read, dict-or-None) over the
+    no-redirect opener, so a 3xx reads as no binding served."""
+    try:
+        with _OPENER.open(url, timeout=timeout) as resp:
+            raw = mn._read_bounded(resp)
+            if raw is None:
+                return None
+            data = json.loads(raw.decode("utf-8"))
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
     """Return (exit_code, notes). Fetches ONLY from node_url."""
-    get = mn._get_json if get is None else get
+    get = _get_json_no_redirect if get is None else get
     if not mn._valid_mirror(node_url):
         return 2, ["node URL is not a dialable http(s) URL"]
     pin = vn._normalize_expected(expect_pubkey)

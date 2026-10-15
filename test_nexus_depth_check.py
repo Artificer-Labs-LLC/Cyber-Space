@@ -165,6 +165,52 @@ with tempfile.TemporaryDirectory() as td:
     code, _ = nd.depth_check("ftp://x", pub, origin, get=serve(binding))
     _check(code == 2, "non-http node URL is usage (exit 2)")
 
+    # Real fetch (get=None), loopback servers: the default urllib
+    # opener follows 3xx silently, so a node redirecting the name
+    # path to the claim origin would pass the origin's own binding
+    # off as independently served. The depth fetch must refuse.
+    import http.server
+    import json as _json
+    import threading
+
+    body = _json.dumps(binding).encode()
+
+    class _Direct(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    direct = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Direct)
+    direct_url = f"http://127.0.0.1:{direct.server_address[1]}"
+
+    class _Redirect(_Direct):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location",
+                             direct_url + "/api/v1/names/nexus")
+            self.end_headers()
+
+    redir = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Redirect)
+    redir_url = f"http://127.0.0.1:{redir.server_address[1]}"
+    for srv in (direct, redir):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        code, _ = nd.depth_check(direct_url, pub, redir_url)
+        _check(code == 0, "real fetch: direct-served binding on an "
+                          f"independent node must PASS, got {code}")
+        code, _ = nd.depth_check(redir_url, pub, direct_url)
+        _check(code == 1, "real fetch: a node that REDIRECTS to the "
+                          "claim origin serves no binding of its own "
+                          f"(exit 1), got {code}")
+    finally:
+        direct.shutdown()
+        redir.shutdown()
+
 if fails:
     print(f"test_nexus_depth_check: {fails} FAIL")
     sys.exit(1)
