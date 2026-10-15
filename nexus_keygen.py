@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Generate the Nexus name key ONLY — never claims, never networks.
+
+nexus_preflight.py guards the root claim fail-closed, but its first
+blocker — "the Nexus key has not been generated yet" — had no safe
+way to clear: mint_name.py generates a key and broadcasts the claim
+in the SAME run, which is precisely the shape that lost
+genesis.cyberspace (claimed 2026-10-08, key unsaved, locked until
+2027-10-08, abandoned by the 2026-10-15 root-name ruling).
+
+This tool splits generation from claiming:
+
+  1. Mints one Ed25519 seed with os.urandom and writes it born-0600
+     (mint_name._write_secret, O_EXCL — an existing key is REFUSED,
+     never overwritten) to ~/.cyberspace/nexus-name.key.
+  2. Writes the verified second copy the preflight demands, also
+     born-0600 and O_EXCL, to the --backup path (default:
+     ~/.cyberspace/nexus-name.key.bak).
+  3. Re-reads both files through nexus_preflight's own checks and
+     prints the derived public key for out-of-band pinning
+     (verify_name.py --expect-pubkey).
+
+It sends nothing, claims nothing, and leaves the claim itself to a
+separate deliberate step that must first pass nexus_preflight READY.
+If step 3 verification fails, the files are LEFT in place (deleting a
+key we cannot read is how keys get lost twice) and the exit is 1.
+
+Usage: ./venv/bin/python nexus_keygen.py [--key PATH] [--backup PATH]
+Exit codes: 0 = key + backup generated and verified, 1 = generated
+but verification failed, 2 = usage / refused (nothing written).
+"""
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nexus_preflight as np  # noqa: E402
+from fed.ed25519 import publickey  # noqa: E402
+from mint_name import _write_secret  # noqa: E402
+
+_LABEL = "nexus"
+
+
+def generate(key_path, backup_path):
+    """Write key + backup, verify via the preflight's own checks.
+
+    Return (pub_hex | None, problems). Both files are written before
+    any verification runs; a refusal (existing file, unwritable dir)
+    raises OSError to the caller, which reports it as exit 2.
+    """
+    seed = os.urandom(32)
+    seed_hex = seed.hex()
+    key_path = Path(key_path)
+    backup_path = Path(backup_path)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_secret(key_path, seed_hex)       # O_EXCL: never overwrite
+    _write_secret(backup_path, seed_hex)    # O_EXCL: never overwrite
+    pub_hex, problems = np.check_key_file(key_path)
+    problems += np.check_backup(key_path, backup_path)
+    if pub_hex is not None and pub_hex != publickey(seed).hex().lower():
+        problems.append("re-read pub does not match the generated seed")
+    return pub_hex, problems
+
+
+def main(argv):
+    home = Path.home() / ".cyberspace"
+    key_path = home / f"{_LABEL}-name.key"
+    backup_path = home / f"{_LABEL}-name.key.bak"
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        if a in ("--key", "--backup"):
+            i += 1
+            if i >= len(argv):
+                print(f"refused: {a} needs a value", file=sys.stderr)
+                return 2
+            if a == "--key":
+                key_path = Path(argv[i])
+            else:
+                backup_path = Path(argv[i])
+        else:
+            print(f"refused: unknown argument {a!r}", file=sys.stderr)
+            return 2
+        i += 1
+    if key_path == backup_path:
+        print("refused: --key and --backup are the same path — a backup "
+              "must be a second copy, not the same file", file=sys.stderr)
+        return 2
+    for p in (key_path, backup_path):
+        if p.exists():
+            print(f"refused: {p} already exists — never overwrite a "
+                  f"name key; nothing was written", file=sys.stderr)
+            return 2
+    try:
+        pub_hex, problems = generate(key_path, backup_path)
+    except OSError as e:
+        print(f"refused: key generation failed: {e}", file=sys.stderr)
+        return 2
+    print(f"Nexus name key written: {key_path} (0600)")
+    print(f"Nexus name key backup:  {backup_path} (0600, verified match)")
+    if pub_hex is not None:
+        print(f"Nexus name key (pub, pin this out-of-band): {pub_hex}")
+    for p in problems:
+        print(f"PROBLEM: {p}")
+    if problems:
+        print("GENERATED BUT UNVERIFIED: files left in place — do NOT "
+              "claim until nexus_preflight reports READY.")
+        return 1
+    print("Key seats verified. NOTHING was claimed. Next deliberate "
+          "step: nexus_preflight.py must report READY, then the claim "
+          "is broadcast separately with this kept key.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
