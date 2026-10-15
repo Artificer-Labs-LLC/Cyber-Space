@@ -46,17 +46,32 @@ _EVIDENCE = ("machine-itself", "registry", "list", "asserted",
              "unknown")
 
 
+def _invisible(ch):
+    """Characters that render as nothing in an id or a log: format
+    (Cf: zero-width spaces, joiners, BOMs, tags), control (Cc: NUL,
+    DEL and friends -- invisible and log-truncating), surrogates
+    (Cs), and the default-ignorable non-spacing marks -- variation
+    selectors (U+FE00-FE0F, U+E0100-E01EF) and the combining
+    grapheme joiner (U+034F). Other combining marks stay: an accent
+    is part of a name, a variation selector is not."""
+    if unicodedata.category(ch) in ("Cf", "Cc", "Cs"):
+        return True
+    o = ord(ch)
+    return o == 0x034F or 0xFE00 <= o <= 0xFE0F \
+        or 0xE0100 <= o <= 0xE01EF
+
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
-    render as), format characters removed (zero-width spaces, joiners
-    and BOMs are invisible -- a seat respelled with them is the same
-    seat), whitespace runs collapsed and ends stripped, and case
-    folded. A value with nothing visible left is no value at all."""
+    render as), invisible characters removed (see _invisible -- a
+    seat respelled with them is the same seat), whitespace runs
+    collapsed and ends stripped, and case folded. A value with
+    nothing visible left is no value at all."""
     if not isinstance(v, str):
         return v
     v = unicodedata.normalize("NFKC", v)
-    v = "".join(ch for ch in v if unicodedata.category(ch) != "Cf")
+    v = "".join(ch for ch in v if not _invisible(ch))
     return " ".join(v.split()).casefold()
 
 

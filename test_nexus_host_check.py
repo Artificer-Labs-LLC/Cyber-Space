@@ -75,6 +75,22 @@ for key, bad, why in [
      "zero-width-respelled same operator must fail"),
     ("candidate_operator", "ｏp-a",
      "fullwidth-respelled same operator must fail"),
+    ("candidate_machine_id", "machine-a️",
+     "variation-selector-respelled same machine must fail"),
+    ("candidate_machine_id", "machine-͏a",
+     "grapheme-joiner-respelled same machine must fail"),
+    ("candidate_machine_id", "machine-a\x00",
+     "NUL-suffixed same machine must fail"),
+    ("candidate_machine_id", "machine-a\x7f",
+     "DEL-suffixed same machine must fail"),
+    ("candidate_machine_id", "️",
+     "variation-selector-only machine id must fail as missing"),
+    ("candidate_machine_id", "͏",
+     "grapheme-joiner-only machine id must fail as missing"),
+    ("candidate_operator", "op-a️",
+     "variation-selector-respelled same operator must fail"),
+    ("candidate_operator", "op-a\x00",
+     "NUL-suffixed same operator must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
