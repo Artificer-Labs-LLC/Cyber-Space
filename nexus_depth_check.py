@@ -22,10 +22,13 @@ This tool enforces that shape:
      compares unequal to everything, which is no comparison.
      The comparison is CANONICAL, not raw-string: scheme/host
      case, a trailing host dot, a default port spelled or omitted,
-     and the loopback spellings (localhost / 127.0.0.1 / ::1) all
-     name the same node. When the canonical origin equals the
-     canonical node, the check refuses: same-node is not depth
-     (exit 1).
+     the loopback spellings (localhost, the whole 127.0.0.0/8
+     range, ::1, and the unspecified 0.0.0.0 / ::) all name the
+     same node, and a URL path never does — a node is its
+     scheme/host/port, so the same host wearing a path suffix is
+     still the claim origin, not a second node. When the
+     canonical origin equals the canonical node, the check
+     refuses: same-node is not depth (exit 1).
   3. The binding served by the independent node must pass
      verify_name.verify with expect_name="nexus" and the pin:
      self-authenticating signature, live window, pinned key.
@@ -37,6 +40,7 @@ Usage: ./venv/bin/python nexus_depth_check.py <independent_url> \
          --expect-pubkey <64hex> --origin-url <claim_host_url>
 """
 
+import ipaddress
 import os
 import sys
 import urllib.parse
@@ -53,7 +57,22 @@ def _base(url):
     return url.rstrip("/").lower() if isinstance(url, str) else ""
 
 
-_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+_LOOPBACK_NAMES = {"localhost"}
+
+
+def _is_loopback_host(host):
+    """localhost, any 127.0.0.0/8 address, ::1, an IPv4-mapped form
+    of one of those, and the unspecified 0.0.0.0 / :: (which dial
+    the local host) all reach the SAME node's machine."""
+    if host in _LOOPBACK_NAMES:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return bool(ip.is_loopback or ip.is_unspecified)
 
 
 def _canonical(url):
@@ -61,6 +80,11 @@ def _canonical(url):
     still uses _base). Raw-string equality let one node wear two
     spellings — localhost vs 127.0.0.1, :80 vs no port, case, a
     trailing host dot — and pass as its own 'independent' checker.
+    Two spellings survived that pass: any other 127/8 address (or
+    0.0.0.0) is the same loopback machine as localhost, and the
+    path was part of the compare, so the origin wearing a path
+    suffix compared unequal to the bare node. A node is its
+    scheme/host/port; the path is dropped here entirely.
     Unparseable input falls back to its raw base; the caller has
     already validated both URLs, so this only shapes the compare."""
     if not isinstance(url, str):
@@ -72,13 +96,13 @@ def _canonical(url):
         return _base(url)
     scheme = parts.scheme.lower()
     host = (parts.hostname or "").rstrip(".").lower()
-    if host in _LOOPBACK:
+    if _is_loopback_host(host):
         host = "loopback"
     if port is None or (scheme, port) in (("http", 80), ("https", 443)):
         port_part = ""
     else:
         port_part = f":{port}"
-    return f"{scheme}://{host}{port_part}{parts.path.rstrip('/')}"
+    return f"{scheme}://{host}{port_part}"
 
 
 def depth_check(node_url, expect_pubkey, origin_url=None, get=None):

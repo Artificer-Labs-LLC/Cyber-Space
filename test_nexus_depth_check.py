@@ -85,6 +85,26 @@ with tempfile.TemporaryDirectory() as td:
     _check(code == 0, "loopback on a DIFFERENT port is a different "
                       "node and must still PASS")
 
+    code, _ = nd.depth_check("http://127.0.0.2:8471", pub,
+                             "http://localhost:8471", get=serve(binding))
+    _check(code == 1, "any 127/8 address is the same loopback "
+                      "machine as localhost (exit 1)")
+
+    code, _ = nd.depth_check("http://0.0.0.0:8471", pub,
+                             "http://127.0.0.1:8471", get=serve(binding))
+    _check(code == 1, "0.0.0.0 dials the local host: same node "
+                      "as 127.0.0.1 (exit 1)")
+
+    code, _ = nd.depth_check(node, pub, node + "/claimed",
+                             get=serve(binding))
+    _check(code == 1, "origin wearing a path suffix is still the "
+                      "same node (exit 1): a node is scheme/host/port")
+
+    code, _ = nd.depth_check(node + "/mirror", pub, origin,
+                             get=serve(binding))
+    _check(code == 0, "a path suffix on a genuinely different host "
+                      "must still PASS")
+
     code, _ = nd.depth_check(node, "00" * 32, origin, get=serve(binding))
     _check(code == 1, "wrong pin must fail")
 
