@@ -163,6 +163,10 @@ for key, bad, why in [
      "cyrillic-em-respelled same machine must fail"),
     ("candidate_machine_id", "macнine-A",
      "cyrillic-en-respelled same machine must fail"),
+    ("candidate_machine_id", "maϲhine-a",
+     "greek-lunate-sigma-respelled same machine must fail"),
+    ("candidate_machine_id", "maϹhine-A",
+     "greek-capital-lunate-sigma-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -186,6 +190,8 @@ for cand, orig, why in [
      "greek-kappa-respelled same operator must fail"),
     ("op-π", "op-n",
      "greek-pi-respelled same operator must fail"),
+    ("op-ϲ", "op-c",
+     "greek-lunate-sigma-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

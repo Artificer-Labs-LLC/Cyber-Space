@@ -89,10 +89,10 @@ _CONFUSABLES = str.maketrans({
     "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T",
     "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
     "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "χ": "x",
-    "ν": "v",
+    "ν": "v", "ϲ": "c",
     "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H",
     "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
-    "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+    "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X", "Ϲ": "C",
     # The dash family UTS #39 lists as confusable with the ASCII
     # hyphen-minus that separates id parts: hyphen, non-breaking
     # hyphen (NFKC first lands it on U+2010), figure dash, en/em
@@ -136,6 +136,11 @@ def _norm(v):
     as its own origin's 'distinct' host/operator."""
     if not isinstance(v, str):
         return ""
+    # Confusables fold on BOTH sides of NFKC: NFKC itself rewrites
+    # some of them first (the Greek lunate sigmas, whose shape IS
+    # Latin c/C, become ordinary sigmas), so a fold that only ran
+    # after NFKC would never see the spelling that was used.
+    v = v.translate(_CONFUSABLES)
     v = unicodedata.normalize("NFKC", v)
     v = "".join(ch for ch in v if not _invisible(ch))
     v = v.translate(_CONFUSABLES)
