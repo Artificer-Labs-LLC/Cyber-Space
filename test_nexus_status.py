@@ -44,6 +44,11 @@ with tempfile.TemporaryDirectory() as td:
            "status must never claim an eligible independent host")
     _check("DEPTH PASS" not in text and "Claim state: claimed" not in text,
            "status must never invent a claim or a depth PASS")
+    _seq = text.split("Supervised sequence:", 1)[-1]
+    _check("nexus_host_check.py" in _seq
+           and _seq.index("nexus_host_check.py")
+           < _seq.index("nexus_depth_check.py"),
+           "sequence must gate depth behind host_check (step 5 before 6)")
 
     pub, problems = nk.generate(key, bak)
     _check(not problems, f"temp keygen failed: {problems}")

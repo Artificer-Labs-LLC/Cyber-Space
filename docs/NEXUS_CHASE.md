@@ -67,11 +67,12 @@ its expected result; do not skip ahead.
 
 | # | Command | Proves / expected |
 |---|---------|-------------------|
-| 1 | `./venv/bin/python nexus_keygen.py` | Kept key + verified byte-identical backup, both born 0600. Prints the pub. Record the pub out-of-band (the pin for step 5). Sends nothing, claims nothing. |
+| 1 | `./venv/bin/python nexus_keygen.py` | Kept key + verified byte-identical backup, both born 0600. Prints the pub. Record the pub out-of-band (the pin for step 6). Sends nothing, claims nothing. |
 | 2 | `./venv/bin/python nexus_preflight.py --backup ~/.cyberspace/nexus-name.key.bak` | READY, exit 0: key kept, backup verified, tree carries the `/fed/names/gossip` receive route and the `--expect-pubkey` pin. The `--backup` argument is required — without it this step can never reach READY. |
 | 3 | `./venv/bin/python nexus_claim.py <mirror_url> --dry-run` | Builds and signs the binding, prints it, sends nothing. Eyeball the binding against the step-1 pub before any real claim. |
 | 4 | `./venv/bin/python nexus_claim.py <mirror_url>` | Claims `nexus.cyberspace` at the mirror with the kept key, only if preflight is READY for the exact key+backup seats; verifies by resolving back and requiring the served pub to equal the kept key's pub. 409 or a resolve mismatch refuses with no hostd env written. The mirror should be a non-HQ node (rule 4). |
-| 5 | `./venv/bin/python nexus_depth_check.py <independent_url> --expect-pubkey <pub-from-step-1> --origin-url <mirror_url>` | DEPTH PASS, exit 0, only if the independent node serves a binding that verifies against the out-of-band pin (signature, name, live window). Same-as-origin is refused outright. |
+| 5 | `./venv/bin/python nexus_host_check.py --candidate-machine-id <id> --origin-machine-id <id> --candidate-operator <name> --origin-operator <name> --evidence-source machine-itself --feed gossip --pin-source out-of-band` | ELIGIBLE, exit 0, only when all five bars pass on supplied evidence (distinct machine from the machine itself, distinct operator, neither side HQ, gossip-fed only with the claim key absent, pin out-of-band). NOT ELIGIBLE stops the sequence — step 6 is not run. |
+| 6 | `./venv/bin/python nexus_depth_check.py <independent_url> --expect-pubkey <pub-from-step-1> --origin-url <mirror_url>` | DEPTH PASS, exit 0, only if the independent node serves a binding that verifies against the out-of-band pin (signature, name, live window). Same-as-origin is refused outright. Run only after step 5 reads ELIGIBLE. |
 
 `./venv/bin/python nexus_status.py` re-prints this sequence with
 the current blockers at any time; it is read-only and offline.
@@ -81,7 +82,7 @@ the current blockers at any time; it is read-only and offline.
 - Independent host: the Depth Test needs a genuinely independent
   node (rule 5) that is short in the current witness set. This
   packet does not authorize provisioning or spend, and does not
-  name a host. Until one exists, step 5 cannot be run honestly —
+  name a host. Until one exists, steps 5–6 cannot be run honestly —
   report that, do not simulate it. What a candidate must be to
   count is specified in docs/NEXUS_INDEPENDENT_HOST.md.
 - Naming window: if the window is closed when step 4 is attempted,
@@ -102,8 +103,9 @@ the current blockers at any time; it is read-only and offline.
    is only real to the fleet once it is off this one tree.
 3. Execute steps 1–3 under supervision in one sitting; pin the
    pub out-of-band before leaving step 1.
-4. Attempt step 4 only against a non-HQ mirror; attempt step 5
-   only when an independent, gossip-fed node exists.
+4. Attempt step 4 only against a non-HQ mirror; attempt steps
+   5–6 only when an independent, gossip-fed node exists, and
+   run step 6 only on a step-5 ELIGIBLE verdict.
 5. Report each step by its tool's own verdict (READY / claimed /
    DEPTH PASS or the exact refusal). Never summarize a refusal
    as progress, and never report claim or depth state from this

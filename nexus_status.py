@@ -52,6 +52,11 @@ _SEQUENCE = [
     "--backup ~/.cyberspace/nexus-name.key.bak",
     "./venv/bin/python nexus_claim.py <mirror_url> --dry-run",
     "./venv/bin/python nexus_claim.py <mirror_url>",
+    "./venv/bin/python nexus_host_check.py "
+    "--candidate-machine-id <id> --origin-machine-id <id> "
+    "--candidate-operator <name> --origin-operator <name> "
+    "--evidence-source machine-itself --feed gossip "
+    "--pin-source out-of-band",
     "./venv/bin/python nexus_depth_check.py <independent_url> "
     "--expect-pubkey <pub-from-step-1> --origin-url <mirror_url>",
 ]
@@ -86,7 +91,8 @@ def status(key_path, backup_path, root):
     if ready:
         lines.append("NEXT: preflight READY -- run step 3 "
                      "(nexus_claim --dry-run) under supervision, "
-                     "then step 4, then step 5 from a node that "
+                     "then step 4, then step 5 (nexus_host_check "
+                     "ELIGIBLE), then step 6 from a node that "
                      "did not host the claim.")
         return 0, lines
     if not key_path.exists():
