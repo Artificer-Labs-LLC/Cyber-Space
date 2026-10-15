@@ -32,6 +32,12 @@ GOOD = {"candidate_machine_id": "machine-B", "origin_machine_id": "machine-A",
 ok, blockers = nh.evaluate(dict(GOOD))
 _check(ok and not blockers, f"clearing seat must be ELIGIBLE: {blockers}")
 
+padded = dict(GOOD, candidate_machine_id=" machine-B ",
+              candidate_operator=" op-B ")
+ok, blockers = nh.evaluate(padded)
+_check(ok and not blockers,
+       f"padded but distinct seat must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -47,6 +53,18 @@ for key, bad, why in [
     ("pin_source", "checking-node", "self-sourced pin must fail"),
     ("candidate_machine_id", None, "missing machine id must fail"),
     ("candidate_operator", None, "missing operator must fail"),
+    ("candidate_machine_id", " Machine-A ",
+     "whitespace-respelled same machine must fail"),
+    ("candidate_machine_id", "MACHINE-A",
+     "case-respelled same machine must fail"),
+    ("candidate_machine_id", "   ",
+     "whitespace-only machine id must fail as missing"),
+    ("candidate_operator", " op-A",
+     "whitespace-respelled same operator must fail"),
+    ("candidate_operator", "OP-A",
+     "case-respelled same operator must fail"),
+    ("candidate_operator", " ",
+     "whitespace-only operator must fail as missing"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad

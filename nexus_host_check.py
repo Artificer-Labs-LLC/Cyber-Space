@@ -45,10 +45,18 @@ _EVIDENCE = ("machine-itself", "registry", "list", "asserted",
              "unknown")
 
 
+def _norm(v):
+    """Identity evidence compares stripped and case-folded: a seat
+    respelled by surrounding whitespace or letter case is the same
+    seat, and a whitespace-only value is no value at all."""
+    return v.strip().casefold() if isinstance(v, str) else v
+
+
 def evaluate(c):
     """Return (eligible: bool, blockers: list[str]). Pure, no I/O."""
     blockers = []
-    cm, om = c.get("candidate_machine_id"), c.get("origin_machine_id")
+    cm, om = _norm(c.get("candidate_machine_id")), \
+        _norm(c.get("origin_machine_id"))
     if not cm or not om:
         blockers.append("bar 1 (distinct machine): machine ids for "
                         "both candidate and origin are required")
@@ -61,7 +69,8 @@ def evaluate(c):
                         f"is {c.get('evidence_source')!r}, not "
                         "'machine-itself' — a registry or list is not "
                         "a host census")
-    co, oo = c.get("candidate_operator"), c.get("origin_operator")
+    co, oo = _norm(c.get("candidate_operator")), \
+        _norm(c.get("origin_operator"))
     if not co or not oo:
         blockers.append("bar 2 (distinct operator): operators for "
                         "both candidate and origin are required")
