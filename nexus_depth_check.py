@@ -44,6 +44,16 @@ This tool enforces that shape:
      below every URL comparison. The real fetch therefore uses
      a no-redirect opener: any 3xx is an HTTP error, reads as
      "serves no binding", and the check fails (exit 1).
+  5. Independence is judged on the endpoint actually DIALED,
+     not only on the spelling: a DNS name is not canonicalized
+     by the comparisons above, so a name that resolves to the
+     claim origin's address (or to loopback, when the origin
+     is loopback) would pass as a foreign node while reaching
+     the origin's machine. Both URLs' hosts are therefore
+     resolved and their (address, port) endpoint sets compared;
+     any intersection refuses (exit 1). A host that does not
+     resolve contributes no endpoints — an unresolvable checked
+     node then fails at the fetch, as before.
 
 It sends nothing, claims nothing, and writes nothing.
 Exit codes: 0 = DEPTH PASS, 1 = refused / not verified,
@@ -158,6 +168,48 @@ def _canonical(url):
     return f"{scheme}://{host}{port_part}"
 
 
+def _resolve(host, port):
+    """The addresses a host actually DIALS to, normalized:
+    IPv4-mapped forms fold to the IPv4 address, and loopback /
+    unspecified addresses fold to one 'loopback' endpoint host
+    (the same folding _canonical applies to spellings). Empty
+    set when the host does not resolve."""
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return set()
+    out = set()
+    for info in infos:
+        raw = info[4][0]
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        out.add("loopback" if ip.is_loopback or ip.is_unspecified
+                else str(ip))
+    return out
+
+
+def _endpoints(url, resolve):
+    """{(address, effective port)} a URL dials; empty if the URL
+    has no host or its host does not resolve."""
+    if not isinstance(url, str):
+        return set()
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return set()
+    host = (parts.hostname or "").rstrip(".").lower()
+    if not host:
+        return set()
+    if port is None:
+        port = 443 if parts.scheme.lower() == "https" else 80
+    return {(addr, port) for addr in resolve(host, port)}
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuse every redirect: returning None makes urllib raise
     HTTPError for the 3xx instead of following it. A depth check
@@ -185,9 +237,11 @@ def _get_json_no_redirect(url, timeout=30.0):
         return None
 
 
-def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
+def depth_check(node_url, expect_pubkey, origin_url=None, get=None,
+                resolve=None):
     """Return (exit_code, notes). Fetches ONLY from node_url."""
     get = _get_json_no_redirect if get is None else get
+    resolve = _resolve if resolve is None else resolve
     if not mn._valid_mirror(node_url):
         return 2, ["node URL is not a dialable http(s) URL"]
     pin = vn._normalize_expected(expect_pubkey)
@@ -210,6 +264,10 @@ def depth_check(node_url, expect_pubkey, origin_url=None, get=None):
     if _canonical(origin_url) == _canonical(node_url):
         return 1, ["REFUSED: checked node is the claim origin — "
                    "asking a node about itself is not a Depth Test"]
+    if _endpoints(origin_url, resolve) & _endpoints(node_url, resolve):
+        return 1, ["REFUSED: checked node resolves to the claim "
+                   "origin's endpoint — a name that dials the "
+                   "origin is not an independent node"]
     binding = get(_base(node_url) + f"/api/v1/names/{_LABEL}")
     if not isinstance(binding, dict):
         return 1, [f"independent node serves no binding for "

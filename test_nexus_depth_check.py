@@ -165,6 +165,40 @@ with tempfile.TemporaryDirectory() as td:
     code, _ = nd.depth_check("ftp://x", pub, origin, get=serve(binding))
     _check(code == 2, "non-http node URL is usage (exit 2)")
 
+    # Resolved endpoints: a DNS name is not canonicalized by the
+    # spelling comparisons, so a name that DIALS the origin (or
+    # loopback, when the origin is loopback) must still refuse.
+    _dns = {"10.0.0.1": {"10.0.0.1"}, "127.0.0.1": {"loopback"},
+            "alias.example": {"10.0.0.1"},
+            "far.example": {"10.0.0.44"},
+            "home.example": {"loopback"}}
+
+    def fake_resolve(host, port):
+        return set(_dns.get(host, set()))
+
+    code, _ = nd.depth_check("http://alias.example:8471", pub,
+                             "http://10.0.0.1:8471",
+                             get=serve(binding), resolve=fake_resolve)
+    _check(code == 1, "a DNS name resolving to the origin's address "
+                      "is the origin (exit 1), not an independent node")
+
+    code, _ = nd.depth_check("http://home.example:8471", pub,
+                             "http://127.0.0.1:8471",
+                             get=serve(binding), resolve=fake_resolve)
+    _check(code == 1, "a DNS name resolving to loopback is the "
+                      "loopback origin (exit 1)")
+
+    code, _ = nd.depth_check("http://far.example:8471", pub,
+                             "http://10.0.0.1:8471",
+                             get=serve(binding), resolve=fake_resolve)
+    _check(code == 0, "a DNS name resolving elsewhere must still PASS")
+
+    code, _ = nd.depth_check("http://alias.example:8472", pub,
+                             "http://10.0.0.1:8471",
+                             get=serve(binding), resolve=fake_resolve)
+    _check(code == 0, "the origin's address on a DIFFERENT port is "
+                      "a different endpoint and must still PASS")
+
     # Real fetch (get=None), loopback servers: the default urllib
     # opener follows 3xx silently, so a node redirecting the name
     # path to the claim origin would pass the origin's own binding
