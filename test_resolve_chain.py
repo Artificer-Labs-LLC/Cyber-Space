@@ -182,6 +182,37 @@ for _flag in ("--mirror", "--expect-original-key"):
             print(f"FAIL: duplicate {_flag} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
             fails += 1
 
+# CLI abbreviation gate, twin of resolver client's (f184a22) and
+# dial's (3328e2d): argparse accepts any unambiguous prefix, so
+# --mir (even --m) silently became --mirror and dodged the duplicate
+# gate above (a --mir A --mirror B pair walked against mirror B).
+# An abbreviated spelling of any long option refuses by name, exit 2,
+# alone or paired, in space or equals spelling, before any input is
+# read or fetched.
+for _abbr, _full in (("--mir", "--mirror"), ("--m", "--mirror"),
+                     ("--expect-o", "--expect-original-key"),
+                     ("--e", "--expect-original-key"),
+                     ("--with", "--with-live"), ("--w", "--with-live"),
+                     ("--h", "--help")):
+    for _extra in ([_abbr, "x"], [f"{_abbr}=x"],
+                   [_abbr, "a", _full, "b"], [_full, "a", _abbr, "b"]):
+        _r = _run_cli_args(_extra)
+        if _r.returncode != 2 or f"{_abbr} is an abbreviation of {_full}" not in _r.stderr:
+            print(f"FAIL: abbreviated {_abbr} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
+            fails += 1
+
+# A single exact flag still reaches its verdict: the pinned stdin
+# walk walks clean, exit 0.
+import json  # noqa: E402
+
+_r = subprocess.run(
+    [sys.executable, os.path.join(_here, "resolve_chain.py"), "-",
+     "--expect-original-key", PK_A],
+    input=json.dumps(DOC), capture_output=True, text=True, timeout=10)
+if _r.returncode != 0 or "walks clean" not in _r.stdout:
+    print(f"FAIL: single exact --expect-original-key -> rc={_r.returncode} {_r.stdout!r} {_r.stderr!r}")
+    fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)

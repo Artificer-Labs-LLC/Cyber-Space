@@ -234,12 +234,28 @@ def main(argv: list[str]) -> int:
     # space, equals or mixed spelling, before argparse runs — before
     # any input is read or fetched.
     _seen: set[str] = set()
+    _long_opts = ("--mirror", "--expect-original-key", "--with-live", "--help")
     for _tok in argv:
         if _tok == "--":
             break
         if not _tok.startswith("--"):
             continue
         _name = _tok.partition("=")[0]
+        if _name not in _long_opts:
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --mir (even --m) silently became
+            # --mirror and dodged the duplicate gate below: a
+            # --mir A --mirror B pair walked against mirror B while
+            # the operator believed the mirror was A (probed this
+            # tick: the abbreviation proceeded to a fetch verdict).
+            # Refuse the abbreviated spelling itself, by name,
+            # before argparse can expand it. Twin of resolver
+            # client's gate (f184a22) and dial's (3328e2d).
+            _full = [o for o in _long_opts if o.startswith(_name)]
+            if _full:
+                print(f"refused: {_name} is an abbreviation of "
+                      f"{_full[0]} — spell it out", file=sys.stderr)
+                return 2
         if _name in ("--mirror", "--expect-original-key"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
@@ -247,7 +263,8 @@ def main(argv: list[str]) -> int:
                 return 2
             _seen.add(_name)
     ap = argparse.ArgumentParser(
-        description="follow a .cyberspace name's rotation chain end to end")
+        description="follow a .cyberspace name's rotation chain end to end",
+        allow_abbrev=False)
     ap.add_argument("source", help="<name>, or - for rotations JSON on stdin")
     ap.add_argument("--mirror", default="",
                     help="mirror base URL, e.g. http://127.0.0.1:8000")
