@@ -232,6 +232,19 @@ _check(not ok and blockers,
        "a Vai-GBA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+man = dict(GOOD, candidate_machine_id="machine-ࡁ")
+ok, blockers = nh.evaluate(man)
+_check(ok and not blockers,
+       "a Mandaic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+manm = dict(GOOD, candidate_machine_id="machine-ࡀ",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(manm)
+_check(not ok and blockers,
+       "a Mandaic-HALQA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -682,6 +695,8 @@ for cand, orig, why in [
      "vai-poo-respelled same operator must fail"),
     ("op-ꔋ", "op-t",
      "vai-gbee-respelled same operator must fail"),
+    ("op-ࡀ", "op-o",
+     "mandaic-halqa-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
