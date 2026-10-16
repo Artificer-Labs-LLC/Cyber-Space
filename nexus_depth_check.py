@@ -284,6 +284,7 @@ def main(argv):
     node_url = None
     expect_pubkey = None
     origin_url = None
+    seen = set()
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -291,6 +292,11 @@ def main(argv):
             print(__doc__.strip())
             return 0
         if a in ("--expect-pubkey", "--origin-url"):
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             i += 1
             if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
@@ -304,6 +310,11 @@ def main(argv):
             if opt not in ("--expect-pubkey", "--origin-url"):
                 print(f"refused: unknown argument {a!r}", file=sys.stderr)
                 return 2
+            if opt in seen:
+                print(f"refused: {opt} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(opt)
             if not v:
                 print(f"refused: {opt} needs a value", file=sys.stderr)
                 return 2

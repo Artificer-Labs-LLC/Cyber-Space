@@ -286,6 +286,33 @@ _check(_code == 2 and "--origin-url needs a value" in _err.getvalue(),
        "space form followed by another flag must refuse the origin "
        f"flag by name, got {_code}: {_err.getvalue()!r}")
 
+# A repeated value flag must refuse by name, never silently
+# last-win: before, --expect-pubkey A --expect-pubkey B checked
+# against B while the operator believed the pin was A -- the pin
+# is the out-of-band authenticity anchor, so a silent swap defeats
+# the check (twin of nexus_claim / nexus_status / nexus_preflight /
+# nexus_keygen duplicate gates). Covers space, equals, mixed.
+for _argv, _flag in (
+    ([node, "--expect-pubkey", pub, "--expect-pubkey", "00" * 32,
+      "--origin-url", origin], "--expect-pubkey"),
+    ([node, f"--expect-pubkey={pub}", f"--expect-pubkey={'00' * 32}",
+      f"--origin-url={origin}"], "--expect-pubkey"),
+    ([node, "--expect-pubkey", pub, f"--expect-pubkey={'00' * 32}",
+      "--origin-url", origin], "--expect-pubkey"),
+    ([node, "--expect-pubkey", pub,
+      "--origin-url", origin, "--origin-url", node], "--origin-url"),
+    ([node, f"--expect-pubkey={pub}",
+      f"--origin-url={origin}", f"--origin-url={node}"], "--origin-url"),
+    ([node, f"--expect-pubkey={pub}",
+      "--origin-url", origin, f"--origin-url={node}"], "--origin-url"),
+):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nd.main(_argv)
+    _check(_code == 2 and f"{_flag} given more than once" in _err.getvalue(),
+           f"duplicate {_flag} must refuse by name, got "
+           f"{_code}: {_err.getvalue()!r}")
+
 if fails:
     print(f"test_nexus_depth_check: {fails} FAIL")
     sys.exit(1)
