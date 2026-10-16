@@ -794,13 +794,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("name", help="name to resolve, e.g. alice.cyberspace")
     parser.add_argument(
-        # type=str.upper before choices: resolve() itself uppercases
-        # qtype, so 'a'/'aaaa' are valid library arguments — the CLI
-        # refusing them as invalid choices contradicted its own library.
-        # Default None (not "A") so main() can tell an explicit family
-        # from an unchosen one: an unchosen query falls back to AAAA
-        # when A answers NODATA (see below); an explicit one is strict.
-        "--qtype", default=None, type=str.upper, choices=sorted(_QTYPES),
+        # No type=/choices=: argparse would enforce them itself (see
+        # the gate in main) -- the raw string reaches main and is
+        # gated there so bad spellings refuse with return 2, not
+        # SystemExit. Default None (not "A") so main() can tell an
+        # explicit family from an unchosen one: an unchosen query
+        # falls back to AAAA when A answers NODATA (see below); an
+        # explicit one is strict.
+        "--qtype", default=None,
         help="record family (default: A, falling back to AAAA when the "
              "name has no A record)",
     )
@@ -819,6 +820,26 @@ def main(argv: list[str] | None = None) -> int:
         "--tcp-only", action="store_true", help="skip UDP, speak DNS-over-TCP only"
     )
     args = parser.parse_args(argv)
+
+    if args.qtype is not None:
+        # The qtype gate comes first, exactly where argparse's
+        # choices= refused: a bad family (--qtype=, --qtype MX)
+        # escaped as argparse's SystemExit instead of this CLI's
+        # return 2, so an in-process caller of main() crashed on a
+        # bad argument every other flag here refuses by return --
+        # twin of the --port gate below, which removed type=int for
+        # the same reason. Uppercased first: resolve() itself
+        # uppercases qtype, so 'a'/'aaaa' are valid spellings and
+        # keep their exact behaviour; anything not in _QTYPES (the
+        # empty equals value included) refuses by name, exit 2,
+        # before any query is built or sent.
+        args.qtype = args.qtype.upper()
+        if args.qtype not in _QTYPES:
+            print(
+                "error: --qtype must be A or AAAA",
+                flush=True,
+            )
+            return 2
 
     if args.port is not None:
         # ASCII digits only, one optional leading sign (twin of

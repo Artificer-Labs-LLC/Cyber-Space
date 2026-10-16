@@ -1311,6 +1311,28 @@ class ClientTests(unittest.TestCase):
                 self.assertIn(f"{abbr} is an abbreviation of {full}",
                               err.getvalue())
 
+    def test_main_refuses_bad_qtype_without_systemexit(self):
+        """CLI qtype gate: argparse choices= enforced --qtype
+        itself, so a bad family (--qtype=, --qtype MX) escaped as
+        SystemExit instead of main() returning 2 like every other
+        bad argument here (the --port gate removed type=int for
+        the same reason). A bad family in space or equals spelling
+        refuses by name with return 2, before any query; a
+        lowercase valid family still passes the gate (it reaches
+        the name-shape verdict on a bad name, no query sent)."""
+        for extra in (["--qtype="], ["--qtype", ""],
+                      ["--qtype=MX"], ["--qtype", "MX"]):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = client.main(["alice.cyberspace"] + extra)
+            self.assertEqual(code, 2, extra)
+            self.assertIn("--qtype must be A or AAAA", out.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = client.main(["not-a-name", "--qtype", "a"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("--qtype must be", err.getvalue())
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
