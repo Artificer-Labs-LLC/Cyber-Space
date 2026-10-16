@@ -123,6 +123,24 @@ with tempfile.TemporaryDirectory() as td:
            and not Path("-h").exists(),
            "-h-as-value refusal writes nothing")
 
+    # Any flag-shaped token is not a space-form value: --key -x
+    # GENERATED the root key into a file named "-x" in the cwd
+    # (probed) -- the -h gate left every other single-dash token
+    # open, twin of nexus_status's flag-shaped gate (f793dc8).
+    # Both flags refuse -x as a missing value.
+    for _argv, _flag in ((["--key", "-x",
+                           "--backup", str(td / "x.bak")], "--key"),
+                         (["--backup", "-x",
+                           "--key", str(td / "x.key")], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nk.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"-x must refuse as {_flag} needs a value")
+    _check(not (td / "x.key").exists() and not (td / "x.bak").exists()
+           and not Path("-x").exists(),
+           "-x-as-value refusal writes nothing")
+
     # A repeated value flag must refuse, not silently last-win:
     # --key A --key B wrote the key to B while the operator believed
     # it sat at A (probed). Both spellings, both flags.

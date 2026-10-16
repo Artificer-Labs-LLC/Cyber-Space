@@ -141,15 +141,20 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            # -h is a flag token too, not a value: the startswith
-            # check alone let --key -h swallow the help flag as the
-            # key path and GENERATE the root key into a file named
-            # "-h" in the cwd, with the backup at the default seat
-            # -- a split pair whose primary no later tool ever reads
-            # (probed this tick). Refuse it as a missing value, twin
-            # of the -- flag check beside it.
-            if i >= len(argv) or argv[i].startswith("--") \
-                    or argv[i] == "-h":
+            # Any flag-shaped token is a flag token, not a value:
+            # the "--" check alone let --key -h swallow the help
+            # flag as the key path and GENERATE the root key into a
+            # file named "-h" in the cwd, with the backup at the
+            # default seat -- a split pair whose primary no later
+            # tool ever reads -- and the -h-only gate left every
+            # other single-dash token open: --key -x GENERATED the
+            # root key into a file named "-x" the same way (probed
+            # this tick). No documented value for any flag here
+            # begins with "-"; the equals spelling stays the
+            # deliberate way to write one. Refuse it as a missing
+            # value, generalising the -h gate (c0b00de), twin of
+            # nexus_status's flag-shaped gate (f793dc8).
+            if i >= len(argv) or argv[i].startswith("-"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--key":
