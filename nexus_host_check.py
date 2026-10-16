@@ -1267,7 +1267,16 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            if i >= len(argv) or argv[i].startswith("--"):
+            # -h is a flag token too, not a value: the startswith
+            # check alone let --candidate-machine-id -h swallow the
+            # help flag as the machine id and a seat named "-h"
+            # cleared ELIGIBLE against a different origin (probed
+            # this tick), while --feed -h was blamed as an invalid
+            # feed value instead of naming the flag that needs a
+            # value. Refuse it as a missing value, twin of
+            # nexus_depth_check's -h gate (62855ee).
+            if i >= len(argv) or argv[i].startswith("--") \
+                    or argv[i] == "-h":
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             c[_VALUE_FLAGS[a]] = argv[i]

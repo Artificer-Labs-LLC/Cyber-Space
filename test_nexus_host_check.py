@@ -1386,6 +1386,23 @@ for _flag in ("--candidate-machine-id", "--origin-machine-id",
     _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
            f"following flag must refuse as {_flag} needs a value")
 
+# -h is a flag token too, not a value: the space-form check alone
+# let --candidate-machine-id -h swallow the help flag as the
+# machine id and a seat named "-h" cleared ELIGIBLE against a
+# different origin (probed this tick), while --feed -h was blamed
+# as an invalid feed value instead of naming the flag that needs
+# a value (twin of nexus_depth_check's -h gate, 62855ee); this
+# closes the -h sequence (host check was the last parser still
+# swallowing -h as a space-form value).
+for _flag in ("--candidate-machine-id", "--origin-machine-id",
+              "--candidate-operator", "--origin-operator",
+              "--evidence-source", "--feed", "--pin-source"):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nh.main([_flag, "-h"])
+    _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+           f"-h must refuse as {_flag} needs a value")
+
 # A repeated value flag must refuse by name, never silently
 # last-win: --candidate-machine-id A --candidate-machine-id B
 # evaluated B while the operator believed the gate checked A --
