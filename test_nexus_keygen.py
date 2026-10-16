@@ -8,6 +8,8 @@ files born-0600 and byte-identical, refuses to overwrite either one
 a command), refuses key == backup, and that what it writes passes
 nexus_preflight READY in a temp dir — never the real ~/.cyberspace.
 """
+import contextlib
+import io
 import os
 import stat
 import sys
@@ -89,6 +91,19 @@ with tempfile.TemporaryDirectory() as td:
            "empty equals value must be refused")
     _check(not (td / "eq3.bak").exists(),
            "empty equals refusal writes nothing")
+
+    # A following -- flag is not a space-form value: --key --backup
+    # swallowed the backup flag as the key path and then blamed the
+    # real backup path as unknown, instead of naming --key.
+    for _argv, _flag in ((["--key", "--backup", str(td / "fv.bak")], "--key"),
+                         (["--backup", "--key", str(td / "fv.key")], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nk.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"following flag must refuse as {_flag} needs a value")
+    _check(not (td / "fv.key").exists() and not (td / "fv.bak").exists(),
+           "flag-as-value refusal writes nothing")
 
     # A backup write that fails AFTER the primary lands (here: a
     # dangling symlink -- exists() passes it, O_EXCL refuses it)
