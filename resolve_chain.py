@@ -232,7 +232,11 @@ def main(argv: list[str]) -> int:
     # chain against pin B while the operator believed the pin was A
     # (probed this tick). Refuse a repeated value flag by name, in
     # space, equals or mixed spelling, before argparse runs — before
-    # any input is read or fetched.
+    # any input is read or fetched. The boolean --with-live gates the
+    # same way: store_true repeats silently too, so --with-live
+    # --with-live passed to a verdict while every value flag refused
+    # its repeat by name — twin of rotate_name's --promote gate
+    # (411a562) and nexus_claim's --dry-run gate (ce55b85).
     _seen: set[str] = set()
     _long_opts = ("--mirror", "--expect-original-key", "--with-live", "--help")
     for _tok in argv:
@@ -256,7 +260,7 @@ def main(argv: list[str]) -> int:
                 print(f"refused: {_name} is an abbreviation of "
                       f"{_full[0]} — spell it out", file=sys.stderr)
                 return 2
-        if _name in ("--mirror", "--expect-original-key"):
+        if _name in ("--mirror", "--expect-original-key", "--with-live"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
                       file=sys.stderr)

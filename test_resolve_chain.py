@@ -182,6 +182,25 @@ for _flag in ("--mirror", "--expect-original-key"):
             print(f"FAIL: duplicate {_flag} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
             fails += 1
 
+# The boolean --with-live gates the same way: store_true repeats
+# silently, so --with-live --with-live passed to a verdict while
+# every value flag above refused its repeat by name. A repeated
+# --with-live in space, equals or mixed spelling must refuse by
+# name, exit 2, before any verdict; a single --with-live still
+# reaches its verdict (here, the stdin-mode offline refusal).
+for _extra in (["--with-live", "--with-live"],
+               ["--with-live=x", "--with-live=x"],
+               ["--with-live", "--with-live=x"],
+               ["--with-live=x", "--with-live"]):
+    _r = _run_cli_args(_extra)
+    if _r.returncode != 2 or "--with-live given more than once" not in _r.stderr:
+        print(f"FAIL: duplicate --with-live {_extra} -> rc={_r.returncode} {_r.stderr!r}")
+        fails += 1
+_r = _run_cli_args(["--with-live"])
+if _r.returncode != 2 or "stdin mode is fully offline" not in _r.stderr:
+    print(f"FAIL: single --with-live -> rc={_r.returncode} {_r.stderr!r}")
+    fails += 1
+
 # CLI abbreviation gate, twin of resolver client's (f184a22) and
 # dial's (3328e2d): argparse accepts any unambiguous prefix, so
 # --mir (even --m) silently became --mirror and dodged the duplicate
