@@ -158,6 +158,28 @@ with tempfile.TemporaryDirectory() as _td:
         print(f"FAIL: CLI regular file -> rc={_r.returncode} {_r.stderr!r}")
         fails += 1
 
+# CLI duplicate gate: argparse silently last-wins on a repeated
+# value flag, so --expect-name foo --expect-name bar verified
+# against bar while the operator believed the pin was foo. A
+# repeated --expect-name/--expect-pubkey in space, equals or
+# mixed spelling must refuse by name, exit 2, before any verdict.
+def _run_cli_args(extra):
+    return subprocess.run(
+        [sys.executable, os.path.join(_here, "verify_name.py"),
+         "/nonexistent-binding.json"] + extra,
+        capture_output=True, text=True, timeout=10)
+
+
+for _flag in ("--expect-name", "--expect-pubkey"):
+    for _extra in ([_flag, "a", _flag, "b"],
+                   [f"{_flag}=a", f"{_flag}=b"],
+                   [_flag, "a", f"{_flag}=b"],
+                   [f"{_flag}=a", _flag, "b"]):
+        _r = _run_cli_args(_extra)
+        if _r.returncode != 2 or f"{_flag} given more than once" not in _r.stderr:
+            print(f"FAIL: duplicate {_flag} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
+            fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)

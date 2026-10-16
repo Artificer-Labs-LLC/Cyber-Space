@@ -226,6 +226,26 @@ def verify(binding: dict, expect_name: str | None = None,
 
 
 def main(argv: list[str]) -> int:
+    # Duplicate gate, twin of rotate_name / the nexus_*/mint_name
+    # parsers: argparse silently last-wins on a repeated value flag,
+    # so --expect-name foo --expect-name bar verified against bar
+    # while the operator believed the pin was foo (probed this
+    # tick). Refuse a repeated value flag by name, in space, equals
+    # or mixed spelling, before argparse runs — before any input
+    # is read.
+    _seen: set[str] = set()
+    for _tok in argv:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _name = _tok.partition("=")[0]
+        if _name in ("--expect-name", "--expect-pubkey"):
+            if _name in _seen:
+                print(f"refused: {_name} given more than once",
+                      file=sys.stderr)
+                return 2
+            _seen.add(_name)
     ap = argparse.ArgumentParser(
         description="verify a .cyberspace name binding offline")
     ap.add_argument("source", help="binding.json, or - for stdin")
