@@ -720,6 +720,11 @@ def main() -> int:
     # by name, in space, equals or mixed spelling, before argparse
     # runs — before any query is built or sent. Exit 1 is this
     # smoke's bad-argument code (see the --port gate below).
+    # The boolean --tcp gates the same way: store_true repeats
+    # silently too, so --tcp --tcp passed to a verdict while every
+    # value flag refused its repeat by name — twin of client's
+    # --tcp-only gate (49473c8) and resolve_chain's --with-live
+    # gate (c466111).
     _seen: set[str] = set()
     _long_opts = ("--name", "--server", "--port", "--tcp", "--help")
     for _tok in sys.argv[1:]:
@@ -742,7 +747,7 @@ def main() -> int:
                       f"{_full[0]} — spell it out — "
                       f"bad argument, no query attempted")
                 return 1
-        if _flag in ("--name", "--server", "--port"):
+        if _flag in ("--name", "--server", "--port", "--tcp"):
             if _flag in _seen:
                 print(f"FAIL: {_flag} given more than once — "
                       f"bad argument, no query attempted")

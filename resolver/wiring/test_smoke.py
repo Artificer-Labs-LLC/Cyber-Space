@@ -303,6 +303,59 @@ def _test_repeated_value_flag():
           f"rc={rc}")
 
 
+# 5e2b. repeated boolean --tcp is a bad argument, never silent:
+#     store_true repeats silently too, so --tcp --tcp passed to a
+#     verdict while every value flag refused its repeat by name;
+#     a repeat in space, equals or mixed spelling refuses by name
+#     with exit 1 before any query is attempted (twin of client's
+#     --tcp-only gate / resolve_chain's --with-live gate)
+def _test_repeated_tcp_flag():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    for extra in (["--tcp", "--tcp"],
+                  ["--tcp=true", "--tcp"],
+                  ["--tcp", "--tcp=true"],
+                  ["--tcp=true", "--tcp=true"]):
+        calls["n"] = 0
+        real_query, real_tcp = smoke._query, smoke._query_tcp
+        smoke._query, smoke._query_tcp = _counting, _counting
+        old_argv = sys.argv
+        sys.argv = ["smoke.py", "--server", "127.0.0.1",
+                    "--port", "53599"] + list(extra)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = smoke.main()
+        finally:
+            smoke._query, smoke._query_tcp = real_query, real_tcp
+            sys.argv = old_argv
+        out = buf.getvalue()
+        check(f"repeated --tcp {extra[0]!r} -> exit 1, no query",
+              rc == 1 and calls["n"] == 0
+              and "--tcp given more than once" in out,
+              f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    # control: a single --tcp still smokes, over TCP only
+    calls["n"] = 0
+    real_query, real_tcp = smoke._query, smoke._query_tcp
+    smoke._query, smoke._query_tcp = _counting, _counting
+    old_argv = sys.argv
+    sys.argv = ["smoke.py", "--server", "127.0.0.1", "--port", "53599",
+                "--tcp"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = smoke.main()
+    finally:
+        smoke._query, smoke._query_tcp = real_query, real_tcp
+        sys.argv = old_argv
+    check("single --tcp still smokes (control)", rc == 0
+          and calls["n"] == 2, f"rc={rc} calls={calls['n']}")
+
+
 # 5e3. abbreviated long option is a bad argument, never expanded:
 #     argparse accepts any unambiguous prefix, so --por (even --p)
 #     silently became --port and dodged the duplicate gate above;
@@ -2135,6 +2188,7 @@ if __name__ == "__main__":
     _test_aaaa_fallback()
     _test_undialable_port()
     _test_repeated_value_flag()
+    _test_repeated_tcp_flag()
     _test_abbreviated_flag()
     _test_malformed_name()
     _test_undialable_server()
