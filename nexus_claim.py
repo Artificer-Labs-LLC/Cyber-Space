@@ -37,6 +37,8 @@ and has no label argument — the root label is fixed to "nexus".
 Usage: ./venv/bin/python nexus_claim.py [mirror_url]
          [--key PATH] [--backup PATH] [--env-dir DIR]
          [--expiry-days N] [--dry-run]
+(each option also accepted in the --key=PATH spelling, the twin
+of nexus_keygen's, nexus_preflight's and nexus_status's parsers)
 Exit codes: 0 = claimed (or dry-run built), 1 = refused at a gate
 or by the mirror, 2 = usage / bad argument (nothing sent).
 """
@@ -152,6 +154,26 @@ def main(argv):
             return 0
         if a == "--dry-run":
             dry_run = True
+        elif a.startswith(("--key=", "--backup=", "--env-dir=",
+                           "--expiry-days=")):
+            opt, _, v = a.partition("=")
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            if opt == "--key":
+                key_path = Path(v)
+            elif opt == "--backup":
+                backup_path = Path(v)
+            elif opt == "--env-dir":
+                env_dir = Path(v)
+            else:
+                txt = v.strip()
+                digits = txt[1:] if txt[:1] in ("+", "-") else txt
+                if not digits or not digits.isascii() or not digits.isdigit():
+                    print("refused: --expiry-days must be an integer",
+                          file=sys.stderr)
+                    return 2
+                expiry_days = int(txt)
         elif a in ("--key", "--backup", "--env-dir", "--expiry-days"):
             i += 1
             if i >= len(argv):

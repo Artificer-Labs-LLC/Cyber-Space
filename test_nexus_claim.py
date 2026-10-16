@@ -163,6 +163,20 @@ with tempfile.TemporaryDirectory() as td:
                           expiry_days=366, post=post_spy, get=get_spy)
     _check(code == 2 and calls == [], "over-cap expiry must be exit 2")
 
+    # The equals spelling (--key=PATH etc.) is accepted by main,
+    # twin of nexus_status's both-spellings parser; an empty equals
+    # value and a non-integer equals expiry are usage refusals.
+    env_eq = td / "hostd-eq"
+    _check(nc.main(["http://127.0.0.1:9", f"--key={key}",
+                    f"--backup={bak}", f"--env-dir={env_eq}",
+                    "--expiry-days=30", "--dry-run"]) == 0
+           and not env_eq.exists(),
+           "equals spelling must reach a dry-run and write no env")
+    _check(nc.main([f"--key=", f"--backup={bak}"]) == 2,
+           "empty equals value must be a usage refusal")
+    _check(nc.main([f"--key={key}", "--expiry-days=abc"]) == 2,
+           "non-integer equals expiry must be a usage refusal")
+
 if fails:
     print(f"{fails} FAILURES")
     sys.exit(1)
