@@ -317,6 +317,19 @@ _check(not ok and blockers,
        "a Hangul-jongseong-ieung-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+tag = dict(GOOD, candidate_machine_id="machine-ᝠ")
+ok, blockers = nh.evaluate(tag)
+_check(ok and not blockers,
+       "a Tagbanwa letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+tagm = dict(GOOD, candidate_machine_id="machine-ᝣ",
+            origin_machine_id="machine-x")
+ok, blockers = nh.evaluate(tagm)
+_check(not ok and blockers,
+       "a Tagbanwa-KA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -789,6 +802,8 @@ for cand, orig, why in [
      "hangul-letter-ieung-respelled same operator must fail"),
     ("op-ﾷ", "op-o",
      "hangul-halfwidth-ieung-respelled same operator must fail"),
+    ("op-ᝣ", "op-x",
+     "tagbanwa-ka-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

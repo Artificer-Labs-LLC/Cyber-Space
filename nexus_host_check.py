@@ -663,6 +663,23 @@ _CONFUSABLES.update(str.maketrans({
     "ᄋ": "o", "ᆼ": "o", "ㅇ": "o", "ﾷ": "o",
 }))
 
+# Tagbanwa: the Philippine script whose letter KA is cut as a
+# plain cross, and UTS #39 lists it as confusable with the
+# single Latin letter x, the script's only letter-to-single-
+# Latin mapping in the table -- mapping taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with it rendered as the origin and compared
+# distinct (probed this tick: a KA machine spelling and a KA
+# operator spelling each returned ELIGIBLE as their own
+# origin). Tagbanwa has no case distinction, so a single entry
+# suffices. The other Tagbanwa letters stay distinct: A, for
+# one, has no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "ᝣ": "x",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
