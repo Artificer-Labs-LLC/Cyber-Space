@@ -743,6 +743,31 @@ def main(argv: list[str] | None = None) -> int:
     """
     import argparse
 
+    if argv is None:
+        argv = sys.argv[1:]
+    # Duplicate gate, twin of dial / resolve_chain / verify_name:
+    # argparse silently last-wins on a repeated value flag, so
+    # --port 5353 --port 5354 queried port 5354 while the operator
+    # believed the daemon port was 5353, and a repeated --qtype /
+    # --server redirected the query the same way (probed this tick:
+    # duplicates proceeded to the wire and read back a transport
+    # verdict). Refuse a repeated value flag by name, in space,
+    # equals or mixed spelling, before argparse runs — before any
+    # query is built or sent. Exit 2 is this CLI's usage code.
+    _seen: set[str] = set()
+    for _tok in argv:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _name = _tok.partition("=")[0]
+        if _name in ("--qtype", "--server", "--port"):
+            if _name in _seen:
+                print(f"refused: {_name} given more than once",
+                      file=sys.stderr)
+                return 2
+            _seen.add(_name)
+
     parser = argparse.ArgumentParser(
         prog="resolver.client",
         description="Resolve a .cyberspace name through the local daemon face.",

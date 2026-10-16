@@ -11,6 +11,8 @@ hidden_files/resolver-wire-loopback-test.py); the fallback contract
 Run: cd ~/workspace/cybernet && ./venv/bin/python -m unittest resolver.test_client
 """
 
+import contextlib
+import io
 import os
 import random
 import socket
@@ -1229,6 +1231,37 @@ class ClientTests(unittest.TestCase):
                                          bytearray(b"\x01\x02\x03\x04")),
                          "1.2.3.4")
         self.assertEqual(client._textify(client.QTYPE_AAAA, bytes(16)), "::")
+
+    def test_main_refuses_repeated_value_flag(self):
+        """CLI duplicate gate, twin of dial/resolve_chain: argparse
+        silently last-won on a repeated value flag, so --port A
+        --port B queried B while the operator believed the port was
+        A (and --qtype/--server redirected the query the same way).
+        A repeat in space, equals or mixed spelling refuses by name
+        with exit 2 before any query is sent."""
+        cases = (
+            ("--qtype", "A", "AAAA"),
+            ("--server", "127.0.0.1", "127.0.0.2"),
+            ("--port", "5353", "5354"),
+        )
+        for flag, first, second in cases:
+            for extra in ([flag, first, flag, second],
+                          [f"{flag}={first}", f"{flag}={second}"],
+                          [flag, first, f"{flag}={second}"],
+                          [f"{flag}={first}", flag, second]):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = client.main(["alice.cyberspace"] + extra)
+                self.assertEqual(code, 2, extra)
+                self.assertIn(f"{flag} given more than once",
+                              err.getvalue())
+        # A single value flag still passes the gate: it reaches the
+        # name-shape verdict (exit 2 on stdout, no duplicate refusal).
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = client.main(["not-a-name", "--port", "5353"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("given more than once", err.getvalue())
 
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
