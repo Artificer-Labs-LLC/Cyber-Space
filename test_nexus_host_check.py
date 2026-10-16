@@ -50,6 +50,12 @@ _check(ok and not blockers,
        "a dash-respelled but genuinely distinct seat must stay "
        f"ELIGIBLE: {blockers}")
 
+arm = dict(GOOD, candidate_machine_id="machine-բ")
+ok, blockers = nh.evaluate(arm)
+_check(ok and not blockers,
+       "a non-look-alike Armenian letter is a genuinely distinct "
+       f"seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -111,6 +117,8 @@ for key, bad, why in [
      "cyrillic-o-respelled same operator must fail"),
     ("candidate_operator", "οp-a",
      "greek-omicron-respelled same operator must fail"),
+    ("candidate_operator", "օp-a",
+     "armenian-oh-respelled same operator must fail"),
     ("candidate_machine_id", b"machine-a",
      "bytes-spelled same machine must fail as missing"),
     ("candidate_machine_id", b"machine-b",

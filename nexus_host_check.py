@@ -72,13 +72,13 @@ def _invisible(ch):
         or 0xE0100 <= o <= 0xE01EF or o in _BLANK
 
 
-# Cross-script look-alikes: Cyrillic and Greek letters whose shape
-# duplicates a Latin letter (the well-known UTS #39 confusables for
-# Latin). A machine id or operator spelled with one of these renders
+# Cross-script look-alikes: Cyrillic, Greek, and Armenian letters
+# whose shape duplicates a Latin letter (the well-known UTS #39
+# confusables for Latin). A machine id or operator spelled with one of these renders
 # identically to the Latin spelling, so it IS the Latin spelling for
 # comparison purposes -- the origin may not pass as its own
 # independent host or operator by switching alphabets. Scope is
-# these two scripts' single-letter Latin duplicates; within-Latin
+# these scripts' single-letter Latin duplicates; within-Latin
 # look-alikes (l/1, O/0) are font questions, not script spoofing,
 # and are deliberately not folded.
 _CONFUSABLES = str.maketrans({
@@ -117,6 +117,14 @@ _CONFUSABLES.update(str.maketrans({
     "в": "b", "к": "k", "м": "m", "н": "h", "т": "t",
     "α": "a", "β": "b", "ε": "e", "ζ": "z", "η": "h",
     "ι": "i", "κ": "k", "μ": "m", "π": "n",
+}))
+
+# Armenian oh: U+0555/U+0585 are perfect circles -- the Latin o/O
+# drawn in another alphabet. The Cyrillic/Greek sets held their
+# o-duplicates, but a seat respelled with the Armenian oh compared
+# distinct and passed as its own origin's independent host/operator.
+_CONFUSABLES.update(str.maketrans({
+    "օ": "o", "Օ": "O",
 }))
 
 
