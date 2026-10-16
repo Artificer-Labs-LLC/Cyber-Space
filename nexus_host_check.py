@@ -187,6 +187,26 @@ _CONFUSABLES.update(str.maketrans({
     "ⲭ": "x",
 }))
 
+# Lisu: the Fraser alphabet was built from Latin capitals (some
+# rotated or mirrored), and UTS #39 lists 26 of its letters as
+# confusable with single Latin letters (A with A, BA with B, CA
+# with C, and so on) -- mappings taken from confusables.txt at
+# unicode.org fetched this tick, not guessed. A seat respelled
+# with one rendered as the origin and compared distinct (probed
+# this tick: A and E seats returned ELIGIBLE). Lisu is caseless,
+# so single entries suffice; PHA folds to d and DA to D, which
+# _norm's case-fold then unites with Latin d, as UTS #39's own
+# targets do. Letters UTS #39 lists against no Latin letter
+# (KHA, for one) stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "ꓮ": "A", "ꓐ": "B", "ꓚ": "C", "ꓒ": "d", "ꓓ": "D",
+    "ꓰ": "E", "ꓝ": "F", "ꓖ": "G", "ꓧ": "H", "ꓙ": "J",
+    "ꓗ": "K", "ꓲ": "l", "ꓡ": "L", "ꓟ": "M", "ꓠ": "N",
+    "ꓳ": "O", "ꓑ": "P", "ꓣ": "R", "ꓢ": "S", "ꓔ": "T",
+    "ꓴ": "U", "ꓦ": "V", "ꓪ": "W", "ꓫ": "X", "ꓬ": "Y",
+    "ꓜ": "Z",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
