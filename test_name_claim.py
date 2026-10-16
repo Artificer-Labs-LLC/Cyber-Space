@@ -369,7 +369,16 @@ def node_key_cases():
                 check("first-boot race loser adopts winner key", False,
                       "FileExistsError uncaught")
         fresh = os.path.join(td, "fresh.key")
+        fsync_kinds = []
+        real_fsync = os.fsync
+
+        def fsync_spy(fd):
+            fsync_kinds.append(
+                "dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+            return real_fsync(fd)
+
         with _mock.patch.object(_core, "_NODE_KEY_PATH", fresh), \
+                _mock.patch.object(os, "fsync", fsync_spy), \
                 _mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CYBERNET_NODE_PRIVKEY", None)
             priv, _pub = _node_keypair()
@@ -378,6 +387,8 @@ def node_key_cases():
                 saved = f.read().strip()
             check("fresh node key born 0600, saved whole",
                   mode == 0o600 and saved == priv, oct(mode))
+            check("fresh node key create fsyncs file and parent dir",
+                  fsync_kinds == ["file", "dir"], str(fsync_kinds))
             priv2, _ = _node_keypair()
             check("second boot reads the same identity", priv2 == priv)
 

@@ -263,6 +263,23 @@ _NODE_KEY_PATH = os.path.join(_DB_DIR, ".node.key")
 # RuntimeError the shape check already raises.
 _NODE_KEY_MAX = 1024
 
+def _fsync_dir(d) -> None:
+    """Fsync a directory so an entry created in it is durable.
+
+    Twin of mint_name._fsync_dir (core cannot import it back: the
+    name tools layer over core, not under it). Fsyncing the FILE
+    makes its bytes durable, not its NAME: without a parent-dir
+    fsync a crash after a successful return can lose the directory
+    entry itself — a node key reported saved simply gone on reboot,
+    and the node silently reborn under a new identity.
+    """
+    dfd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def _read_node_key_file() -> str:
     """Read the saved node seed (bounded; oversize is not a seed)."""
     with open(_NODE_KEY_PATH) as f:
@@ -283,6 +300,9 @@ def _node_keypair() -> tuple[str, str]:
     2026-10-16). The winning write is looped + fsynced before close,
     so a key the create reported is never a truncated file the next
     boot's shape check would strand as a permanent RuntimeError.
+    The parent directory is fsynced after the create too (probed
+    2026-10-16: fsync kinds ['file'] only): file fsync alone does
+    not make the .node.key directory entry durable.
     """
     env_key = os.environ.get("CYBERNET_NODE_PRIVKEY", "").strip()
     if env_key:
@@ -304,6 +324,7 @@ def _node_keypair() -> tuple[str, str]:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+            _fsync_dir(os.path.dirname(_NODE_KEY_PATH) or ".")
             priv = candidate
     if not re.fullmatch(r"[0-9a-fA-F]{64}", priv):
         raise RuntimeError("node key is not a 32-byte hex seed")
