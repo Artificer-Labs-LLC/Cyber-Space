@@ -141,6 +141,19 @@ _check(ok and not blockers,
        "an Old Hungarian letter with no UTS #39 entry is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+lyd = dict(GOOD, candidate_machine_id="machine-𐤡")
+ok, blockers = nh.evaluate(lyd)
+_check(ok and not blockers,
+       "a Lydian letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+lydm = dict(GOOD, candidate_machine_id="machine-𐤦",
+            origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(lydm)
+_check(not ok and blockers,
+       "a Lydian-I-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -533,6 +546,10 @@ for cand, orig, why in [
      "oldhungarian-number-one-respelled same operator must fail"),
     ("op-𐳼", "op-x",
      "oldhungarian-number-ten-respelled same operator must fail"),
+    ("op-𐤦", "op-l",
+     "lydian-i-respelled same operator must fail"),
+    ("op-𐤬", "op-o",
+     "lydian-o-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

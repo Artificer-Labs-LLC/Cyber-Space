@@ -426,6 +426,24 @@ _CONFUSABLES.update(str.maketrans({
     "𐳥": "l", "𐳺": "l", "𐳼": "X",
 }))
 
+# Lydian: the Anatolian sibling of Carian and Lycian, likewise
+# cut to simple shapes, and UTS #39 lists 2 of its letters as
+# confusable with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: I and O operator spellings each
+# returned ELIGIBLE as their own origin). Lydian is
+# unicameral, so single entries suffice; _norm's case-fold
+# unites them with the Latin lowercase (both UTS #39 targets
+# are small letters). The other Lydian letters stay distinct:
+# B folds only to a Canadian Syllabics letter, and the rest
+# have no UTS #39 entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "𐤦": "l", "𐤬": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
