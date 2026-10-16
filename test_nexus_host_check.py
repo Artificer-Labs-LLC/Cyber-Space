@@ -116,6 +116,13 @@ _check(ok and not blockers,
        "an Old Italic letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+can = dict(GOOD, candidate_machine_id="machine-ᐊ")
+ok, blockers = nh.evaluate(can)
+_check(ok and not blockers,
+       "a Canadian Syllabics letter with no single-Latin look-alike "
+       "is a genuinely distinct seat and must stay ELIGIBLE: "
+       f"{blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -289,6 +296,10 @@ for key, bad, why in [
      "olditalic-she-respelled same machine must fail"),
     ("candidate_machine_id", "ma𐌂hine-a",
      "olditalic-ke-respelled same machine must fail"),
+    ("candidate_machine_id", "mᗅchine-a",
+     "canadian-gho-respelled same machine must fail"),
+    ("candidate_machine_id", "ᗰachine-a",
+     "canadian-carrier-go-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -432,6 +443,42 @@ for cand, orig, why in [
      "olditalic-eks-respelled same operator must fail"),
     ("op-𐌢", "op-x",
      "olditalic-numeral-ten-respelled same operator must fail"),
+    ("op-ᑲ", "op-b",
+     "canadian-ka-respelled same operator must fail"),
+    ("op-ᖯ", "op-b",
+     "canadian-aivilik-b-respelled same operator must fail"),
+    ("op-ᗷ", "op-b",
+     "canadian-khe-respelled same operator must fail"),
+    ("op-ᑯ", "op-d",
+     "canadian-ko-respelled same operator must fail"),
+    ("op-ᗞ", "op-d",
+     "canadian-the-respelled same operator must fail"),
+    ("op-ᗪ", "op-d",
+     "canadian-carrier-pe-respelled same operator must fail"),
+    ("op-ᖴ", "op-f",
+     "canadian-blackfoot-we-respelled same operator must fail"),
+    ("op-ᕼ", "op-h",
+     "canadian-nunavut-h-respelled same operator must fail"),
+    ("op-ᒍ", "op-j",
+     "canadian-co-respelled same operator must fail"),
+    ("op-ᒪ", "op-l",
+     "canadian-ma-respelled same operator must fail"),
+    ("op-𑪾", "op-n",
+     "canadian-spo-respelled same operator must fail"),
+    ("op-ᑭ", "op-p",
+     "canadian-ki-respelled same operator must fail"),
+    ("op-ᖇ", "op-r",
+     "canadian-tlhi-respelled same operator must fail"),
+    ("op-ᑌ", "op-u",
+     "canadian-te-respelled same operator must fail"),
+    ("op-ᐯ", "op-v",
+     "canadian-pe-respelled same operator must fail"),
+    ("op-ᕁ", "op-x",
+     "canadian-sayisi-yi-respelled same operator must fail"),
+    ("op-ᕽ", "op-x",
+     "canadian-hk-respelled same operator must fail"),
+    ("op-𑪼", "op-z",
+     "canadian-spe-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

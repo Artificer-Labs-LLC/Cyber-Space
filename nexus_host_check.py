@@ -342,6 +342,29 @@ _CONFUSABLES.update(str.maketrans({
     "𐌗": "X", "𐌢": "X",
 }))
 
+# Canadian Syllabics: the syllabary's letters are likewise
+# simple geometric shapes, and UTS #39 lists 20 of them as
+# confusable with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org fetched this tick, not guessed,
+# and surfaced by a full-table audit of _norm against every
+# letter-category UTS #39 mapping. A seat respelled with one
+# rendered as the origin and compared distinct (probed this
+# tick: a CARRIER GHO seat returned ELIGIBLE as its own origin).
+# The syllabary is caseless, so single entries suffice; _norm's
+# case-fold unites them with the Latin lowercase (the SAYISI YI
+# and HK letters' own UTS #39 target is small x). The two
+# non-letter signs (FULL STOP to x, CHI SIGN to X) are
+# punctuation/symbol, not letters, and stay out; the other
+# syllabics keep glyphs no Latin letter has -- A, for one, folds
+# only inside multi-letter mappings -- and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "ᗅ": "A", "ᑲ": "b", "ᖯ": "b", "ᗷ": "B",
+    "ᑯ": "d", "ᗞ": "D", "ᗪ": "D", "ᖴ": "F",
+    "ᕼ": "H", "ᒍ": "J", "ᒪ": "L", "ᗰ": "M",
+    "𑪾": "N", "ᑭ": "P", "ᖇ": "R", "ᑌ": "U",
+    "ᐯ": "V", "ᕁ": "x", "ᕽ": "x", "𑪼": "Z",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
