@@ -46,6 +46,30 @@ _SEED_MAX = 1024
 _TREE_MAX = 1_048_576
 
 
+def _parent_dir_problem(path, what):
+    """A secret's parent dir is part of its protection, or none.
+
+    The file's own 0600 cannot protect it inside a loose directory:
+    directory write lets anyone who can write there rename the key
+    away and plant a substitute (the next read then derives a
+    stranger's pub), and read+execute lists it. That is why both
+    key-writing tools (nexus_keygen._ensure_parent, mint_name
+    ._ensure_dir) create these dirs born 0700 — yet preflight only
+    ever statted the FILE (probed 2026-10-16: a tight 0600 key in a
+    0777 dir reported READY). Return a named problem, or []."""
+    parent = Path(path).parent
+    try:
+        mode = stat.S_IMODE(parent.stat().st_mode)
+    except OSError:
+        return []
+    if mode & 0o077:
+        return [f"{what} directory {parent} is group/other-accessible "
+                f"(mode {mode:04o}); a name key's directory is born "
+                f"0700 — directory write would let a stranger "
+                f"replace the key, directory read lists it"]
+    return []
+
+
 def check_key_file(path):
     """Return (pub_hex | None, problems). Never raises on bad input."""
     problems = []
@@ -57,6 +81,7 @@ def check_key_file(path):
     if mode & 0o077:
         problems.append(f"key file {p} is group/other-accessible "
                         f"(mode {mode:04o}); name keys are born 0600")
+    problems += _parent_dir_problem(p, "key file")
     try:
         with p.open("rb") as f:
             raw_bytes = f.read(_SEED_MAX + 1)
@@ -111,6 +136,7 @@ def check_backup(primary_path, backup_path):
     if mode & 0o077:
         problems.append(f"backup {b} is group/other-accessible "
                         f"(mode {mode:04o})")
+    problems += _parent_dir_problem(b, "backup")
     # Bounded reads, twin of check_key_file's _SEED_MAX cap above and
     # mint_name._read_seed's: a backup is a copy of a seed file, which
     # is never over _SEED_MAX bytes, yet this seat loaded BOTH files

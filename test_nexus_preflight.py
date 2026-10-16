@@ -108,6 +108,34 @@ with tempfile.TemporaryDirectory() as td:
     _check(ready and blockers == [],
            "bounded backup check must keep a matching pair READY")
 
+    # Loose PARENT directory: the file's own 0600 cannot protect a
+    # key whose directory anyone can write (rename the key away,
+    # plant a substitute) or read (list it). Both writing tools
+    # create these dirs born 0700; preflight must block READY for
+    # a loose key dir and for a loose backup dir alike, and a
+    # tight dir restores READY.
+    loose = td / "loose"
+    loose.mkdir()
+    lkey = loose / "nexus-name.key"
+    lkey.write_text(seed.hex())
+    os.chmod(lkey, 0o600)
+    lbak = loose / "nexus-name.key.bak"
+    lbak.write_text(seed.hex())
+    os.chmod(lbak, 0o600)
+    os.chmod(loose, 0o777)
+    _pub, _probs = np.check_key_file(lkey)
+    _check(any("directory" in p for p in _probs),
+           "loose key parent dir must be named by check_key_file")
+    _check(any("directory" in p for p in np.check_backup(lkey, lbak)),
+           "loose backup parent dir must be named by check_backup")
+    _ready, _pub, _bl = np.preflight("nexus", lkey, lbak, ROOT)
+    _check(not _ready and any("directory" in b for b in _bl),
+           "loose parent dir must block READY by name")
+    os.chmod(loose, 0o700)
+    _ready, _pub, _bl = np.preflight("nexus", lkey, lbak, ROOT)
+    _check(_ready and _bl == [],
+           f"tight parent dir must restore READY, got {_bl}")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)
