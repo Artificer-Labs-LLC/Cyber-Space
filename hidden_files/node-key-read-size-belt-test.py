@@ -83,6 +83,32 @@ with tempfile.TemporaryDirectory() as d:
     ok = r.returncode == 0 and os.path.exists(p) and len(open(p).read().strip()) == 64
     check("missing-generates", ok, r.stderr[-300:])
 
+# 7. FIFO at the key seat refuses instantly, never blocks on open()
+with tempfile.TemporaryDirectory() as d:
+    os.mkfifo(os.path.join(d, ".node.key"))
+    try:
+        r = import_core(d)
+        check("fifo-refused", r.returncode != 0 and "node key is not a 32-byte hex seed" in r.stderr, r.stderr[-300:] + r.stdout)
+    except subprocess.TimeoutExpired:
+        check("fifo-refused", False, "import hung on FIFO (open blocked)")
+
+# 8. symlink to a FIFO refuses the same way
+with tempfile.TemporaryDirectory() as d:
+    os.mkfifo(os.path.join(d, "target.fifo"))
+    os.symlink(os.path.join(d, "target.fifo"), os.path.join(d, ".node.key"))
+    try:
+        r = import_core(d)
+        check("symlink-to-fifo-refused", r.returncode != 0 and "node key is not a 32-byte hex seed" in r.stderr, r.stderr[-300:] + r.stdout)
+    except subprocess.TimeoutExpired:
+        check("symlink-to-fifo-refused", False, "import hung on symlink-to-FIFO")
+
+# 9. symlink to a regular seed file still imports byte-exact
+with tempfile.TemporaryDirectory() as d:
+    open(os.path.join(d, "real.key"), "w").write(SEED)
+    os.symlink(os.path.join(d, "real.key"), os.path.join(d, ".node.key"))
+    r = import_core(d)
+    check("symlink-to-regular", r.returncode == 0 and r.stdout.strip() == EXP, r.stderr[-300:])
+
 print(f"{CHECKS - len(FAILURES)}/{CHECKS} checks passed")
 for f in FAILURES:
     print("FAIL:", f)

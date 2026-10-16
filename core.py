@@ -19,6 +19,7 @@ import ipaddress
 import socket
 import secrets
 import sqlite3
+import stat
 import threading
 import time
 import urllib.error
@@ -282,6 +283,14 @@ def _fsync_dir(d) -> None:
 
 def _read_node_key_file() -> str:
     """Read the saved node seed (bounded; oversize is not a seed)."""
+    # Only a regular file may be opened: open() on a FIFO blocks until
+    # a writer appears, so a planted FIFO at the node-key seat hung
+    # every boot forever instead of failing closed (probed 2026-10-16:
+    # import killed by timeout). Stat first, following symlinks — a
+    # symlink TO a regular file stays valid, a symlink to a FIFO or
+    # device is refused, with the same RuntimeError a bad seed raises.
+    if not stat.S_ISREG(os.stat(_NODE_KEY_PATH).st_mode):
+        raise RuntimeError("node key is not a 32-byte hex seed")
     with open(_NODE_KEY_PATH) as f:
         raw = f.read(_NODE_KEY_MAX + 1)
     if len(raw) > _NODE_KEY_MAX:
