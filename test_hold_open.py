@@ -82,6 +82,111 @@ try:
 finally:
     hold_open._rendezvous_points_register = _orig_register
 
+# _post redirect belt: urllib's default opener followed a relay
+# 301/302/303 to a foreign server and accepted its answer as the
+# relay's (probed 2026-10-16) — fake sessions from a third party
+# would be signed with the name key, and a register counted a
+# third party's 200. _post now rides a no-redirect opener: a 3xx
+# is silence (None / False), the target is never contacted, and a
+# direct 200 from the relay itself still parses.
+import json as _json  # noqa: E402
+import threading as _threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler as _H, HTTPServer as _S  # noqa: E402
+
+_target_hits = []
+
+
+class _Target(_H):
+    def _answer(self):
+        _target_hits.append(self.path)
+        out = b'{"ok": true, "sessions": []}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    do_GET = _answer
+    do_POST = _answer
+
+    def log_message(self, *a):
+        pass
+
+
+class _Direct(_H):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        out = _json.dumps({"ok": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+_target = _S(("127.0.0.1", 0), _Target)
+_threading.Thread(target=_target.serve_forever, daemon=True).start()
+_tport = _target.server_address[1]
+
+
+def _relay_handler(code):
+    class _Relay(_H):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            self.send_response(code)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{_tport}/stolen")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    return _Relay
+
+
+_servers = []
+try:
+    for _code in (301, 302, 303, 307, 308):
+        _relay = _S(("127.0.0.1", 0), _relay_handler(_code))
+        _servers.append(_relay)
+        _threading.Thread(target=_relay.serve_forever,
+                          daemon=True).start()
+        _rurl = f"http://127.0.0.1:{_relay.server_address[1]}"
+        _target_hits.clear()
+        if hold_open._post(_rurl, "/relay/wait", {"token": "tok"},
+                           timeout=5.0) is not None:
+            print(f"FAIL: _post followed relay redirect {_code}")
+            fails += 1
+        if hold_open.hold_open_register(_rurl, "tok"):
+            print(f"FAIL: register accepted via redirect {_code}")
+            fails += 1
+        if _target_hits:
+            print(f"FAIL: redirect {_code} contacted the target: "
+                  f"{_target_hits!r}")
+            fails += 1
+    _direct = _S(("127.0.0.1", 0), _Direct)
+    _servers.append(_direct)
+    _threading.Thread(target=_direct.serve_forever, daemon=True).start()
+    _durl = f"http://127.0.0.1:{_direct.server_address[1]}"
+    if hold_open._post(_durl, "/relay/register", {"token": "tok"},
+                       timeout=5.0) != {"ok": True}:
+        print("FAIL: direct relay 200 no longer parses")
+        fails += 1
+    if hold_open._NoRedirect().redirect_request(
+            None, None, 302, "Found", {}, "http://127.0.0.1/") is not None:
+        print("FAIL: _NoRedirect.redirect_request is not None")
+        fails += 1
+finally:
+    for _srv in _servers:
+        _srv.shutdown()
+    _target.shutdown()
+
 if fails:
     print(f"test_hold_open: {fails} FAIL")
     sys.exit(1)

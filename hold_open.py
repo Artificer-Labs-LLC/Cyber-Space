@@ -62,6 +62,27 @@ _BACKOFF_S = 10.0
 _RELAY_RESP_MAX = 65536
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx, which _post reads as silence. Twin of
+    nexus_depth_check._NoRedirect. The relay is untrusted (see
+    _RELAY_RESP_MAX), but urllib's default opener followed its
+    301/302/303 to a server of the relay's choosing and accepted
+    THAT server's answer as the relay's (probed 2026-10-16: a
+    redirected /relay/wait returned the target's sessions) — a
+    foreign server could mint fake sessions whose challenges this
+    daemon signs with the NAME KEY, and a redirected register or
+    keepalive counted a third party's 200 as the relay's accept.
+    A relay answer is only a relay answer when it comes from the
+    relay itself; a 3xx is silence, never a referral."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _rendezvous_epoch_len() -> int:
     """The epoch_len the daemon holds derived points under — the SAME
     value core._reach_build advertises in the descriptor's rendezvous
@@ -94,7 +115,7 @@ def _post(relay_url: str, path: str, payload: dict,
             headers={"Content-Type": "application/json",
                      "Accept": "application/json"},
             method="POST")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             if resp.status != 200:
                 return None
             raw = resp.read(_RELAY_RESP_MAX + 1)
