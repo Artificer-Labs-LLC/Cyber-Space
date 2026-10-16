@@ -86,6 +86,22 @@ def _read_seed(path) -> bytes:
     return bytes.fromhex(stripped)
 
 
+def _fsync_dir(d):
+    """Fsync a directory so an entry created/renamed in it is durable.
+
+    Fsyncing the FILE makes its bytes durable, not its NAME: without
+    a parent-dir fsync a crash after a successful return can lose
+    the directory entry itself — a key the caller was told is kept
+    simply gone on reboot (probed 2026-10-16: 1 fsync per write,
+    file only, 0 for the directory).
+    """
+    dfd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def _write_secret(path, text, overwrite=False):
     """Write a secret file that is never world-readable, even briefly.
 
@@ -99,7 +115,9 @@ def _write_secret(path, text, overwrite=False):
     byte-for-byte. The write is fsynced before close (the core node-key
     rule, e8c1c46): without it a crash after a successful return could
     still leave a truncated seed on disk, and the seed-shape check on
-    the next read would strand that name key permanently.
+    the next read would strand that name key permanently. The parent
+    directory is fsynced after the create / os.replace too: file
+    fsync alone does not make the directory entry durable.
     """
     path = Path(path)
     if overwrite and path.exists():
@@ -130,6 +148,7 @@ def _write_secret(path, text, overwrite=False):
             except OSError:
                 pass
             raise
+        _fsync_dir(path.parent)
         return
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     fd = os.open(path, flags, 0o600)
@@ -141,6 +160,7 @@ def _write_secret(path, text, overwrite=False):
         os.fsync(fd)
     finally:
         os.close(fd)
+    _fsync_dir(path.parent)
 
 
 def _ensure_dir(d):

@@ -147,17 +147,33 @@ with tempfile.TemporaryDirectory() as _td:
 with tempfile.TemporaryDirectory() as _td:
     _p = os.path.join(_td, "k")
     _fsyncs = []
+    _dir_fsyncs = []
     _orig_fsync = os.fsync
-    os.fsync = lambda fd: _fsyncs.append(fd)
+
+    def _probe_fsync(fd):
+        _fsyncs.append(fd)
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            _dir_fsyncs.append(fd)
+
+    os.fsync = _probe_fsync
     try:
         mint_name._write_secret(_p, "seed-one")
         if not _fsyncs:
             print("FAIL: plain _write_secret did not fsync")
             fails += 1
+        if not _dir_fsyncs:
+            print("FAIL: plain _write_secret did not fsync the parent dir "
+                  "(directory entry not durable)")
+            fails += 1
         _fsyncs.clear()
+        _dir_fsyncs.clear()
         mint_name._write_secret(_p, "seed-two", overwrite=True)
         if not _fsyncs:
             print("FAIL: overwrite _write_secret did not fsync")
+            fails += 1
+        if not _dir_fsyncs:
+            print("FAIL: overwrite _write_secret did not fsync the "
+                  "parent dir after os.replace")
             fails += 1
     finally:
         os.fsync = _orig_fsync
