@@ -105,6 +105,23 @@ with tempfile.TemporaryDirectory() as td:
     _check(not (td / "fv.key").exists() and not (td / "fv.bak").exists(),
            "flag-as-value refusal writes nothing")
 
+    # A repeated value flag must refuse, not silently last-win:
+    # --key A --key B wrote the key to B while the operator believed
+    # it sat at A (probed). Both spellings, both flags.
+    for _argv, _flag in (
+            (["--key", str(td / "dup1.key"), "--key", str(td / "dup2.key"),
+              "--backup", str(td / "dup.bak")], "--key"),
+            ([f"--backup={td / 'dup.bak'}", f"--backup={td / 'dup2.bak'}",
+              "--key", str(td / "dup.key")], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nk.main(_argv)
+        _check(_code == 2 and f"{_flag} given more than once" in _err.getvalue(),
+               f"duplicate {_flag} must refuse by name")
+    _check(not (td / "dup1.key").exists() and not (td / "dup2.key").exists()
+           and not (td / "dup.key").exists() and not (td / "dup.bak").exists(),
+           "duplicate-flag refusal writes nothing")
+
     # A backup write that fails AFTER the primary lands (here: a
     # dangling symlink -- exists() passes it, O_EXCL refuses it)
     # is a PARTIAL generation, exit 1 -- never a clean "nothing
