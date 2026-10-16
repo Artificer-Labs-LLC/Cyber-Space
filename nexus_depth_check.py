@@ -292,7 +292,7 @@ def main(argv):
             return 0
         if a in ("--expect-pubkey", "--origin-url"):
             i += 1
-            if i >= len(argv):
+            if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--expect-pubkey":

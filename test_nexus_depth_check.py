@@ -262,6 +262,30 @@ _check(nd.main([node, "--expect-pubkey=",
 _check(nd.main([node, "--expect-pubkey"]) == 2,
        "space form with a missing value must stay refused")
 
+# A space-form value flag followed by another flag has a missing
+# value, not a flag-shaped value: before, --expect-pubkey swallowed
+# --origin-url as the pin (and --origin-url swallowed --expect-pubkey
+# as the origin), so the refusal blamed the flag's own value as an
+# unknown/extra argument instead of naming the flag that needs a
+# value (twin of mint_name's space-form gate). The refusal message
+# is the proof, so capture stderr.
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+_err = io.StringIO()
+with contextlib.redirect_stderr(_err):
+    _code = nd.main([node, "--expect-pubkey", "--origin-url", origin])
+_check(_code == 2 and "--expect-pubkey needs a value" in _err.getvalue(),
+       "space form followed by another flag must refuse the pin "
+       f"flag by name, got {_code}: {_err.getvalue()!r}")
+_err = io.StringIO()
+with contextlib.redirect_stderr(_err):
+    _code = nd.main([node, "--expect-pubkey", pub,
+                     "--origin-url", "--expect-pubkey", pub])
+_check(_code == 2 and "--origin-url needs a value" in _err.getvalue(),
+       "space form followed by another flag must refuse the origin "
+       f"flag by name, got {_code}: {_err.getvalue()!r}")
+
 if fails:
     print(f"test_nexus_depth_check: {fails} FAIL")
     sys.exit(1)
