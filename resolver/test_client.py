@@ -1263,6 +1263,31 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("given more than once", err.getvalue())
 
+    def test_main_refuses_repeated_tcp_only_flag(self):
+        """CLI boolean duplicate gate, twin of resolve_chain's
+        --with-live gate: store_true repeats silently, so
+        --tcp-only --tcp-only passed to a verdict while every value
+        flag refused its repeat by name. A repeat in space, equals
+        or mixed spelling refuses by name with exit 2 before any
+        query is sent."""
+        for extra in (["--tcp-only", "--tcp-only"],
+                      ["--tcp-only=x", "--tcp-only=x"],
+                      ["--tcp-only", "--tcp-only=x"],
+                      ["--tcp-only=x", "--tcp-only"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = client.main(["alice.cyberspace"] + extra)
+            self.assertEqual(code, 2, extra)
+            self.assertIn("--tcp-only given more than once",
+                          err.getvalue())
+        # A single --tcp-only still passes the gate: it reaches the
+        # name-shape verdict (exit 2 on stdout, no duplicate refusal).
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = client.main(["not-a-name", "--tcp-only"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("given more than once", err.getvalue())
+
     def test_main_refuses_abbreviated_value_flag(self):
         """CLI abbreviation gate, twin of dial's: argparse expands any
         unambiguous prefix, so --por/--p silently became --port and

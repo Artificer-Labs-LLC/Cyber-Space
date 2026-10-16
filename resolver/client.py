@@ -754,6 +754,11 @@ def main(argv: list[str] | None = None) -> int:
     # verdict). Refuse a repeated value flag by name, in space,
     # equals or mixed spelling, before argparse runs — before any
     # query is built or sent. Exit 2 is this CLI's usage code.
+    # The boolean --tcp-only gates the same way: store_true repeats
+    # silently too, so --tcp-only --tcp-only passed to a verdict
+    # while every value flag refused its repeat by name — twin of
+    # resolve_chain's --with-live gate (c466111) and rotate_name's
+    # --promote gate (411a562).
     _seen: set[str] = set()
     _long_opts = ("--qtype", "--server", "--port", "--tcp-only", "--help")
     for _tok in argv:
@@ -775,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"refused: {_name} is an abbreviation of "
                       f"{_full[0]} — spell it out", file=sys.stderr)
                 return 2
-        if _name in ("--qtype", "--server", "--port"):
+        if _name in ("--qtype", "--server", "--port", "--tcp-only"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
                       file=sys.stderr)
