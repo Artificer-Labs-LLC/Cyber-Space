@@ -304,6 +304,26 @@ for _argv, _flag in (
            f"space form {_flag} -h must refuse by name, got "
            f"{_code}: {_err.getvalue()!r}")
 
+# Any flag-shaped token is a flag token, not a value: the -h gate
+# refused only the help flag, so --expect-pubkey -x took "-x" as
+# the pin and the refusal blamed the missing --origin-url instead
+# of naming the flag that needs a value, while the operator
+# believed the kept pin was checked (twin of nexus_claim's
+# flag-shaped gate, d70ece3). No documented value here begins
+# with "-", and the equals spelling stays the deliberate path.
+for _argv, _flag in (
+    ([node, "--expect-pubkey", "-x", "--origin-url", origin],
+     "--expect-pubkey"),
+    ([node, "--expect-pubkey", pub, "--origin-url", "-x"],
+     "--origin-url"),
+):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nd.main(_argv)
+    _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+           f"space form {_flag} -x must refuse by name, got "
+           f"{_code}: {_err.getvalue()!r}")
+
 # A repeated value flag must refuse by name, never silently
 # last-win: before, --expect-pubkey A --expect-pubkey B checked
 # against B while the operator believed the pin was A -- the pin
