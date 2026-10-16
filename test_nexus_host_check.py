@@ -577,6 +577,51 @@ _check(not ok and blockers,
        "a Coptic-SHIMA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+cyrctl = dict(GOOD, candidate_machine_id="machine-\u0436")
+ok, blockers = nh.evaluate(cyrctl)
+_check(ok and not blockers,
+       "a Cyrillic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+cyr_w = dict(GOOD, candidate_machine_id="machine-\u051d",
+             origin_machine_id="machine-w")
+ok, blockers = nh.evaluate(cyr_w)
+_check(not ok and blockers,
+       "a Cyrillic-WE-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+cyr_y = dict(GOOD, candidate_machine_id="machine-\u04ae",
+             origin_machine_id="machine-y")
+ok, blockers = nh.evaluate(cyr_y)
+_check(not ok and blockers,
+       "a Cyrillic-STRAIGHT-U-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+cyr_l = dict(GOOD, candidate_machine_id="machine-\u0406",
+             origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(cyr_l)
+_check(not ok and blockers,
+       "a Cyrillic-I-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+for bad, orig, why in [
+    ("\u042c", "b", "SOFT SIGN"), ("\u0501", "d", "KOMI DE"),
+    ("\u04bd", "e", "ABKHASIAN CHE"), ("\u050c", "g", "KOMI SJE"),
+    ("\u050d", "g", "KOMI SJE small"), ("\ua647", "i", "IOTA"),
+    ("\u04cf", "l", "PALOCHKA"), ("\u04c0", "l", "PALOCHKA cap"),
+    ("\u051a", "q", "QA"), ("\u051b", "q", "QA small"),
+    ("\u0433", "r", "GHE"), ("\u0474", "v", "IZHITSA"),
+    ("\u0475", "v", "IZHITSA small"), ("\u0461", "w", "OMEGA"),
+    ("\u0448", "w", "SHA"), ("\u051c", "w", "WE cap"),
+    ("\u04af", "y", "STRAIGHT U small"),
+]:
+    cyr = dict(GOOD, candidate_operator="op-" + bad,
+               origin_operator="op-" + orig)
+    ok, blockers = nh.evaluate(cyr)
+    _check(not ok and blockers,
+           f"a Cyrillic-{why}-respelled same operator must fail "
+           f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),

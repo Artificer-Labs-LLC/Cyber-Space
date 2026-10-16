@@ -937,6 +937,43 @@ _CONFUSABLES.update(str.maketrans({
     "\u2cbd": "w", "\u2ca9": "y",
 }))
 
+# Cyrillic, completed: the blocks above folded the common
+# Cyrillic look-alikes, but the full-table audit shows 19
+# more Cyrillic letters carry UTS #39 single-Latin mappings
+# it missed -- the archaic and minority-language letters:
+# SOFT SIGN to b, KOMI DE to d, ABKHASIAN CHE to e, KOMI
+# SJE to G, IOTA to i, BYELORUSSIAN-UKRAINIAN I to l, both
+# PALOCHKAs to l, QA to Q/q, GHE to r, IZHITSA to V/v,
+# OMEGA to w, SHA to w, WE to W/w, and STRAIGHT U to Y/y.
+# Mappings taken from confusables.txt at unicode.org
+# (cached copy fetched 2026-10-15), not guessed. A seat
+# respelled with one rendered as the origin and compared
+# distinct (probed this tick: WE, STRAIGHT U, I, GHE, and
+# SOFT SIGN machine spellings each returned ELIGIBLE as
+# their own origin). Entries are spelled as explicit
+# escapes; capitals whose small the table holds (KOMI DE,
+# ABKHASIAN CHE, SHA, GHE, OMEGA, IOTA) reach the fold
+# through _norm's post-case-fold translate, and UTS #39's
+# own asymmetry stands for BYELORUSSIAN-UKRAINIAN I: the
+# capital lists against l, the small (already folded)
+# against i. KOMI SJE's small is listed by UTS #39 against
+# LATIN LETTER SMALL CAPITAL G -- the same Latin letter,
+# folded here to its ASCII spelling g so the pair unites.
+# With these, no Cyrillic letter still escapes; the other
+# Cyrillic letters stay distinct: ZHE, for one, has no
+# UTS #39 single-Latin entry at all, and the small SOFT
+# SIGN lists only against TONE SIX, outside the basic
+# Latin scope.
+_CONFUSABLES.update(str.maketrans({
+    "\u042c": "B", "\u0501": "d", "\u04bd": "e",
+    "\u050c": "G", "\u050d": "g", "\ua647": "i",
+    "\u0406": "L", "\u04cf": "l", "\u04c0": "L",
+    "\u051a": "Q", "\u051b": "q", "\u0433": "r",
+    "\u0474": "V", "\u0475": "v", "\u0461": "w",
+    "\u0448": "w", "\u051c": "W", "\u051d": "w",
+    "\u04ae": "Y", "\u04af": "y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
