@@ -92,6 +92,12 @@ _check(ok and not blockers,
        "a Carian letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+lyc = dict(GOOD, candidate_machine_id="machine-𐊅")
+ok, blockers = nh.evaluate(lyc)
+_check(ok and not blockers,
+       "a Lycian letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -253,6 +259,8 @@ for key, bad, why in [
      "carian-d-respelled same machine must fail"),
     ("candidate_machine_id", "𐊰achine-a",
      "carian-s-respelled same machine must fail"),
+    ("candidate_machine_id", "machin𐊆-a",
+     "lycian-i-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -326,6 +334,22 @@ for cand, orig, why in [
      "carian-x-respelled same operator must fail"),
     ("op-𐊲", "op-y",
      "carian-u-respelled same operator must fail"),
+    ("op-𐊂", "op-b",
+     "lycian-b-respelled same operator must fail"),
+    ("op-𐊇", "op-f",
+     "lycian-w-respelled same operator must fail"),
+    ("op-𐊊", "op-l",
+     "lycian-j-respelled same operator must fail"),
+    ("op-𐊒", "op-o",
+     "lycian-u-respelled same operator must fail"),
+    ("op-𐊕", "op-p",
+     "lycian-r-respelled same operator must fail"),
+    ("op-𐊖", "op-s",
+     "lycian-s-respelled same operator must fail"),
+    ("op-𐊗", "op-t",
+     "lycian-t-respelled same operator must fail"),
+    ("op-𐊐", "op-x",
+     "lycian-mm-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

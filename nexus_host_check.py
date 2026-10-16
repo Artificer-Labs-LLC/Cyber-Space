@@ -259,6 +259,26 @@ _CONFUSABLES.update(str.maketrans({
     "𐊴": "X", "𐊲": "Y",
 }))
 
+# Lycian: Carian's Anatolian sibling alphabet, likewise cut to
+# simple shapes that duplicate Latin capitals, and UTS #39 lists
+# 9 of its letters as confusable with single Latin letters --
+# mappings taken from confusables.txt at unicode.org fetched
+# this tick, not guessed, and surfaced by the same full-table
+# audit of _norm against every in-scope UTS #39 mapping that
+# surfaced Carian. A seat respelled with one rendered as the
+# origin and compared distinct (probed this tick: B and I seats
+# returned ELIGIBLE). Lycian is unicameral, so single entries
+# suffice; _norm's case-fold unites them with the Latin
+# lowercase (letter J's own UTS #39 target is small l). The
+# other Lycian letters keep glyphs no Latin letter has -- D
+# folds only to Greek Delta, H to a plus sign, L to a turned V,
+# KK to a runic letter -- and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐊂": "B", "𐊆": "E", "𐊇": "F", "𐊊": "l",
+    "𐊒": "O", "𐊕": "P", "𐊖": "S", "𐊗": "T",
+    "𐊐": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
