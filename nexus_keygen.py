@@ -26,6 +26,9 @@ If step 3 verification fails, the files are LEFT in place (deleting a
 key we cannot read is how keys get lost twice) and the exit is 1.
 
 Usage: ./venv/bin/python nexus_keygen.py [--key PATH] [--backup PATH]
+(each option also accepted in the --key=PATH / --backup=PATH spelling,
+the twin of mint_name's both-spellings parser — an operator typing the
+equals form at the supervised step must generate, not be refused)
 Exit codes: 0 = key + backup generated and verified, 1 = generated
 but verification failed (or the backup write failed AFTER the
 primary was written — the primary is left in place, named in the
@@ -115,6 +118,17 @@ def main(argv):
         if a in ("-h", "--help"):
             print(__doc__.strip())
             return 0
+        if a.startswith(("--key=", "--backup=")):
+            opt, _, v = a.partition("=")
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            if opt == "--key":
+                key_path = Path(v)
+            else:
+                backup_path = Path(v)
+            i += 1
+            continue
         if a in ("--key", "--backup"):
             i += 1
             if i >= len(argv):

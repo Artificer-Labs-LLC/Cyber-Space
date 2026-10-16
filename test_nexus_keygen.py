@@ -75,6 +75,21 @@ with tempfile.TemporaryDirectory() as td:
     _check(not (td / "alias").exists(),
            "aliased same-file refusal must write nothing")
 
+    # The equals spelling (--key=PATH) is accepted, twin of
+    # mint_name's both-spellings parser; an empty equals value is a
+    # usage refusal, and equals spelling honors the overwrite ban.
+    eq_key, eq_bak = td / "eq.key", td / "eq.key.bak"
+    _check(nk.main([f"--key={eq_key}", f"--backup={eq_bak}"]) == 0,
+           "equals spelling must generate")
+    _check(eq_key.exists() and eq_bak.exists(),
+           "equals generation must write both files")
+    _check(nk.main([f"--key={eq_key}", f"--backup={td / 'eq2.bak'}"]) == 2,
+           "equals spelling must refuse an existing key")
+    _check(nk.main(["--key=", f"--backup={td / 'eq3.bak'}"]) == 2,
+           "empty equals value must be refused")
+    _check(not (td / "eq3.bak").exists(),
+           "empty equals refusal writes nothing")
+
     # A backup write that fails AFTER the primary lands (here: a
     # dangling symlink -- exists() passes it, O_EXCL refuses it)
     # is a PARTIAL generation, exit 1 -- never a clean "nothing
