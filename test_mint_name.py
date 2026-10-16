@@ -186,6 +186,47 @@ with tempfile.TemporaryDirectory() as _td:
         print(f"FAIL: fsync probe secret at {oct(_m)}, want 0o600")
         fails += 1
 
+# _read_seed refuses a non-regular source WITHOUT opening it:
+# open() on a FIFO blocks until a writer appears, so a FIFO at the
+# seed seat hung the minter forever instead of refusing (probed
+# 2026-10-16). A symlink to a FIFO is the same seat (stat follows the
+# link); a symlink TO a regular file and a plain regular file still
+# read byte-exact.
+from pathlib import Path as _Path
+
+with tempfile.TemporaryDirectory() as _td:
+    _fifo = os.path.join(_td, "seed.key")
+    os.mkfifo(_fifo)
+    _seed_hex = "ab" * 32
+    _reg = os.path.join(_td, "real.key")
+    with open(_reg, "w", encoding="utf-8") as _f:
+        _f.write(_seed_hex)
+    for _seat, _path in (("FIFO", _fifo),
+                         ("symlink-to-FIFO", os.path.join(_td, "link.key"))):
+        if _seat.startswith("symlink"):
+            os.symlink(_fifo, _path)
+        try:
+            mint_name._read_seed(_Path(_path))
+            print(f"FAIL: _read_seed {_seat} read instead of refusing")
+            fails += 1
+        except ValueError as _e:
+            if "not a regular file" not in str(_e):
+                print(f"FAIL: _read_seed {_seat} ValueError {_e!r}")
+                fails += 1
+        except Exception as _e:  # noqa: BLE001
+            print(f"FAIL: _read_seed {_seat} raised {type(_e).__name__}: {_e}")
+            fails += 1
+    _good_link = os.path.join(_td, "good-link.key")
+    os.symlink(_reg, _good_link)
+    for _seat, _path in (("regular", _reg), ("symlink-to-regular", _good_link)):
+        try:
+            if mint_name._read_seed(_Path(_path)) != bytes.fromhex(_seed_hex):
+                print(f"FAIL: _read_seed {_seat} read wrong bytes")
+                fails += 1
+        except Exception as _e:  # noqa: BLE001
+            print(f"FAIL: _read_seed {_seat} raised {type(_e).__name__}: {_e}")
+            fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)

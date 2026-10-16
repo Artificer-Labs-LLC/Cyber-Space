@@ -36,6 +36,7 @@ surprise exits nonzero with the reason, never half-written state.
 """
 
 import os
+import stat
 import sys
 import json
 import urllib.parse
@@ -68,6 +69,14 @@ def _read_seed(path) -> bytes:
     Raises OSError/ValueError exactly as the seat's old
     bytes.fromhex(path.read_text().strip()) did, so the caller's
     existing (OSError, ValueError) refusal wording is untouched."""
+    # Only a regular file may be opened: open() on a FIFO blocks until
+    # a writer appears, so a FIFO (or device) at the seed seat hung the
+    # minter forever instead of refusing — twin of the verify_name /
+    # nexus_preflight S_ISREG gates. os.stat follows symlinks, so a
+    # symlink TO a regular file stays valid while a symlink to a FIFO
+    # is refused; a missing path raises OSError as before.
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        raise ValueError(f"seed file at {path} is not a regular file")
     with path.open(encoding="utf-8") as f:
         raw = f.read(_SEED_MAX + 1)
     if len(raw) > _SEED_MAX:
