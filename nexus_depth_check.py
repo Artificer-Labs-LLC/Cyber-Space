@@ -298,7 +298,16 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            if i >= len(argv) or argv[i].startswith("--"):
+            # -h is a flag token too, not a value: the startswith
+            # check alone let --expect-pubkey -h swallow the help
+            # flag as the pin and --origin-url -h swallow it as the
+            # origin, so the refusal blamed a value named "-h"
+            # instead of naming the flag that needs a value, while
+            # the operator believed the kept pin / origin was
+            # checked (probed this tick). Refuse it as a missing
+            # value, twin of nexus_claim's -h gate (c35ed4d).
+            if i >= len(argv) or argv[i].startswith("--") \
+                    or argv[i] == "-h":
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--expect-pubkey":

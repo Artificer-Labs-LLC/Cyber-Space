@@ -286,6 +286,24 @@ _check(_code == 2 and "--origin-url needs a value" in _err.getvalue(),
        "space form followed by another flag must refuse the origin "
        f"flag by name, got {_code}: {_err.getvalue()!r}")
 
+# -h is a flag token too, not a value: the space-form check alone
+# let --expect-pubkey -h swallow the help flag as the pin and
+# --origin-url -h swallow it as the origin, so the refusal blamed
+# a value named "-h" instead of naming the flag that needs a
+# value (twin of nexus_claim's -h gate, c35ed4d).
+for _argv, _flag in (
+    ([node, "--expect-pubkey", "-h", "--origin-url", origin],
+     "--expect-pubkey"),
+    ([node, "--expect-pubkey", pub, "--origin-url", "-h"],
+     "--origin-url"),
+):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nd.main(_argv)
+    _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+           f"space form {_flag} -h must refuse by name, got "
+           f"{_code}: {_err.getvalue()!r}")
+
 # A repeated value flag must refuse by name, never silently
 # last-win: before, --expect-pubkey A --expect-pubkey B checked
 # against B while the operator believed the pin was A -- the pin
