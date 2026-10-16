@@ -1242,7 +1242,7 @@ def main(argv):
             c[_VALUE_FLAGS[opt]] = v
         elif a in _VALUE_FLAGS:
             i += 1
-            if i >= len(argv):
+            if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             c[_VALUE_FLAGS[a]] = argv[i]

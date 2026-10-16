@@ -7,6 +7,8 @@ evidence, same operator, an HQ seat on either side, a non-gossip
 feed, a present claim key, a binding-sourced pin, and missing
 values each read NOT ELIGIBLE.
 """
+import contextlib
+import io
 import os
 import sys
 
@@ -1367,6 +1369,22 @@ _check(nh.main(["--candidate-is-hq=yes"]) == 2,
        "a boolean flag given an equals value must be refused")
 _check(nh.main(["--feed"]) == 2,
        "space form with a missing value must stay refused")
+
+# A following -- flag is not a space-form value: --candidate-machine-id
+# --origin-machine-id X swallowed the origin flag as the machine id
+# and then blamed X, instead of naming --candidate-machine-id --
+# twin of nexus_claim's, nexus_status's, nexus_preflight's,
+# nexus_keygen's and nexus_depth_check's space-form gates; this
+# closes the sequence (host check was the last parser still
+# consuming the next token unconditionally).
+for _flag in ("--candidate-machine-id", "--origin-machine-id",
+              "--candidate-operator", "--origin-operator",
+              "--evidence-source", "--feed", "--pin-source"):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nh.main([_flag, "--candidate-is-hq"])
+    _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+           f"following flag must refuse as {_flag} needs a value")
 
 if fails:
     print(f"test_nexus_host_check: {fails} FAIL")
