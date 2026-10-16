@@ -914,6 +914,29 @@ _CONFUSABLES.update(str.maketrans({
     "\u1cf5": "X",
 }))
 
+# Coptic, completed: the Coptic block above folded the uncial
+# letters that duplicate their Greek cognates, but the
+# full-table audit shows 8 more Coptic letters carry UTS #39
+# single-Latin mappings it missed -- IAUDA and L-SHAPED HA to
+# l/L, SHIMA to o, OLD COPTIC HA (both cases) to p/P, GAMMA
+# to r, CRYPTOGRAMMIC NI to w, and UA to y. Mappings taken
+# from confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed. A seat respelled with one
+# rendered as the origin and compared distinct (probed this
+# tick: all eight machine spellings each returned ELIGIBLE
+# as their own origin). Entries are spelled as explicit
+# escapes; _norm's case-fold unites each with the Latin
+# lowercase, and GAMMA's capital reaches the fold through
+# case-folding to its small letter, which the table holds.
+# With these, no Coptic letter still escapes; the other
+# Coptic letters stay distinct: SHEI, for one, has no
+# UTS #39 single-Latin entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "\u2c92": "l", "\u2cd0": "L", "\u03ed": "o",
+    "\u2ccf": "p", "\u2cce": "P", "\u2c85": "r",
+    "\u2cbd": "w", "\u2ca9": "y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

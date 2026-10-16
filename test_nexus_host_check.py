@@ -557,6 +557,26 @@ _check(not ok and blockers,
        "a Vedic-JIHVAMULIYA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+copticctl = dict(GOOD, candidate_machine_id="machine-\u03e2")
+ok, blockers = nh.evaluate(copticctl)
+_check(ok and not blockers,
+       "a Coptic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+coptic_i = dict(GOOD, candidate_machine_id="machine-\u2c92",
+                origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(coptic_i)
+_check(not ok and blockers,
+       "a Coptic-IAUDA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+coptic_s = dict(GOOD, candidate_machine_id="machine-\u03ed",
+                origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(coptic_s)
+_check(not ok and blockers,
+       "a Coptic-SHIMA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -1089,6 +1109,22 @@ for cand, orig, why in [
      "cherokee-small-hu-respelled same operator must fail"),
     ("op-\u1cf5", "op-x",
      "vedic-jihvamuliya-respelled same operator must fail"),
+    ("op-\u2c92", "op-l",
+     "coptic-iauda-respelled same operator must fail"),
+    ("op-\u2cd0", "op-l",
+     "coptic-l-shaped-ha-respelled same operator must fail"),
+    ("op-\u03ed", "op-o",
+     "coptic-shima-respelled same operator must fail"),
+    ("op-\u2ccf", "op-p",
+     "coptic-old-coptic-ha-small-respelled same operator must fail"),
+    ("op-\u2cce", "op-p",
+     "coptic-old-coptic-ha-respelled same operator must fail"),
+    ("op-\u2c85", "op-r",
+     "coptic-gamma-respelled same operator must fail"),
+    ("op-\u2cbd", "op-w",
+     "coptic-cryptogrammic-ni-respelled same operator must fail"),
+    ("op-\u2ca9", "op-y",
+     "coptic-ua-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
