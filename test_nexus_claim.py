@@ -84,6 +84,27 @@ with tempfile.TemporaryDirectory() as td:
            and stat.S_IMODE(env.stat().st_mode) == 0o600
            and "CYBERNET_HOSTED_NAME=nexus" in env.read_text(),
            "hostd env must be born 0600 and name nexus")
+    # The env holds the private key: a dir the claim itself creates
+    # to hold it must be born 0700 (plain mkdir left it group/other-
+    # listable -- the leak the keygen parent-dir fix closed), nested
+    # created ancestors included; a pre-existing dir is left as found.
+    _check(stat.S_IMODE(env_dir.stat().st_mode) == 0o700,
+           "claim-created env dir must be born 0700")
+    env_deep = td / "deep" / "hostd"
+    code, _, _ = nc.claim(key, bak, "http://127.0.0.1:9", env_deep,
+                          post=post_spy, get=get_spy)
+    _check(code == 0
+           and stat.S_IMODE((td / "deep").stat().st_mode) == 0o700
+           and stat.S_IMODE(env_deep.stat().st_mode) == 0o700,
+           "claim-created nested env dirs must each be born 0700")
+    env_pre = td / "hostd-pre"
+    env_pre.mkdir()
+    os.chmod(env_pre, 0o755)
+    code, _, _ = nc.claim(key, bak, "http://127.0.0.1:9", env_pre,
+                          post=post_spy, get=get_spy)
+    _check(code == 0
+           and stat.S_IMODE(env_pre.stat().st_mode) == 0o755,
+           "pre-existing env dir mode must be left unchanged")
 
     # 409: taken is a refusal, no env.
     calls.clear()

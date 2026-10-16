@@ -22,7 +22,12 @@ Third split step of the Nexus root claim, after nexus_keygen.py
      answering with just the right pubkey (or a forged or expired
      binding carrying it) has not stored a verifiable claim.
   3. Only after that verification is the hostd env written
-     (mint_name._hostd_env_text, born-0600, overwrite).
+     (mint_name._hostd_env_text, born-0600, overwrite). The env
+     holds the private key, so any directory this step creates
+     to hold it is born-0700 (nexus_keygen._ensure_parent) — a
+     plain mkdir left it group/other-listable, the same leak the
+     keygen parent-dir fix closed; a pre-existing env dir is the
+     operator's own and is left exactly as found.
 
 --dry-run builds and signs the binding, prints it, and sends
 nothing: the supervised preview of exactly what a real run would
@@ -44,6 +49,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mint_name as mn  # noqa: E402
+import nexus_keygen as nk  # noqa: E402
 import nexus_preflight as np  # noqa: E402
 import verify_name as vn  # noqa: E402
 from fed.ed25519 import publickey, sign  # noqa: E402
@@ -119,8 +125,8 @@ def claim(key_path, backup_path, mirror, env_dir,
                             f"did not store a verifiable claim; "
                             f"no env written"]
     env_dir = Path(env_dir)
-    env_dir.mkdir(parents=True, exist_ok=True)
     env_path = env_dir / f"{_LABEL}.env"
+    nk._ensure_parent(env_path)  # env dir we create is born 0700
     mn._write_secret(env_path,
                      mn._hostd_env_text(_LABEL, priv.hex(), mirror),
                      overwrite=True)
