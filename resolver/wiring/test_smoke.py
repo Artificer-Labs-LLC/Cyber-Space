@@ -2178,6 +2178,40 @@ def _test_refuse_walk_malformed():
               resp, 1, 0, "alice.cyberspace") is None)
 
 
+# 5z. argparse parse errors return, never SystemExit: every hand
+#     gate in main() refuses by return, but argparse itself still
+#     raised SystemExit on bad arguments no gate can pre-empt —
+#     unknown flag, dangling value flag, surplus positional —
+#     crashing any in-process caller of main(); --help raised
+#     SystemExit 0 the same way. In-process main() must return 2
+#     for bad arguments and 0 for --help (twin of dial/rotate/
+#     resolve_chain/verify_name/client; smoke was the last seat).
+def _test_parse_errors_return():
+    def _run(argv):
+        old_argv = sys.argv
+        sys.argv = ["smoke.py"] + list(argv)
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out_buf), \
+                    contextlib.redirect_stderr(err_buf):
+                rc = smoke.main()
+            return rc, out_buf.getvalue() + err_buf.getvalue()
+        except SystemExit as exc:
+            return f"SystemExit {exc.code}", ""
+        finally:
+            sys.argv = old_argv
+
+    for argv, want in ((["--bogus"], 2),
+                       (["--port"], 2),
+                       (["--server", "127.0.0.1", "--port", "53599",
+                         "extra"], 2),
+                       (["--help"], 0),
+                       (["-h"], 0)):
+        rc, out = _run(argv)
+        check(f"main({argv}) returns {want}, never SystemExit",
+              rc == want, f"rc={rc!r} out={out[:80]!r}")
+
+
 if __name__ == "__main__":
     _test_transport_raises()
     _test_fail_closed_unreachable()
@@ -2218,6 +2252,7 @@ if __name__ == "__main__":
     _test_query_port_malformed()
     _test_name_read_malformed()
     _test_refuse_walk_malformed()
+    _test_parse_errors_return()
     p, f = CASES["passed"], CASES["failed"]
     print(f"\n{CASES['passed']} passed, {CASES['failed']} failed")
     sys.exit(1 if f else 0)

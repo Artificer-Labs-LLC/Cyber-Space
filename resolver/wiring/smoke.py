@@ -766,7 +766,19 @@ def main() -> int:
                          "or 5353, as the daemon and client derive it)")
     ap.add_argument("--tcp", action="store_true",
                     help="run the same checks over DNS-over-TCP (RFC 7766)")
-    args = ap.parse_args()
+    # argparse itself still raises SystemExit on the bad arguments no
+    # gate above can pre-empt — an unknown flag, a dangling --port, a
+    # surplus positional — crashing any in-process caller of main();
+    # --help raises SystemExit 0 the same way. Convert the exit to
+    # this CLI's return after argparse prints its usage/error text;
+    # the __main__ seat re-raises the return as the process exit, so
+    # shell behaviour is unchanged. Twin of dial.py / rotate_name.py /
+    # resolve_chain.py / verify_name.py / resolver/client.py — the
+    # last twin seat in the set.
+    try:
+        args = ap.parse_args()
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
     if args.port is not None:
         # ASCII digits only, one optional leading sign (twin of
         # client.main's --port gate / rotate_name f97a2c9): argparse
