@@ -86,6 +86,12 @@ _check(ok and not blockers,
        "a Warang Citi letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+car = dict(GOOD, candidate_machine_id="machine-𐊣")
+ok, blockers = nh.evaluate(car)
+_check(ok and not blockers,
+       "a Carian letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -241,6 +247,12 @@ for key, bad, why in [
      "warang-ii-respelled same machine must fail"),
     ("candidate_machine_id", "machin𑢮-a",
      "warang-yuj-respelled same machine must fail"),
+    ("candidate_machine_id", "m𐊠chine-a",
+     "carian-a-respelled same machine must fail"),
+    ("candidate_machine_id", "ma𐊢hine-a",
+     "carian-d-respelled same machine must fail"),
+    ("candidate_machine_id", "𐊰achine-a",
+     "carian-s-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -302,6 +314,18 @@ for cand, orig, why in [
      "warang-o-respelled same operator must fail"),
     ("op-𑣄", "op-y",
      "warang-ya-respelled same operator must fail"),
+    ("op-𐊡", "op-b",
+     "carian-p2-respelled same operator must fail"),
+    ("op-𐊥", "op-f",
+     "carian-r-respelled same operator must fail"),
+    ("op-𐊫", "op-o",
+     "carian-o-respelled same operator must fail"),
+    ("op-𐊱", "op-t",
+     "carian-c18-respelled same operator must fail"),
+    ("op-𐊴", "op-x",
+     "carian-x-respelled same operator must fail"),
+    ("op-𐊲", "op-y",
+     "carian-u-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

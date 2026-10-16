@@ -242,6 +242,22 @@ _CONFUSABLES.update(str.maketrans({
     "𑣄": "y", "𑣜": "y", "𑢤": "Y", "𑢩": "Z",
 }))
 
+# Carian: the Anatolian alphabet's letters were cut to simple
+# shapes, several of which duplicate Latin capitals, and UTS #39
+# lists 10 of them as confusable with single Latin letters --
+# mappings taken from confusables.txt at unicode.org fetched
+# this tick, not guessed, and surfaced by a full-table audit of
+# _norm against every in-scope UTS #39 mapping. A seat respelled
+# with one rendered as the origin and compared distinct (probed
+# this tick: A, D and S seats returned ELIGIBLE). Carian is
+# unicameral, so single entries suffice; _norm's case-fold
+# unites them with the Latin lowercase. The other Carian letters
+# have glyphs no Latin letter has (E, for one) and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐊠": "A", "𐊡": "B", "𐊢": "C", "𐊥": "F",
+    "𐋏": "H", "𐊰": "M", "𐊫": "O", "𐊱": "T",
+    "𐊴": "X", "𐊲": "Y",
+}))
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
