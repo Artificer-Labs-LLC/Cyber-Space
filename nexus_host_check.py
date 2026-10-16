@@ -699,6 +699,27 @@ _CONFUSABLES.update(str.maketrans({
     "𖫖": "S", "𖫩": "O",
 }))
 
+# Bamum: the Cameroonian script whose letters WUE and KO and
+# PHASE-F NU are cut as plain Latin shapes, and UTS #39 lists
+# each as confusable with a single Latin letter (WUE->Z,
+# KO->V, PHASE-F NU->r), the script's only letter-to-single-
+# Latin mappings in the table -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping
+# (176 still escaping before this fold). A seat respelled with
+# one rendered as the origin and compared distinct (probed
+# this tick: WUE, KO and PHASE-F NU machine spellings and
+# WUE, KO and PHASE-F NU operator spellings each returned
+# ELIGIBLE as their own origin). Bamum has no case
+# distinction, so single entries suffice; _norm's case-fold
+# unites them with the Latin lowercase. The other Bamum
+# letters stay distinct: KA, for one, folds only to Cyrillic
+# capital I, and O only to Katakana SU.
+_CONFUSABLES.update(str.maketrans({
+    "ꛉ": "Z", "ꛟ": "V", "𖨙": "r",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

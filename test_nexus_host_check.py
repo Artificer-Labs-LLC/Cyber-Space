@@ -350,6 +350,33 @@ _check(not ok and blockers,
        "a Bassa-Vah-OO-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+bam = dict(GOOD, candidate_machine_id="machine-ꚡ")
+ok, blockers = nh.evaluate(bam)
+_check(ok and not blockers,
+       "a Bamum letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+bamw = dict(GOOD, candidate_machine_id="machine-ꛉ",
+            origin_machine_id="machine-z")
+ok, blockers = nh.evaluate(bamw)
+_check(not ok and blockers,
+       "a Bamum-WUE-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+bamk = dict(GOOD, candidate_machine_id="machine-ꛟ",
+            origin_machine_id="machine-v")
+ok, blockers = nh.evaluate(bamk)
+_check(not ok and blockers,
+       "a Bamum-KO-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+bamn = dict(GOOD, candidate_machine_id="machine-𖨙",
+            origin_machine_id="machine-r")
+ok, blockers = nh.evaluate(bamn)
+_check(not ok and blockers,
+       "a Bamum-PHASE-F-NU-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -828,6 +855,12 @@ for cand, orig, why in [
      "bassa-vah-gah-respelled same operator must fail"),
     ("op-𖫩", "op-o",
      "bassa-vah-oo-respelled same operator must fail"),
+    ("op-ꛉ", "op-z",
+     "bamum-wue-respelled same operator must fail"),
+    ("op-ꛟ", "op-v",
+     "bamum-ko-respelled same operator must fail"),
+    ("op-𖨙", "op-r",
+     "bamum-phase-f-nu-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
