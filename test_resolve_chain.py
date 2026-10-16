@@ -232,6 +232,33 @@ if _r.returncode != 0 or "walks clean" not in _r.stdout:
     print(f"FAIL: single exact --expect-original-key -> rc={_r.returncode} {_r.stdout!r} {_r.stderr!r}")
     fails += 1
 
+# In-process parse seat: argparse raises SystemExit on the bad
+# arguments no in-main gate can pre-empt (unknown flag, dangling
+# value flag, missing/surplus positional) and on --help. main()
+# must convert that exit into its own return (2 bad args, 0
+# --help) so an in-process caller is never crashed; the shell
+# exit is unchanged because __main__ re-raises the return.
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+for _argv, _want in ((["--bogus"], 2),
+                      (["--mirror"], 2),
+                      ([], 2),
+                      (["a", "extra"], 2),
+                      (["--help"], 0)):
+    _err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(_err), \
+                contextlib.redirect_stdout(io.StringIO()):
+            _rc = resolve_chain.main(_argv)
+    except SystemExit as _e:
+        print(f"FAIL: main({_argv}) raised SystemExit {_e.code}, want return {_want}")
+        fails += 1
+        continue
+    if _rc != _want:
+        print(f"FAIL: main({_argv}) -> {_rc}, want {_want}")
+        fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)
