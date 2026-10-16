@@ -224,6 +224,24 @@ _CONFUSABLES.update(str.maketrans({
     "𐑈": "s", "𐐠": "S",
 }))
 
+# Warang Citi: the Ho alphabet's letters are simple geometric
+# shapes, several of which duplicate Latin letters, and UTS #39
+# lists 20 of them as confusable with single Latin letters --
+# mappings taken from confusables.txt at unicode.org fetched
+# this tick, not guessed. A seat respelled with one rendered as
+# the origin and compared distinct (probed this tick: II, A and
+# NGAA operator seats returned ELIGIBLE). Both cases are listed,
+# as UTS #39 lists both; _norm's case-fold unites them. The
+# other Warang Citi letters have glyphs no Latin letter has
+# (YO, for one) and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𑢦": "E", "𑢮": "E", "𑣂": "F", "𑢢": "F",
+    "𑣃": "i", "𑢣": "L", "𑢲": "L", "𑣈": "o",
+    "𑣗": "o", "𑢵": "O", "𑣁": "s", "𑢼": "T",
+    "𑣘": "u", "𑢸": "U", "𑣀": "v", "𑢠": "V",
+    "𑣄": "y", "𑣜": "y", "𑢤": "Y", "𑢩": "Z",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth

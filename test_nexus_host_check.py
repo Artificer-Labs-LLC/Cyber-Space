@@ -80,6 +80,12 @@ _check(ok and not blockers,
        "a Deseret letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+war = dict(GOOD, candidate_machine_id="machine-𑢥")
+ok, blockers = nh.evaluate(war)
+_check(ok and not blockers,
+       "a Warang Citi letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -231,6 +237,10 @@ for key, bad, why in [
      "deseret-chee-respelled same machine must fail"),
     ("candidate_machine_id", "ma𐐕hine-a",
      "deseret-capital-chee-respelled same machine must fail"),
+    ("candidate_machine_id", "machin𑢦-a",
+     "warang-ii-respelled same machine must fail"),
+    ("candidate_machine_id", "machin𑢮-a",
+     "warang-yuj-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -282,6 +292,16 @@ for cand, orig, why in [
      "deseret-capital-long-o-respelled same operator must fail"),
     ("op-𐐛", "op-l",
      "deseret-eth-respelled same operator must fail"),
+    ("op-𑣁", "op-s",
+     "warang-a-respelled same operator must fail"),
+    ("op-𑢼", "op-t",
+     "warang-har-respelled same operator must fail"),
+    ("op-𑢠", "op-v",
+     "warang-ngaa-respelled same operator must fail"),
+    ("op-𑢩", "op-z",
+     "warang-o-respelled same operator must fail"),
+    ("op-𑣄", "op-y",
+     "warang-ya-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
