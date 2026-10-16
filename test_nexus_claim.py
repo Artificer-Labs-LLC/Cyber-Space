@@ -11,6 +11,8 @@ a pub-only resolve-back, a forged-signature resolve-back and a
 properly signed but expired resolve-back each refuse with no env
 written.
 """
+import contextlib
+import io
 import json
 import os
 import stat
@@ -176,6 +178,20 @@ with tempfile.TemporaryDirectory() as td:
            "empty equals value must be a usage refusal")
     _check(nc.main([f"--key={key}", "--expiry-days=abc"]) == 2,
            "non-integer equals expiry must be a usage refusal")
+
+    # A following -- flag is not a space-form value: --key --backup
+    # swallowed the backup flag as the key path and then blamed the
+    # mirror, instead of naming --key -- twin of nexus_status's,
+    # nexus_preflight's and nexus_keygen's space-form gates.
+    for _argv, _flag in ((["--key", "--backup", str(bak)], "--key"),
+                         (["--backup", "--key", str(key)], "--backup"),
+                         (["--env-dir", "--dry-run"], "--env-dir"),
+                         (["--expiry-days", "--dry-run"], "--expiry-days")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nc.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"following flag must refuse as {_flag} needs a value")
 
 if fails:
     print(f"{fails} FAILURES")

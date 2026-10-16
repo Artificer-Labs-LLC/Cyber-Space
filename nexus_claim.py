@@ -176,7 +176,7 @@ def main(argv):
                 expiry_days = int(txt)
         elif a in ("--key", "--backup", "--env-dir", "--expiry-days"):
             i += 1
-            if i >= len(argv):
+            if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             v = argv[i]
