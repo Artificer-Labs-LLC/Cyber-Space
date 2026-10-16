@@ -299,6 +299,7 @@ def preflight(label, key_path, backup_path, root):
 def main(argv):
     key_path = Path.home() / ".cyberspace" / f"{_ROOT_LABEL}-name.key"
     backup_path = None
+    seen = set()
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -310,6 +311,11 @@ def main(argv):
             if not v:
                 print(f"refused: {opt} needs a value", file=sys.stderr)
                 return 2
+            if opt in seen:
+                print(f"refused: {opt} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(opt)
             if opt == "--key":
                 key_path = Path(v)
             else:
@@ -317,6 +323,11 @@ def main(argv):
             i += 1
             continue
         if a in ("--key", "--backup"):
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             i += 1
             if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
