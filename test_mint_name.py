@@ -227,6 +227,30 @@ with tempfile.TemporaryDirectory() as _td:
             print(f"FAIL: _read_seed {_seat} raised {type(_e).__name__}: {_e}")
             fails += 1
 
+# main() duplicate gate: a repeated value flag in space, equals or
+# mixed spelling refuses by name (exit 2) before any key/network —
+# it silently last-won, so --expiry-days 7 --expiry-days 9 minted a
+# 9-day binding the operator believed was 7.
+import contextlib
+import io
+
+for _argv in (("probe", "--expiry-days", "7", "--expiry-days", "9"),
+              ("probe", "--expiry-days=7", "--expiry-days=9"),
+              ("probe", "--expiry-days", "7", "--expiry-days=9"),
+              ("probe", "--env-dir", "/tmp/a", "--env-dir", "/tmp/b")):
+    _flag = _argv[1].split("=")[0]
+    _err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(_err):
+            _rc = mint_name.main(list(_argv))
+    except Exception as _e:  # noqa: BLE001
+        print(f"FAIL: main duplicate {_argv} raised {type(_e).__name__}: {_e}")
+        fails += 1
+        continue
+    if _rc != 2 or f"{_flag} given more than once" not in _err.getvalue():
+        print(f"FAIL: main duplicate {_argv} -> rc={_rc} err={_err.getvalue()!r}")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)

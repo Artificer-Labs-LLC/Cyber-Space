@@ -376,6 +376,17 @@ def main(argv: list[str]) -> int:
                     print(f"refused: {name} needs a value", file=sys.stderr)
                     return 2
                 val = argv[i]
+            if name in opts:
+                # Duplicate gate (twin of the nexus_* parsers): a
+                # repeated value flag silently last-won, so
+                # --expiry-days 7 --expiry-days 9 minted a 9-day
+                # binding while the operator believed it was 7 —
+                # and a repeated --env-dir wrote the key-bearing
+                # env to the second directory. Refuse by name,
+                # before any key is generated or read.
+                print(f"refused: {name} given more than once",
+                      file=sys.stderr)
+                return 2
             opts[name] = val
         else:
             args.append(a)
