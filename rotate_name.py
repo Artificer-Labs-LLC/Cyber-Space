@@ -56,7 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign, checkvalid  # noqa: E402
-from mint_name import _write_secret, _valid_mirror  # noqa: E402
+from mint_name import _write_secret, _valid_mirror, _ensure_dir  # noqa: E402
 
 _LABEL_MAX = 63
 _DEFAULT_MIRROR = "http://127.0.0.1:8471"
@@ -1002,7 +1002,11 @@ def main(argv: list[str]) -> int:
         print(f"refused: self-verification failed (bug): {reason}",
               file=sys.stderr)
         return 1
-    home.mkdir(parents=True, exist_ok=True)
+    # home holds the name key and the .next seed this mint writes
+    # (both 0600): a dir rotate itself creates is born 0700 via
+    # mint_name._ensure_dir, twin of the mint/keygen/claim seats; a
+    # pre-existing home is left exactly as found.
+    _ensure_dir(home)
     rec_path = home / f"{label}-rotate.json"
     rec_path.write_text(json.dumps(record, indent=2) + "\n")
     next_path = home / f"{label}-name.key.next"

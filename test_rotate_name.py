@@ -257,6 +257,56 @@ with _tempfile.TemporaryDirectory() as _td:
         print("FAIL: _installed_env_note absent file must stay ''")
         fails += 1
 
+# main()'s home seat: home holds the name key and the .next seed
+# main writes (both 0600), so a dir rotate itself creates is born
+# 0700 via mint_name._ensure_dir (rotate imports it — no twin to
+# drift); a pre-existing home is left exactly as found.
+import stat as _stat
+import subprocess as _subprocess
+import tempfile as _tempfile2
+from pathlib import Path as _Path2
+
+if rotate_name._ensure_dir is not __import__("mint_name")._ensure_dir:
+    print("FAIL: rotate_name._ensure_dir is not mint_name._ensure_dir")
+    fails += 1
+with _tempfile2.TemporaryDirectory() as _td:
+    _base = _Path2(_td) / "a" / ".cyberspace"
+    rotate_name._ensure_dir(_base)
+    for _p in (_Path2(_td) / "a", _base):
+        _m = _stat.S_IMODE(os.stat(_p).st_mode)
+        if _m != 0o700:
+            print(f"FAIL: rotate _ensure_dir created {_p} at {oct(_m)}, want 0o700")
+            fails += 1
+    _pre = _Path2(_td) / "pre"
+    _pre.mkdir()
+    os.chmod(_pre, 0o755)
+    rotate_name._ensure_dir(_pre)
+    if _stat.S_IMODE(os.stat(_pre).st_mode) != 0o755:
+        print("FAIL: rotate _ensure_dir tightened a pre-existing dir")
+        fails += 1
+    # End-to-end: main() mints into a pre-existing 0755 home and
+    # leaves its mode untouched; the .next seed is born 0600.
+    _home = _Path2(_td) / "home"
+    _cs = _home / ".cyberspace"
+    _cs.mkdir(parents=True)
+    os.chmod(_cs, 0o755)
+    (_cs / "foo-name.key").write_text(SK.hex() + "\n")
+    _env = dict(os.environ, HOME=str(_home))
+    _r = _subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "rotate_name.py"), "foo"],
+        capture_output=True, text=True, env=_env)
+    if _r.returncode != 0:
+        print(f"FAIL: rotate main() rc={_r.returncode}: {_r.stderr.strip()[:200]}")
+        fails += 1
+    if _stat.S_IMODE(os.stat(_cs).st_mode) != 0o755:
+        print("FAIL: rotate main() changed a pre-existing home's mode")
+        fails += 1
+    _next = _cs / "foo-name.key.next"
+    if not _next.exists() or _stat.S_IMODE(os.stat(_next).st_mode) != 0o600:
+        print("FAIL: rotate main() .next seed missing or not 0600")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
