@@ -1014,9 +1014,31 @@ def main(argv: list[str]) -> int:
     # pre-existing home is left exactly as found.
     _ensure_dir(home)
     rec_path = home / f"{label}-rotate.json"
-    rec_path.write_text(json.dumps(record, indent=2) + "\n")
     next_path = home / f"{label}-name.key.next"
-    _write_secret(next_path, new_priv.hex())
+    # A pending rotation is a PAIR (record + .next seed): the old
+    # order wrote the record FIRST via write_text (clobbering the
+    # pending record) and only then hit _write_secret's O_EXCL on
+    # the existing .next — a plain re-run crashed in a traceback
+    # AFTER destroying the pair, leaving a record whose new_pubkey
+    # no seed on disk derives (submit/promote both refuse the
+    # mismatch; the rotation is stranded). Refuse a re-run before
+    # anything is written, and write the seed BEFORE the record so
+    # even a raced O_EXCL refusal leaves the old pair intact.
+    if next_path.exists():
+        print(f"refused: a pending rotation already exists at "
+              f"{next_path} — submit and promote it first "
+              f"(rotate_name.py {label} --submit, then --promote); "
+              f"nothing was minted and the pending pair is untouched",
+              file=sys.stderr)
+        return 1
+    try:
+        _write_secret(next_path, new_priv.hex())
+    except FileExistsError:
+        print(f"refused: a pending rotation already exists at "
+              f"{next_path} — nothing was minted and the pending "
+              f"pair is untouched", file=sys.stderr)
+        return 1
+    rec_path.write_text(json.dumps(record, indent=2) + "\n")
     print(f"valid: {label}.cyberspace rotation minted and self-verified")
     print(f"  old key {record['old_pubkey'][:16]}... -> "
           f"new key {record['new_pubkey'][:16]}...")

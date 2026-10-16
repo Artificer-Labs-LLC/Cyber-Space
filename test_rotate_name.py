@@ -306,6 +306,25 @@ with _tempfile2.TemporaryDirectory() as _td:
     if not _next.exists() or _stat.S_IMODE(os.stat(_next).st_mode) != 0o600:
         print("FAIL: rotate main() .next seed missing or not 0600")
         fails += 1
+    # Re-run while a rotation is pending: must refuse cleanly
+    # (rc 1, no traceback) and leave the pending pair byte-identical
+    # — the old order clobbered the record, then crashed on the
+    # existing .next, stranding the rotation.
+    _rec_before = (_cs / "foo-rotate.json").read_bytes()
+    _next_before = _next.read_bytes()
+    _r2 = _subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "rotate_name.py"), "foo"],
+        capture_output=True, text=True, env=_env)
+    if _r2.returncode != 1 or "Traceback" in _r2.stderr:
+        print(f"FAIL: rotate re-run rc={_r2.returncode}: {_r2.stderr.strip()[:200]}")
+        fails += 1
+    if (_cs / "foo-rotate.json").read_bytes() != _rec_before:
+        print("FAIL: rotate re-run clobbered the pending record")
+        fails += 1
+    if _next.read_bytes() != _next_before:
+        print("FAIL: rotate re-run clobbered the pending .next seed")
+        fails += 1
 
 # Second rotation promote: the first promote leaves .prev behind,
 # and the second promote must overwrite that single latest-
