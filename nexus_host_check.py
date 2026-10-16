@@ -874,6 +874,27 @@ _CONFUSABLES.update(str.maketrans({
     "\u10e7": "y", "\u2d2d": "z", "\u10cd": "Z",
 }))
 
+# Cherokee small HU: the one Cherokee small letter that needs
+# an entry of its own. The Cherokee block above relies on
+# case-folding upward -- a small letter folds to its capital,
+# which the table then folds -- but small HU (U+AB81) folds
+# up to capital HU (U+13B1), whose UTS #39 target is Greek
+# Gamma, not a Latin letter, so the chain never reaches
+# Latin. UTS #39 lists the small letter itself against
+# Latin r. A seat respelled with it rendered as the origin
+# and compared distinct (probed this tick: machine and
+# operator spellings each returned ELIGIBLE as their own
+# origin). The fold must sit in the table itself: _norm
+# translates before it case-folds, so the small spelling is
+# caught before case-folding carries it up to the capital.
+# It is the script's only remaining letter-to-single-Latin
+# mapping in the full-table audit (151 escaping before this
+# fold). The other Cherokee letters stay distinct: LETTER O
+# (U+13A3), for one, has no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "\uab81": "r",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

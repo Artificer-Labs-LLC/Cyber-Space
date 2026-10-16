@@ -531,6 +531,19 @@ _check(not ok and blockers,
        "a Georgian-LABIAL-SIGN-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+cherokeeo = dict(GOOD, candidate_machine_id="machine-Ꭳ")
+ok, blockers = nh.evaluate(cherokeeo)
+_check(ok and not blockers,
+       "a Cherokee letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+cherokeehu = dict(GOOD, candidate_machine_id="machine-ꮁ",
+                  origin_machine_id="machine-r")
+ok, blockers = nh.evaluate(cherokeehu)
+_check(not ok and blockers,
+       "a Cherokee-small-HU-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -1059,6 +1072,8 @@ for cand, orig, why in [
      "georgian-small-aen-respelled same operator must fail"),
     ("op-Ⴭ", "op-z",
      "georgian-capital-aen-respelled same operator must fail"),
+    ("op-ꮁ", "op-r",
+     "cherokee-small-hu-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
