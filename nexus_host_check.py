@@ -279,6 +279,26 @@ _CONFUSABLES.update(str.maketrans({
     "𐊐": "X",
 }))
 
+# Elbasan: the Albanian alphabet's letters were likewise cut to
+# simple shapes that duplicate Latin capitals, and UTS #39 lists
+# 10 of them as confusable with single Latin letters -- mappings
+# taken from confusables.txt at unicode.org fetched this tick,
+# not guessed, and surfaced by the same full-table audit of
+# _norm against every in-scope UTS #39 mapping. A seat respelled
+# with one rendered as the origin and compared distinct (probed
+# this tick: SE and O seats returned ELIGIBLE). Elbasan is
+# unicameral, so single entries suffice; _norm's case-fold
+# unites them with the Latin lowercase (letter JE's own UTS #39
+# target is small l). The other Elbasan letters keep glyphs no
+# Latin letter has -- KE folds only to Greek Gamma, PE only to
+# Greek Pi, THE only to O with a stroke overlay -- and stay
+# distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐔛": "C", "𐔥": "F", "𐔘": "K", "𐔎": "l",
+    "𐔦": "L", "𐔓": "N", "𐔖": "O", "𐔝": "V",
+    "𐔧": "X", "𐔇": "Z",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
