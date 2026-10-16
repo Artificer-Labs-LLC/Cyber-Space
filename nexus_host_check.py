@@ -643,6 +643,26 @@ _CONFUSABLES.update(str.maketrans({
     "ᩅ": "o",
 }))
 
+# Hangul: the ieung is a plain ring in all its seats -- choseong,
+# jongseong, the compatibility letter, and its halfwidth twin --
+# and UTS #39 lists each as confusable with the single Latin
+# letter o, the script's only letter-to-single-Latin mappings in
+# the table -- mappings taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not guessed, and
+# surfaced by a full-table audit of _norm against every
+# letter-category UTS #39 mapping (183 still escaping across 25
+# scripts before this fold). A seat respelled with one rendered
+# as the origin and compared distinct (probed this tick: choseong
+# and jongseong machine spellings each returned ELIGIBLE as
+# their own origin). Hangul has no case distinction, so single
+# entries suffice; NFKC already lands the compatibility and
+# halfwidth spellings on the choseong, which the fold then
+# catches. The other Hangul letters stay distinct: choseong
+# kiyeok, for one, has no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "ᄋ": "o", "ᆼ": "o", "ㅇ": "o", "ﾷ": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
