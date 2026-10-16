@@ -1386,6 +1386,40 @@ for _flag in ("--candidate-machine-id", "--origin-machine-id",
     _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
            f"following flag must refuse as {_flag} needs a value")
 
+# A repeated value flag must refuse by name, never silently
+# last-win: --candidate-machine-id A --candidate-machine-id B
+# evaluated B while the operator believed the gate checked A --
+# twin of nexus_claim's, nexus_status's, nexus_preflight's,
+# nexus_keygen's and nexus_depth_check's duplicate gates; this
+# closes the sequence (host check was the last parser still
+# last-winning on a repeated value flag). Space, equals and mixed
+# spellings all refuse.
+_clear = {"--candidate-machine-id": "machine-B",
+          "--origin-machine-id": "machine-A",
+          "--candidate-operator": "op-B",
+          "--origin-operator": "op-A",
+          "--evidence-source": "machine-itself", "--feed": "gossip",
+          "--pin-source": "out-of-band"}
+for _flag in ("--candidate-machine-id", "--origin-machine-id",
+              "--candidate-operator", "--origin-operator",
+              "--evidence-source", "--feed", "--pin-source"):
+    _base = [f"{k} {v}" for k, v in _clear.items() if k != _flag]
+    _flat = [t for pair in (p.split(" ", 1) for p in _base)
+             for t in pair]
+    for _argv in (
+        [_flag, "zzz", *_flat, _flag, "yyy"],
+        [f"{_flag}=zzz", *[f"{p.split(' ', 1)[0]}={p.split(' ', 1)[1]}"
+                           for p in _base], f"{_flag}=yyy"],
+        [_flag, "zzz", *_flat, f"{_flag}=yyy"],
+    ):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nh.main(_argv)
+        _check(_code == 2
+               and f"{_flag} given more than once" in _err.getvalue(),
+               f"duplicate {_flag} must refuse by name, got "
+               f"{_code}: {_err.getvalue()!r}")
+
 if fails:
     print(f"test_nexus_host_check: {fails} FAIL")
     sys.exit(1)

@@ -1220,6 +1220,7 @@ def main(argv):
          "evidence_source": "unknown", "feed": "unknown",
          "pin_source": "unknown", "candidate_is_hq": False,
          "origin_is_hq": False, "claim_key_present": False}
+    seen = set()
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -1236,11 +1237,21 @@ def main(argv):
             if opt not in _VALUE_FLAGS:
                 print(f"refused: unknown argument {a!r}", file=sys.stderr)
                 return 2
+            if opt in seen:
+                print(f"refused: {opt} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(opt)
             if not v:
                 print(f"refused: {opt} needs a value", file=sys.stderr)
                 return 2
             c[_VALUE_FLAGS[opt]] = v
         elif a in _VALUE_FLAGS:
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             i += 1
             if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
