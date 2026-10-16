@@ -691,6 +691,43 @@ for bad, orig, why in [
            f"a Greek-{why}-respelled same operator must fail "
            f"(bar blockers: {blockers})")
 
+arbctl = dict(GOOD, candidate_machine_id="machine-ب")
+ok, blockers = nh.evaluate(arbctl)
+_check(ok and not blockers,
+       "an Arabic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+arb_l = dict(GOOD, candidate_machine_id="machine-ا",
+             origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(arb_l)
+_check(not ok and blockers,
+       "an Arabic-ALEF-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+arb_o = dict(GOOD, candidate_machine_id="machine-ه",
+             origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(arb_o)
+_check(not ok and blockers,
+       "an Arabic-HEH-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+for bad, orig, why in [
+    ("ا", "l", "ALEF"), ("ﺍ", "l", "ALEF ISOLATED"),
+    ("\U0001ee00", "l", "MATHEMATICAL ALEF"),
+    ("ه", "o", "HEH"), ("ﻩ", "o", "HEH ISOLATED"),
+    ("\U0001ee24", "o", "MATHEMATICAL INITIAL HEH"),
+    ("ھ", "o", "HEH DOACHASHMEE"),
+    ("ﮪ", "o", "HEH DOACHASHMEE ISOLATED"),
+    ("ہ", "o", "HEH GOAL"), ("ﮦ", "o", "HEH GOAL ISOLATED"),
+    ("ە", "o", "AE"),
+]:
+    arb = dict(GOOD, candidate_operator="op-" + bad,
+               origin_operator="op-" + orig)
+    ok, blockers = nh.evaluate(arb)
+    _check(not ok and blockers,
+           f"an Arabic-{why}-respelled same operator must fail "
+           f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),

@@ -1031,6 +1031,31 @@ _CONFUSABLES.update(str.maketrans({
     "\u03f8": "p", "\u1d26": "r", "\u03b3": "y",
 }))
 
+# Arabic: the script's plain-stroke letters duplicate Latin
+# shapes -- ALEF is a plain vertical stroke (Latin l) and the
+# HEH family are plain rings (Latin o) -- and UTS #39 lists 23
+# Arabic letters as confusable with single Latin letters:
+# ALEF, HEH, HEH DOACHASHMEE, HEH GOAL, and AE, plus their
+# presentation forms and mathematical variants. Mappings
+# taken from confusables.txt at unicode.org (cached copy
+# fetched 2026-10-15), not guessed. A seat respelled with one
+# rendered as the origin and compared distinct (probed this
+# tick: ALEF and HEH machine spellings each returned ELIGIBLE
+# as their own origin). Only the 5 base letters need entries:
+# every presentation form and mathematical variant NFKC-folds
+# onto its base letter (ALEF ISOLATED/FINAL and MATHEMATICAL
+# ALEF/LOOPED ALEF onto ALEF; HEH's four forms and
+# MATHEMATICAL INITIAL/LOOPED HEH onto HEH; DOACHASHMEE's and
+# GOAL's four forms each onto their base), so the folds
+# cascade to all 23. Arabic has no case distinction, so
+# single entries suffice. With these, no Arabic letter still
+# escapes; the other Arabic letters stay distinct: BEH, for
+# one, has no UTS #39 single-Latin entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "\u0627": "l", "\u0647": "o", "\u06be": "o",
+    "\u06c1": "o", "\u06d5": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
