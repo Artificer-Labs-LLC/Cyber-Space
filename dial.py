@@ -87,6 +87,15 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # can never be dialed as written — each passed this gate and read
     # as the same false "silent" (probed this tick). A bracketed IPv6
     # literal stays valid, judged by parsing it (zone included).
+    # The raw-string gate is _valid_mirror's too, and this twin had
+    # not carried it: whitespace/control characters surviving the
+    # outer strip above (an interior newline/tab — urlsplit silently
+    # strips \t\r\n before parsing — a space, or a \x01 in the path)
+    # passed every check below and read as the same false "silent",
+    # though no honest mirror contains one and the fetch can never
+    # ask for the URL as written.
+    ws_ok = not any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F
+                    for c in mirror)
     try:
         parts = urllib.parse.urlsplit(mirror)
         port = parts.port
@@ -103,7 +112,8 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
             host_ok = all(c.isascii() and (c.isalnum() or c in "._-")
                           for c in host)
         mirror_ok = (
-            parts.scheme in ("http", "https")
+            ws_ok
+            and parts.scheme in ("http", "https")
             and host_ok
             and parts.username is None and parts.password is None
             and (port is None or 1 <= port <= 65535)

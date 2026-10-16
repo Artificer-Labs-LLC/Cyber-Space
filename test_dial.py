@@ -226,6 +226,25 @@ class DialPlanTests(unittest.TestCase):
             self.assertEqual(code, 4, mirror)
             self.assertIn("malformed mirror URL", lines[0])
 
+    def test_whitespace_mirror_is_bad_argument(self):
+        # Twin of mint_name._valid_mirror's raw-string gate: interior
+        # whitespace/control characters (urlsplit silently strips
+        # \t\r\n, so the shape checks alone never saw the newline)
+        # are exit 4 (bad argument), never exit 2 (a well-formed
+        # mirror merely silent). A plain path-prefix mirror keeps its
+        # exact behaviour — it reaches the silent verdict.
+        for mirror in ("http://127.0.0.1:8471/pa\nth",
+                       "http://127.0.0.1:8471/pa\tth",
+                       "http://127.0.0.1:8471/\x01x",
+                       "http://127.0.0.1:8471/a b",
+                       "http://127.0.0.1:8471/\nCYBERNET_MIRROR_URL=http://evil.example"):
+            code, lines = dial.plan(ADDR, mirror)
+            self.assertEqual(code, 4, mirror)
+            self.assertIn("malformed mirror URL", lines[0])
+        with _fixture(alive=False):
+            code, lines = dial.plan(ADDR, MIRROR + "/prefix")
+        self.assertEqual(code, 2)
+
     def test_no_binding_is_name_side(self):
         with _fixture():
             code, lines = dial.plan(ADDR, MIRROR)
