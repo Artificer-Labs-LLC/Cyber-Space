@@ -35,6 +35,7 @@ re-validates and refuses anything malformed. Fail-closed throughout: any
 surprise exits nonzero with the reason, never half-written state.
 """
 
+import ipaddress
 import os
 import stat
 import sys
@@ -282,7 +283,18 @@ def _valid_mirror(mirror: str) -> bool:
     key-bearing env, persisting those credentials beside the name
     private key. Stored node addresses can never carry userinfo
     (core._valid_node_url's host class admits no "@"); no honest
-    mirror needs it."""
+    mirror needs it.
+
+    The host itself must carry the stored-address host shape: a
+    hostname spelled with characters outside core._NODE_URL_RE's
+    class — a backslash ("http://x\\evil.example:8471"), a percent
+    escape ("http://x%40evil.example:8471", whose Request host
+    unquotes to a string carrying "@"), or a non-ASCII letter
+    ("http://é.example:8471") — passed every check above, so main()
+    wrote the name key and then read the undialable host's failure
+    as a verdict on the mirror. No stored node address can ever
+    carry such a host, so no honest mirror names one; a bracketed
+    IPv6 literal stays valid, judged by parsing it (zone included)."""
     # A non-string has no mirror shape at all: it escaped as TypeError
     # from the iteration below (int/None) or AttributeError from a
     # bytes element's .isspace — a crash, not this predicate's False.
@@ -294,6 +306,17 @@ def _valid_mirror(mirror: str) -> bool:
         parts = urllib.parse.urlsplit(mirror)
         port = parts.port
     except ValueError:
+        return False
+    host = parts.hostname
+    if not host:
+        return False
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+    elif not all(c.isascii() and (c.isalnum() or c in "._-")
+                 for c in host):
         return False
     return (parts.scheme in ("http", "https") and bool(parts.hostname)
             and parts.username is None and parts.password is None

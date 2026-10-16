@@ -31,7 +31,8 @@ def _check(fn, arg, want, why):
 for bad in (123, 1.5, True, None, b"http://x:8471", ["http://x"], []):
     _check(mint_name._valid_mirror, bad, False, f"_valid_mirror({bad!r})")
 for good in ("http://127.0.0.1:8471", "https://node.example",
-             "http://x:65535", "http://x:8471/base"):
+             "http://x:65535", "http://x:8471/base",
+             "http://[::1]:8471", "http://node_1.example:8471"):
     _check(mint_name._valid_mirror, good, True, f"_valid_mirror({good!r})")
 for bad in ("", "ftp://x", "http://", "http://x:0", "http://x:65536",
             "http://x:abc", " http://x", "http://x/\nEVIL=1",
@@ -39,7 +40,10 @@ for bad in ("", "ftp://x", "http://", "http://x:0", "http://x:65536",
             "http://x:8471#", "http://x:8471/base?x=1",
             "http://user:pass@x:8471", "http://user@x:8471",
             "http://x@evil.example:8471", "http://@x:8471",
-            "http://:pass@x:8471"):
+            "http://:pass@x:8471",
+            "http://x\\evil.example:8471", "http://x%40evil.example:8471",
+            "http://x%5cevil.example:8471", "http://é.example:8471",
+            "http://[not-an-ip]:8471"):
     _check(mint_name._valid_mirror, bad, False, f"_valid_mirror({bad!r})")
 
 for bad in (123, 1.5, True, b"foo", ["foo"], None):
