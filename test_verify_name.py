@@ -202,6 +202,33 @@ if _r.returncode != 2 or "cannot read" not in _r.stderr:
     print(f"FAIL: single exact --expect-name -> rc={_r.returncode} {_r.stderr!r}")
     fails += 1
 
+# In-process parse seat: argparse raises SystemExit on the bad
+# arguments no in-main gate can pre-empt (unknown flag, dangling
+# value flag, missing/surplus positional) and on --help. main()
+# must convert that exit into its own return (2 bad args, 0
+# --help) so an in-process caller is never crashed; the shell
+# exit is unchanged because __main__ re-raises the return.
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+for _argv, _want in ((["--bogus"], 2),
+                      (["--expect-name"], 2),
+                      ([], 2),
+                      (["a.json", "extra"], 2),
+                      (["--help"], 0)):
+    _err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(_err), \
+                contextlib.redirect_stdout(io.StringIO()):
+            _rc = verify_name.main(_argv)
+    except SystemExit as _e:
+        print(f"FAIL: main({_argv}) raised SystemExit {_e.code}, want return {_want}")
+        fails += 1
+        continue
+    if _rc != _want:
+        print(f"FAIL: main({_argv}) -> {_rc}, want {_want}")
+        fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)

@@ -270,7 +270,20 @@ def main(argv: list[str]) -> int:
                     help="fail unless the binding is for this label")
     ap.add_argument("--expect-pubkey",
                     help="fail unless the binding is keyed to this name key")
-    args = ap.parse_args(argv)
+    # argparse itself still raises SystemExit on the bad arguments
+    # no in-main gate can pre-empt -- an unknown flag, a value flag
+    # left dangling, a missing or surplus positional -- and on
+    # --help (code 0). Every gate in this CLI refuses by return,
+    # yet a bare --bogus still crashed an in-process caller of
+    # main() (probed this tick). Convert argparse's exit into this
+    # CLI's return: its usage/error text has already printed, the
+    # code is argparse's own (2 for bad arguments, 0 for --help),
+    # and the __main__ seat re-raises it as the process exit, so
+    # shell behaviour is unchanged. Twin of resolver/client.py.
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
     # The pins are arguments, not verdicts: a pin that can never match
     # any binding (an invalid label, or a key that is not 64 hex chars)
     # read as exit 1 "binding is for/keyed to X, not the expected Y" —
