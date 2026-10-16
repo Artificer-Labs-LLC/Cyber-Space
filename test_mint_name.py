@@ -36,7 +36,10 @@ for good in ("http://127.0.0.1:8471", "https://node.example",
 for bad in ("", "ftp://x", "http://", "http://x:0", "http://x:65536",
             "http://x:abc", " http://x", "http://x/\nEVIL=1",
             "http://x:8471?x=1", "http://x:8471?", "http://x:8471#frag",
-            "http://x:8471#", "http://x:8471/base?x=1"):
+            "http://x:8471#", "http://x:8471/base?x=1",
+            "http://user:pass@x:8471", "http://user@x:8471",
+            "http://x@evil.example:8471", "http://@x:8471",
+            "http://:pass@x:8471"):
     _check(mint_name._valid_mirror, bad, False, f"_valid_mirror({bad!r})")
 
 for bad in (123, 1.5, True, b"foo", ["foo"], None):

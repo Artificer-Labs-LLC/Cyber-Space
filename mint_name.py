@@ -269,7 +269,20 @@ def _valid_mirror(mirror: str) -> bool:
     argument it is. Stored node addresses refuse query/fragment
     outright (core._valid_node_url's shape, "stored addresses stay
     query-free"); a path prefix stays valid, since the appended
-    routes honestly extend it."""
+    routes honestly extend it.
+
+    Userinfo is refused the same way: urlsplit reads the host AFTER
+    the "@", so "http://127.0.0.1@evil.example:8471" dials
+    evil.example while spelling like the local node — the fetch's
+    verdicts (claim accepted, binding served) would come from a
+    server the operator never named, the redirect twins' threat in
+    spelling form. urllib also sends the userinfo as Basic
+    credentials to whatever host follows the "@", and
+    _hostd_env_text writes the original string verbatim into the
+    key-bearing env, persisting those credentials beside the name
+    private key. Stored node addresses can never carry userinfo
+    (core._valid_node_url's host class admits no "@"); no honest
+    mirror needs it."""
     # A non-string has no mirror shape at all: it escaped as TypeError
     # from the iteration below (int/None) or AttributeError from a
     # bytes element's .isspace — a crash, not this predicate's False.
@@ -283,6 +296,7 @@ def _valid_mirror(mirror: str) -> bool:
     except ValueError:
         return False
     return (parts.scheme in ("http", "https") and bool(parts.hostname)
+            and parts.username is None and parts.password is None
             and (port is None or 1 <= port <= 65535)
             and "?" not in mirror and "#" not in mirror)
 
