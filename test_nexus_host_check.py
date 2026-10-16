@@ -1403,6 +1403,20 @@ for _flag in ("--candidate-machine-id", "--origin-machine-id",
     _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
            f"-h must refuse as {_flag} needs a value")
 
+# Any flag-shaped token is a flag token, not a value: the -h-only
+# gate left every other single-dash token open -- a seat named
+# "-x" cleared ELIGIBLE against a different origin exactly as
+# "-h" had (probed this tick). No documented value for any flag
+# here begins with "-", so each one refuses as a missing value.
+for _flag in ("--candidate-machine-id", "--origin-machine-id",
+              "--candidate-operator", "--origin-operator",
+              "--evidence-source", "--feed", "--pin-source"):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nh.main([_flag, "-x"])
+    _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+           f"-x must refuse as {_flag} needs a value")
+
 # A repeated value flag must refuse by name, never silently
 # last-win: --candidate-machine-id A --candidate-machine-id B
 # evaluated B while the operator believed the gate checked A --
