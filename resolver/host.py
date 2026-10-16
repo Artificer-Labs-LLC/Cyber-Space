@@ -458,15 +458,37 @@ def _hostd_refresh_warnings() -> list[str]:
 _MIRROR_RESP_MAX = 65536
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx, which _mirror_post reads as silence. Twin
+    of hold_open._NoRedirect / resolve_chain._NoRedirect. The mirror
+    is operator-chosen but still just a server on the wire, and
+    urllib's default opener followed its 301/302/303 (as GET) to a
+    server of the mirror's choosing and accepted THAT server's 200
+    as the mirror's verdict (probed 2026-10-16: a redirected
+    /fed/announce returned True off a foreign target, target
+    contacted) — a third party could fake an accepted announce for
+    a reach the real mirror never saw, and the daemon would go
+    quiet believing its name is reachable when it is not. A mirror
+    answer is only a mirror answer when it comes from the mirror
+    itself; a 3xx is silence, never a referral."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _mirror_post(mirror_url: str, path: str, env: dict) -> bool:
     """Signed POST to the mirror. True on HTTP 200 with a body under
-    the read bound; anything else (4xx/5xx/timeout/oversize) is
+    the read bound; anything else (3xx/4xx/5xx/timeout/oversize) is
     silence, never a crash. Never raises."""
     try:
         req = urllib.request.Request(
             mirror_url + path, data=json.dumps(env).encode(),
             headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with _OPENER.open(req, timeout=8) as resp:
             if resp.status != 200:
                 return False
             raw = resp.read(_MIRROR_RESP_MAX + 1)
