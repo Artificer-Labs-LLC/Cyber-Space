@@ -303,6 +303,48 @@ def _test_repeated_value_flag():
           f"rc={rc}")
 
 
+# 5e3. abbreviated long option is a bad argument, never expanded:
+#     argparse accepts any unambiguous prefix, so --por (even --p)
+#     silently became --port and dodged the duplicate gate above;
+#     a lone abbreviation, an equals form, or an abbreviation paired
+#     with the exact flag refuses by name with exit 1 before any
+#     query is attempted (twin of client/dial abbreviation gates)
+def _test_abbreviated_flag():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    cases = (
+        ("--name", "--n"), ("--server", "--ser"), ("--port", "--por"),
+        ("--tcp", "--tc"), ("--help", "--he"),
+    )
+    for flag, abbr in cases:
+        for extra in ([abbr, "x"], [f"{abbr}=x"],
+                      [abbr, "x", flag, "y"], [flag, "y", abbr, "x"]):
+            calls["n"] = 0
+            real = smoke._query
+            smoke._query = _counting
+            old_argv = sys.argv
+            sys.argv = ["smoke.py"] + list(extra)
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    rc = smoke.main()
+            finally:
+                smoke._query = real
+                sys.argv = old_argv
+            out = buf.getvalue()
+            check(f"abbreviated {abbr} {extra[0][:18]!r} -> exit 1, no query",
+                  rc == 1 and calls["n"] == 0
+                  and f"{abbr} is an abbreviation of {flag}" in out,
+                  f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    rc, _ = _run_main_with_fake(_counting)
+    check("exact long flags still smoke (control)", rc == 0,
+          f"rc={rc}")
+
+
 # 5f. malformed --name is a bad argument, never a daemon verdict:
 #     no query is attempted for a non-zone / multi-label / bad-label
 #     name (each would otherwise read as NXDOMAIN "did not resolve"
@@ -2093,6 +2135,7 @@ if __name__ == "__main__":
     _test_aaaa_fallback()
     _test_undialable_port()
     _test_repeated_value_flag()
+    _test_abbreviated_flag()
     _test_malformed_name()
     _test_undialable_server()
     _test_env_port_default()

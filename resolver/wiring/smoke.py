@@ -721,19 +721,35 @@ def main() -> int:
     # runs — before any query is built or sent. Exit 1 is this
     # smoke's bad-argument code (see the --port gate below).
     _seen: set[str] = set()
+    _long_opts = ("--name", "--server", "--port", "--tcp", "--help")
     for _tok in sys.argv[1:]:
         if _tok == "--":
             break
         if not _tok.startswith("--"):
             continue
         _flag = _tok.partition("=")[0]
+        if _flag not in _long_opts:
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --por (even --p) silently became
+            # --port and dodged the duplicate gate below: a
+            # --por A --port B pair smoked B while the operator
+            # believed the daemon port was A (probed this tick).
+            # Refuse the abbreviated spelling itself, by name,
+            # before argparse can expand it. Twin of client/dial.
+            _full = [o for o in _long_opts if o.startswith(_flag)]
+            if _full:
+                print(f"FAIL: {_flag} is an abbreviation of "
+                      f"{_full[0]} — spell it out — "
+                      f"bad argument, no query attempted")
+                return 1
         if _flag in ("--name", "--server", "--port"):
             if _flag in _seen:
                 print(f"FAIL: {_flag} given more than once — "
                       f"bad argument, no query attempted")
                 return 1
             _seen.add(_flag)
-    ap = argparse.ArgumentParser(description="smoke-test the .cyberspace daemon")
+    ap = argparse.ArgumentParser(description="smoke-test the .cyberspace daemon",
+                                 allow_abbrev=False)
     ap.add_argument("--name", default="genesis.cyberspace",
                     help="registered name to resolve (default: genesis.cyberspace)")
     ap.add_argument("--server", default="127.0.0.1")
