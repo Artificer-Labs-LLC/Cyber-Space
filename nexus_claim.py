@@ -146,6 +146,7 @@ def main(argv):
     expiry_days = mn._DEFAULT_EXPIRY_DAYS
     dry_run = False
     args = []
+    seen = set()
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -160,6 +161,11 @@ def main(argv):
             if not v:
                 print(f"refused: {opt} needs a value", file=sys.stderr)
                 return 2
+            if opt in seen:
+                print(f"refused: {opt} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(opt)
             if opt == "--key":
                 key_path = Path(v)
             elif opt == "--backup":
@@ -175,6 +181,11 @@ def main(argv):
                     return 2
                 expiry_days = int(txt)
         elif a in ("--key", "--backup", "--env-dir", "--expiry-days"):
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             i += 1
             if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)

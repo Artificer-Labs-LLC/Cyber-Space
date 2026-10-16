@@ -193,6 +193,26 @@ with tempfile.TemporaryDirectory() as td:
         _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
                f"following flag must refuse as {_flag} needs a value")
 
+    # A repeated value flag refuses by name: the parser silently
+    # last-won, so --key A --key B claimed with B while the operator
+    # believed it claimed with A -- twin of nexus_status's,
+    # nexus_preflight's and nexus_keygen's duplicate gates.
+    for _argv, _flag in (
+            (["--key", str(key), "--key", str(bak)], "--key"),
+            ([f"--key={key}", f"--key={bak}"], "--key"),
+            (["--backup", str(bak), f"--backup={bak}"], "--backup"),
+            ([f"--backup={bak}", "--backup", str(bak)], "--backup"),
+            (["--env-dir", str(td / "e1"), "--env-dir", str(td / "e2")],
+             "--env-dir"),
+            (["--expiry-days", "30", "--expiry-days=60"],
+             "--expiry-days")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nc.main(_argv)
+        _check(_code == 2 and f"{_flag} given more than once"
+               in _err.getvalue(),
+               f"duplicate {_flag} must refuse by name")
+
 if fails:
     print(f"{fails} FAILURES")
     sys.exit(1)
