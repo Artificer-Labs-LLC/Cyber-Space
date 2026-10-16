@@ -123,6 +123,12 @@ _check(ok and not blockers,
        "is a genuinely distinct seat and must stay ELIGIBLE: "
        f"{blockers}")
 
+run = dict(GOOD, candidate_machine_id="machine-ᚲ")
+ok, blockers = nh.evaluate(run)
+_check(ok and not blockers,
+       "a Runic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -300,6 +306,8 @@ for key, bad, why in [
      "canadian-gho-respelled same machine must fail"),
     ("candidate_machine_id", "ᗰachine-a",
      "canadian-carrier-go-respelled same machine must fail"),
+    ("candidate_machine_id", "ᛗachine-a",
+     "runic-ehwaz-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -479,6 +487,14 @@ for cand, orig, why in [
      "canadian-hk-respelled same operator must fail"),
     ("op-𑪼", "op-z",
      "canadian-spe-respelled same operator must fail"),
+    ("op-ᛕ", "op-k",
+     "runic-open-p-respelled same operator must fail"),
+    ("op-ᛁ", "op-l",
+     "runic-isaz-respelled same operator must fail"),
+    ("op-ᛐ", "op-l",
+     "runic-short-twig-tyr-respelled same operator must fail"),
+    ("op-ᛷ", "op-x",
+     "runic-gebo-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

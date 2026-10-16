@@ -365,6 +365,26 @@ _CONFUSABLES.update(str.maketrans({
     "ᐯ": "V", "ᕁ": "x", "ᕽ": "x", "𑪼": "Z",
 }))
 
+# Runic: the futhark's letters are likewise simple strokes,
+# and UTS #39 lists 5 of them as confusable with single Latin
+# letters -- mappings taken from confusables.txt at unicode.org
+# fetched this tick, not guessed, and surfaced by a full-table
+# audit of _norm against every letter-category UTS #39 mapping.
+# A seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: an EHWAZ seat and ISAZ, OPEN-P,
+# SHORT-TWIG-TYR and GEBO operator spellings each returned
+# ELIGIBLE as their own origin). Runic is caseless, so single
+# entries suffice. The punctuation runes (SINGLE and MULTIPLE
+# PUNCTUATION, CROSS PUNCTUATION) and the letters that fold
+# only to non-letters (KAUNA to a less-than sign, SHORT-TWIG-SOL
+# to an apostrophe) are not letters-to-letters and stay out;
+# the other runes keep glyphs no Latin letter has and stay
+# distinct.
+_CONFUSABLES.update(str.maketrans({
+    "ᛕ": "K", "ᛁ": "l", "ᛐ": "l", "ᛗ": "M",
+    "ᛷ": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
