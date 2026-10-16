@@ -89,6 +89,21 @@ with tempfile.TemporaryDirectory() as td:
         _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
                f"following flag must refuse as {_flag} needs a value")
 
+    # A repeated value flag refuses by name: the parser silently
+    # last-won, so --key A --key B checked B while the operator
+    # believed it checked A — twin of nexus_keygen's duplicate gate.
+    for _argv, _flag in (
+            (["--key", str(key), "--key", str(bak)], "--key"),
+            ([f"--key={key}", f"--key={bak}"], "--key"),
+            (["--backup", str(bak), f"--backup={bak}"], "--backup"),
+            ([f"--backup={bak}", "--backup", str(bak)], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = ns.main(_argv)
+        _check(_code == 2 and f"{_flag} given more than once"
+               in _err.getvalue(),
+               f"duplicate {_flag} must refuse by name")
+
     bak.unlink()
     code, lines = ns.status(key, bak, ROOT)
     _check(code == 1, "key without backup must be NOT READY")
