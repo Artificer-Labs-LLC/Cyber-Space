@@ -1000,6 +1000,37 @@ _CONFUSABLES.update(str.maketrans({
     "\u0561": "w",
 }))
 
+# Greek, completed: the Greek blocks above folded the common
+# look-alikes, but the full-table audit shows 9 more Greek
+# letters carry UTS #39 single-Latin mappings they missed --
+# DIGAMMA to F, YOT to j/J, capital IOTA to l, SAN to M,
+# SIGMA to o, SHO to p, SMALL CAPITAL GAMMA to r, and GAMMA
+# to y. Mappings taken from confusables.txt at unicode.org
+# (cached copy fetched 2026-10-15), not guessed. A seat
+# respelled with one rendered as the origin and compared
+# distinct (probed this tick: all nine spellings each
+# returned ELIGIBLE as their own origin). Entries are
+# spelled as explicit escapes. Capital IOTA is UTS #39's
+# own asymmetry, as with the Cyrillic Ukrainian I above:
+# the capital lists against l while the small (already
+# folded) lists against i, so this entry replaces the
+# first Greek block's IOTA-to-I. Capital GAMMA, capital
+# SIGMA, and final SIGMA have no UTS #39 single-Latin entry
+# of their own; they reach the fold through _norm's
+# case-folding to the small letters the table now holds.
+# DIGAMMA and SAN are listed in their capital forms as
+# UTS #39 lists them; their small letters have no UTS #39
+# entry at all and stay distinct. With these, no Greek
+# letter still escapes; the other Greek letters stay
+# distinct: THETA, for one, lists only against a
+# two-codepoint mapping (O plus a combining stroke),
+# outside this table's single-letter scope.
+_CONFUSABLES.update(str.maketrans({
+    "\u03dc": "F", "\u03f3": "j", "\u037f": "J",
+    "\u0399": "l", "\u03fa": "M", "\u03c3": "o",
+    "\u03f8": "p", "\u1d26": "r", "\u03b3": "y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
