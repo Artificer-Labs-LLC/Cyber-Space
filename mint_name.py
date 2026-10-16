@@ -115,6 +115,30 @@ def _write_secret(path, text, overwrite=False):
         os.close(fd)
 
 
+def _ensure_dir(d):
+    """Create dir d; any dir WE create is born 0700.
+
+    The name key and the hostd env are born 0600, but mkdir's
+    default left ~/.cyberspace and the hostd env dir world-listable
+    — the same leak nexus_keygen._ensure_parent closed for the Nexus
+    seats (mint_name cannot import it back: nexus_keygen imports
+    mint_name, so the twin lives here). Only dirs this call creates
+    are tightened — a pre-existing dir is the operator's own and is
+    left exactly as found.
+    """
+    d = Path(d)
+    missing = []
+    p = d
+    while not p.exists():
+        missing.append(p)
+        if p.parent == p:
+            break
+        p = p.parent
+    d.mkdir(parents=True, exist_ok=True)
+    for m in missing:
+        os.chmod(m, 0o700)
+
+
 def _hostd_env_text(label: str, priv_hex: str, mirror: str) -> str:
     """The hostd env file body. The three ACTIVE lines are exactly the
     required config resolver.host._config reads (name, name key, mirror);
@@ -354,7 +378,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     home = Path.home() / ".cyberspace"
-    home.mkdir(parents=True, exist_ok=True)
+    _ensure_dir(home)  # holds the name key: dirs we create born 0700
     key_path = home / f"{label}-name.key"
     if key_path.exists():
         # An existing key file that does not parse as hex (corrupt,
@@ -430,7 +454,7 @@ def main(argv: list[str]) -> int:
     print(f"Verified: {label}.cyberspace resolves to the name key")
 
     env_dir = Path(opts.get("--env-dir", str(home / "hostd")))
-    env_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dir(env_dir)  # holds the key-bearing env: born 0700
     env_path = env_dir / f"{label}.env"
     _write_secret(
         env_path,

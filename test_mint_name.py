@@ -68,6 +68,34 @@ for _args in ((123, "ab" * 32, "http://x"), ("foo", None, "http://x"),
               f"{type(e).__name__}, want ValueError")
         fails += 1
 
+# _ensure_dir: dirs mint_name creates to hold the name key / hostd
+# env are born 0700 (the files are 0600; a 0755 dir leaked their
+# names); a pre-existing dir is left exactly as found.
+import stat
+import tempfile
+
+with tempfile.TemporaryDirectory() as _td:
+    _base = os.path.join(_td, "a", "b")
+    mint_name._ensure_dir(_base)
+    for _p in (os.path.join(_td, "a"), _base):
+        _m = stat.S_IMODE(os.stat(_p).st_mode)
+        if _m != 0o700:
+            print(f"FAIL: _ensure_dir created {_p} at {oct(_m)}, want 0o700")
+            fails += 1
+    _pre = os.path.join(_td, "pre")
+    os.mkdir(_pre)
+    os.chmod(_pre, 0o755)
+    mint_name._ensure_dir(_pre)
+    _m = stat.S_IMODE(os.stat(_pre).st_mode)
+    if _m != 0o755:
+        print(f"FAIL: _ensure_dir tightened pre-existing dir to {oct(_m)}")
+        fails += 1
+    mint_name._ensure_dir(_base)  # idempotent on its own dirs
+    _m = stat.S_IMODE(os.stat(_base).st_mode)
+    if _m != 0o700:
+        print(f"FAIL: _ensure_dir re-run changed mode to {oct(_m)}")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)
