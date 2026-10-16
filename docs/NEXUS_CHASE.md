@@ -11,6 +11,12 @@ root-name ruling. `genesis.cyberspace` is abandoned: claimed
 2026-10-08 with a key that was not saved, locked until 2027-10-08.
 Never reclaim it, never substitute it, never work around the lock.
 
+Nexus is an ordinary first kept-key name with no special protocol
+power; Genesis node/log-key roles (log_id, witness exclusion, pin
+law) are not handed to Nexus. "Root" names only that it is the
+first kept-key claim and the Depth Test target — the protocol
+treats it exactly like any other name.
+
 ## Verified state when this packet was written (2026-10-15)
 
 - `nexus_status.py` on this tree: NOT READY, exit 1.
