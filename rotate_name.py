@@ -56,7 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fed.ed25519 import publickey, sign, checkvalid  # noqa: E402
-from mint_name import _write_secret, _valid_mirror, _ensure_dir  # noqa: E402
+from mint_name import _write_secret, _valid_mirror, _ensure_dir, _fsync_dir  # noqa: E402
 
 _LABEL_MAX = 63
 _DEFAULT_MIRROR = "http://127.0.0.1:8471"
@@ -217,6 +217,11 @@ def _write_record(path, text):
     os.replace alone does not make the renamed bytes durable, so a
     crash after a successful return could still publish an empty or
     truncated record — the same badjson stranding, one layer down.
+    The parent directory is fsynced after the replace too (the
+    _write_secret dir rule, ed4dc3a): file fsync makes the bytes
+    durable, not the renamed entry itself, so a crash could still
+    lose the new record's name and resurrect the old one beside a
+    .next seed it no longer describes.
     """
     path = Path(path)
     for _attempt in range(3):
@@ -250,6 +255,7 @@ def _write_record(path, text):
         except OSError:
             pass
         raise
+    _fsync_dir(path.parent)
 
 
 # Key-seed read bound: a seed file is 64 hex chars plus whitespace, yet

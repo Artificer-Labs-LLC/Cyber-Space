@@ -374,13 +374,21 @@ with _tempfile2.TemporaryDirectory() as _td:
     # .next seed — the _write_secret fsync rule (0bddade), one layer
     # down in the record half of the pair.
     _fsyncs = []
+    _dir_fsyncs = []
     _orig_fsync = os.fsync
-    os.fsync = lambda fd: _fsyncs.append(fd)
+    def _probe_fsync(fd):
+        _fsyncs.append(fd)
+        if _stat.S_ISDIR(os.fstat(fd).st_mode):
+            _dir_fsyncs.append(fd)
+    os.fsync = _probe_fsync
     try:
         _ftarget = _rdir / "fsync-rotate.json"
         rotate_name._write_record(_ftarget, "{}\n")
         if not _fsyncs:
             print("FAIL: _write_record did not fsync before close")
+            fails += 1
+        if not _dir_fsyncs:
+            print("FAIL: _write_record did not fsync the parent dir after replace")
             fails += 1
         if _ftarget.read_text() != "{}\n":
             print("FAIL: _write_record fsync probe content did not land")
