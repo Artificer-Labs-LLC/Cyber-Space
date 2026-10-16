@@ -819,7 +819,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tcp-only", action="store_true", help="skip UDP, speak DNS-over-TCP only"
     )
-    args = parser.parse_args(argv)
+    # argparse itself still raises SystemExit on the bad arguments
+    # no in-main gate can pre-empt -- an unknown flag, a value flag
+    # left dangling, a missing or surplus positional -- and on
+    # --help (code 0). Every gate above refuses by return, and the
+    # qtype/port gates removed type=/choices= for exactly this
+    # reason, yet a bare --bogus still crashed an in-process caller
+    # of main() (probed this tick). Convert argparse's exit into
+    # this CLI's return: its usage/error text has already printed,
+    # the code is argparse's own (2 for bad arguments, 0 for
+    # --help), and the __main__ seat re-raises it as the process
+    # exit, so shell behaviour is unchanged.
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
 
     if args.qtype is not None:
         # The qtype gate comes first, exactly where argparse's

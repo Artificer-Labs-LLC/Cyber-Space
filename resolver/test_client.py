@@ -1333,6 +1333,31 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("--qtype must be", err.getvalue())
 
+    def test_main_parse_errors_return_not_systemexit(self):
+        """CLI parse-error gate: the in-main gates refuse by return,
+        but argparse itself still raised SystemExit on the bad
+        arguments no gate can pre-empt -- an unknown flag, a value
+        flag left dangling, a missing or surplus positional -- so
+        an in-process caller of main() crashed on a bare --bogus
+        (probed). Those return 2 with argparse's own usage/error
+        text on stderr; --help returns 0 with usage on stdout. The
+        __main__ seat re-raises the return as the process exit, so
+        shell behaviour is unchanged."""
+        for argv in (["alice.cyberspace", "--bogus"],
+                     ["alice.cyberspace", "--port"],
+                     [],
+                     ["alice.cyberspace", "bob.cyberspace"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = client.main(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertIn("error", err.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = client.main(["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("usage", out.getvalue().lower())
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
