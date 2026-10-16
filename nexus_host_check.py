@@ -299,6 +299,25 @@ _CONFUSABLES.update(str.maketrans({
     "𐔧": "X", "𐔇": "Z",
 }))
 
+# Miao: the Pollard script's letters are likewise simple shapes,
+# and UTS #39 lists 9 of them as confusable with single Latin
+# letters -- mappings taken from confusables.txt at unicode.org
+# fetched this tick, not guessed, and surfaced by the same
+# full-table audit of _norm against every in-scope UTS #39
+# mapping. A seat respelled with one rendered as the origin
+# and compared distinct (probed this tick: an A seat returned
+# ELIGIBLE). Miao is unicameral, so single entries suffice;
+# _norm's case-fold unites them with the Latin lowercase (one
+# letter's own UTS #39 target is small l, another's capital L).
+# The other Miao letters keep glyphs no Latin letter has --
+# one folds only to Greek Gamma, another only to Greek Delta,
+# others to punctuation or digits -- and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𖽀": "A", "𖼨": "l", "𖼖": "L", "𖼵": "R",
+    "𖼺": "S", "𖼊": "T", "𖽂": "U", "𖼈": "V",
+    "𖽃": "Y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

@@ -104,6 +104,12 @@ _check(ok and not blockers,
        "an Elbasan letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+mia = dict(GOOD, candidate_machine_id="machine-𖼇")
+ok, blockers = nh.evaluate(mia)
+_check(ok and not blockers,
+       "a Miao letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -271,6 +277,8 @@ for key, bad, why in [
      "elbasan-se-respelled same machine must fail"),
     ("candidate_machine_id", "machi𐔓e-a",
      "elbasan-ne-respelled same machine must fail"),
+    ("candidate_machine_id", "m𖽀chine-a",
+     "miao-a-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -378,6 +386,22 @@ for cand, orig, why in [
      "elbasan-khe-respelled same operator must fail"),
     ("op-𐔇", "op-z",
      "elbasan-ei-respelled same operator must fail"),
+    ("op-𖼨", "op-l",
+     "miao-l-respelled same operator must fail"),
+    ("op-𖼖", "op-l",
+     "miao-L-respelled same operator must fail"),
+    ("op-𖼵", "op-r",
+     "miao-r-respelled same operator must fail"),
+    ("op-𖼺", "op-s",
+     "miao-s-respelled same operator must fail"),
+    ("op-𖼊", "op-t",
+     "miao-t-respelled same operator must fail"),
+    ("op-𖽂", "op-u",
+     "miao-u-respelled same operator must fail"),
+    ("op-𖼈", "op-v",
+     "miao-v-respelled same operator must fail"),
+    ("op-𖽃", "op-y",
+     "miao-y-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
