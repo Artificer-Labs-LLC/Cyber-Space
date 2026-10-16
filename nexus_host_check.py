@@ -1228,6 +1228,20 @@ def main(argv):
             print(__doc__.strip())
             return 0
         if a in _BOOL_FLAGS:
+            # A repeated boolean flag must refuse by name too: every
+            # value flag in this parser already does, and the equals
+            # spelling of a boolean is refused outright below, so a
+            # space-form repeat was the one flag spelling that passed
+            # silently -- an operator who typed --candidate-is-hq
+            # twice (a paste, a wrapped command) got a verdict with
+            # no sign the command they ran was not the command they
+            # wrote. Idempotent setting is not the point; the gate's
+            # contract is that any flag given more than once is named.
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             c[_BOOL_FLAGS[a]] = True
         elif a.startswith("--") and "=" in a:
             opt, _, v = a.partition("=")

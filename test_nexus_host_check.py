@@ -1420,6 +1420,24 @@ for _flag in ("--candidate-machine-id", "--origin-machine-id",
                f"duplicate {_flag} must refuse by name, got "
                f"{_code}: {_err.getvalue()!r}")
 
+# A repeated boolean flag must refuse by name too: every value
+# flag above already does and a boolean given an equals value is
+# refused outright, so a space-form repeat of --candidate-is-hq /
+# --origin-is-hq / --claim-key-present was the one flag spelling
+# that passed silently to a verdict. A single boolean still
+# reaches its verdict.
+for _bflag in ("--candidate-is-hq", "--origin-is-hq",
+               "--claim-key-present"):
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nh.main([_bflag, _bflag])
+    _check(_code == 2
+           and f"{_bflag} given more than once" in _err.getvalue(),
+           f"duplicate {_bflag} must refuse by name, got "
+           f"{_code}: {_err.getvalue()!r}")
+_check(nh.main(["--candidate-is-hq"]) == 1,
+       "a single boolean flag must still reach its verdict")
+
 if fails:
     print(f"test_nexus_host_check: {fails} FAIL")
     sys.exit(1)
