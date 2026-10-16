@@ -7,6 +7,8 @@ no key names keygen as NEXT and exits 1; a ready key+backup exits
 a key without a backup is NOT READY; and in every seat the claim
 and depth states read UNKNOWN (offline) -- never a guessed PASS.
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -74,6 +76,18 @@ with tempfile.TemporaryDirectory() as td:
            "empty equals value must be a usage refusal")
     _check(ns.main([f"--backup={bak}", "--key"]) == 2,
            "space form with a missing value must stay refused")
+
+    # A following -- flag is not a space-form value: --key --backup
+    # swallowed the backup flag as the key path and then blamed the
+    # real backup path as unknown, instead of naming --key -- twin
+    # of nexus_preflight's and nexus_keygen's space-form gates.
+    for _argv, _flag in ((["--key", "--backup", str(bak)], "--key"),
+                         (["--backup", "--key", str(key)], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = ns.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"following flag must refuse as {_flag} needs a value")
 
     bak.unlink()
     code, lines = ns.status(key, bak, ROOT)
