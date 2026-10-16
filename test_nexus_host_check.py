@@ -271,6 +271,19 @@ _check(not ok and blockers,
        "a Chakma-WAA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+mya = dict(GOOD, candidate_machine_id="machine-က")
+ok, blockers = nh.evaluate(mya)
+_check(ok and not blockers,
+       "a Myanmar letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+myam = dict(GOOD, candidate_machine_id="machine-ဝ",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(myam)
+_check(not ok and blockers,
+       "a Myanmar-WA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -727,6 +740,12 @@ for cand, orig, why in [
      "hanifi-ha-respelled same operator must fail"),
     ("op-𑄤", "op-o",
      "chakma-waa-respelled same operator must fail"),
+    ("op-င", "op-c",
+     "myanmar-nga-respelled same operator must fail"),
+    ("op-ၚ", "op-c",
+     "myanmar-mon-nga-respelled same operator must fail"),
+    ("op-ဝ", "op-o",
+     "myanmar-wa-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

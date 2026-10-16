@@ -608,6 +608,23 @@ _CONFUSABLES.update(str.maketrans({
     "𑄤": "o",
 }))
 
+# Myanmar: the script whose letter WA is likewise a plain
+# ring, and UTS #39 lists 3 of its letters as confusable with
+# single Latin letters (WA to o, NGA and MON NGA to c) --
+# mappings taken from confusables.txt at unicode.org (cached
+# copy fetched 2026-10-15), not guessed, and surfaced by a
+# full-table audit of _norm against every letter-category
+# UTS #39 mapping. A seat respelled with one rendered as the
+# origin and compared distinct (probed this tick: a WA machine
+# spelling and NGA and MON NGA operator spellings each returned
+# ELIGIBLE as their own origin). Myanmar has no case
+# distinction, so single entries suffice. The other Myanmar
+# letters stay distinct: KA, for one, has no UTS #39
+# single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "င": "c", "ၚ": "c", "ဝ": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
