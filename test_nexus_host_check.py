@@ -110,6 +110,12 @@ _check(ok and not blockers,
        "a Miao letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+oit = dict(GOOD, candidate_machine_id="machine-𐌒")
+ok, blockers = nh.evaluate(oit)
+_check(ok and not blockers,
+       "an Old Italic letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -279,6 +285,10 @@ for key, bad, why in [
      "elbasan-ne-respelled same machine must fail"),
     ("candidate_machine_id", "m𖽀chine-a",
      "miao-a-respelled same machine must fail"),
+    ("candidate_machine_id", "𐌑achine-a",
+     "olditalic-she-respelled same machine must fail"),
+    ("candidate_machine_id", "ma𐌂hine-a",
+     "olditalic-ke-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -402,6 +412,26 @@ for cand, orig, why in [
      "miao-v-respelled same operator must fail"),
     ("op-𖽃", "op-y",
      "miao-y-respelled same operator must fail"),
+    ("op-𐌁", "op-b",
+     "olditalic-be-respelled same operator must fail"),
+    ("op-𐌂", "op-c",
+     "olditalic-ke-respelled same operator must fail"),
+    ("op-𐌜", "op-b",
+     "olditalic-che-respelled same operator must fail"),
+    ("op-𐌉", "op-l",
+     "olditalic-i-respelled same operator must fail"),
+    ("op-𐌠", "op-l",
+     "olditalic-numeral-one-respelled same operator must fail"),
+    ("op-𐌑", "op-m",
+     "olditalic-she-respelled same operator must fail"),
+    ("op-𐌏", "op-o",
+     "olditalic-o-respelled same operator must fail"),
+    ("op-𐌕", "op-t",
+     "olditalic-te-respelled same operator must fail"),
+    ("op-𐌗", "op-x",
+     "olditalic-eks-respelled same operator must fail"),
+    ("op-𐌢", "op-x",
+     "olditalic-numeral-ten-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

@@ -318,6 +318,30 @@ _CONFUSABLES.update(str.maketrans({
     "𖽃": "Y",
 }))
 
+# Old Italic: the Etruscan-derived alphabet's letters likewise
+# duplicate Latin shapes, and UTS #39 lists 10 of its characters
+# as confusable with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org fetched this tick, not guessed,
+# and surfaced by the same full-table audit of _norm against
+# every in-scope UTS #39 mapping; this was the audit's last
+# uncovered alphabetic set. A seat respelled with one rendered
+# as the origin and compared distinct (probed this tick: B and
+# O seats returned ELIGIBLE). Old Italic is unicameral, so
+# single entries suffice; _norm's case-fold unites them with
+# the Latin lowercase (letter CHE's own UTS #39 target is small
+# b, letters I and NUMERAL ONE both target small l). The two
+# numeral signs are included because their UTS #39 targets are
+# Latin letters, unlike digit-target mappings, which stay out.
+# The other Old Italic letters keep glyphs no Latin letter has
+# -- KU folds only to Greek Koppa, ESS only to an asterisk, YE
+# only to a less-than sign, EF only to a digit -- and stay
+# distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐌁": "B", "𐌂": "C", "𐌜": "b", "𐌉": "l",
+    "𐌠": "l", "𐌑": "M", "𐌏": "O", "𐌕": "T",
+    "𐌗": "X", "𐌢": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
