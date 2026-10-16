@@ -96,7 +96,10 @@ def _write_secret(path, text, overwrite=False):
     path (no half-written secret over a live key). With overwrite, the
     write lands on a born-600 temp sibling + os.replace, so the live
     path is never half-written either. Content is the caller's text
-    byte-for-byte.
+    byte-for-byte. The write is fsynced before close (the core node-key
+    rule, e8c1c46): without it a crash after a successful return could
+    still leave a truncated seed on disk, and the seed-shape check on
+    the next read would strand that name key permanently.
     """
     path = Path(path)
     if overwrite and path.exists():
@@ -135,6 +138,7 @@ def _write_secret(path, text, overwrite=False):
         written = 0
         while written < len(data):
             written += os.write(fd, data[written:])
+        os.fsync(fd)
     finally:
         os.close(fd)
 

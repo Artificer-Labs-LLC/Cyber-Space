@@ -139,6 +139,37 @@ with tempfile.TemporaryDirectory() as _td:
         print(f"FAIL: second overwrite raised {type(e).__name__}: {e}")
         fails += 1
 
+# _write_secret fsyncs before close on BOTH paths (plain O_EXCL and
+# the overwrite temp sibling): a crash after a successful return must
+# not leave a truncated seed the next read's shape check strands —
+# the core node-key rule (e8c1c46) applied to the shared name-key
+# writer (mint, Nexus keygen primary+backup, rotate .next/.prev).
+with tempfile.TemporaryDirectory() as _td:
+    _p = os.path.join(_td, "k")
+    _fsyncs = []
+    _orig_fsync = os.fsync
+    os.fsync = lambda fd: _fsyncs.append(fd)
+    try:
+        mint_name._write_secret(_p, "seed-one")
+        if not _fsyncs:
+            print("FAIL: plain _write_secret did not fsync")
+            fails += 1
+        _fsyncs.clear()
+        mint_name._write_secret(_p, "seed-two", overwrite=True)
+        if not _fsyncs:
+            print("FAIL: overwrite _write_secret did not fsync")
+            fails += 1
+    finally:
+        os.fsync = _orig_fsync
+    with open(_p) as _f:
+        if _f.read() != "seed-two":
+            print("FAIL: fsync probe overwrite did not land 'seed-two'")
+            fails += 1
+    _m = stat.S_IMODE(os.stat(_p).st_mode)
+    if _m != 0o600:
+        print(f"FAIL: fsync probe secret at {oct(_m)}, want 0o600")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)
