@@ -87,10 +87,29 @@ def _doc_name(doc) -> str:
 _FETCH_MAX = 65536
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx, which _fetch reads as a failed fetch.
+    Twin of hold_open._NoRedirect / nexus_depth_check._NoRedirect.
+    urllib's default opener followed a mirror 301/302/303 to a
+    server of the mirror's choosing and accepted THAT server's
+    answer as the mirror's (probed 2026-10-16: a redirected chain
+    fetch returned the foreign target's document, and the client
+    was dialed to an address it never chose). A mirror answer is
+    only a mirror answer when it comes from the mirror itself;
+    a 3xx is a failed fetch, never a referral."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _fetch(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with _OPENER.open(req, timeout=20) as resp:
             raw = resp.read(_FETCH_MAX + 1)
             if len(raw) > _FETCH_MAX:
                 raise ChainError(f"mirror returned oversize response at {url}")

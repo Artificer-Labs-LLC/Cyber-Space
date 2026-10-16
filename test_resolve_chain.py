@@ -62,6 +62,7 @@ if terminal2 != PK_B.lower():
 # TypeError. Fetch and binding verification are stubbed (no network);
 # the gate must fire with the stub untouched.
 _fetch_calls = []
+_real_fetch = resolve_chain._fetch
 resolve_chain._fetch = lambda url: _fetch_calls.append(url) or {  # noqa: E731
     "node_pubkey": PK_B, "issued_at": "2026-01-01T00:00:00Z"}
 resolve_chain.verify_binding = lambda b: None  # noqa: E731
@@ -258,6 +259,99 @@ for _argv, _want in ((["--bogus"], 2),
     if _rc != _want:
         print(f"FAIL: main({_argv}) -> {_rc}, want {_want}")
         fails += 1
+
+# _fetch redirect belt: urllib's default opener followed a mirror
+# 301/302/303 to a foreign server and accepted its document as the
+# mirror's (probed 2026-10-16) — the client was also dialed to an
+# address it never chose. _fetch now rides a no-redirect opener:
+# a 3xx is a failed fetch (ChainError), the target is never
+# contacted, and a direct 200 from the mirror itself still parses.
+import threading as _threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler as _H, HTTPServer as _S  # noqa: E402
+
+resolve_chain._fetch = _real_fetch
+_thits = []
+
+
+class _TTarget(_H):
+    def do_GET(self):
+        _thits.append(self.path)
+        out = b'{"stolen": true}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+class _TDirect(_H):
+    def do_GET(self):
+        out = b'{"name": "foo", "rotations": []}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+_ttarget = _S(("127.0.0.1", 0), _TTarget)
+_threading.Thread(target=_ttarget.serve_forever, daemon=True).start()
+_tport = _ttarget.server_address[1]
+
+
+def _tmirror(code):
+    class _TM(_H):
+        def do_GET(self):
+            self.send_response(code)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{_tport}/stolen")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    return _TM
+
+
+_tservers = []
+try:
+    for _code in (301, 302, 303, 307, 308):
+        _m = _S(("127.0.0.1", 0), _tmirror(_code))
+        _tservers.append(_m)
+        _threading.Thread(target=_m.serve_forever, daemon=True).start()
+        _thits.clear()
+        try:
+            _got = resolve_chain._fetch(
+                f"http://127.0.0.1:{_m.server_address[1]}/chain")
+            print(f"FAIL: _fetch followed mirror redirect {_code}: {_got!r}")
+            fails += 1
+        except resolve_chain.ChainError:
+            pass
+        if _thits:
+            print(f"FAIL: redirect {_code} contacted target: {_thits!r}")
+            fails += 1
+    _direct = _S(("127.0.0.1", 0), _TDirect)
+    _tservers.append(_direct)
+    _threading.Thread(target=_direct.serve_forever, daemon=True).start()
+    if resolve_chain._fetch(
+            f"http://127.0.0.1:{_direct.server_address[1]}/chain") != {
+            "name": "foo", "rotations": []}:
+        print("FAIL: direct mirror 200 no longer parses")
+        fails += 1
+    if resolve_chain._NoRedirect().redirect_request(
+            None, None, 302, "Found", {}, "http://127.0.0.1/") is not None:
+        print("FAIL: _NoRedirect.redirect_request is not None")
+        fails += 1
+finally:
+    for _srv in _tservers:
+        _srv.shutdown()
+    _ttarget.shutdown()
 
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
