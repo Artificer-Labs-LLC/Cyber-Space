@@ -58,6 +58,27 @@ def _same_file(a, b):
     return Path(a).resolve() == Path(b).resolve()
 
 
+def _ensure_parent(path):
+    """Create path's parent dirs; any dir WE create is born 0700.
+
+    The key file is born 0600, but mkdir's default (0755) left the
+    directory holding the root name key world-listable. Only dirs
+    this call creates are tightened — a pre-existing dir is the
+    operator's own and is left exactly as found.
+    """
+    parent = Path(path).parent
+    missing = []
+    p = parent
+    while not p.exists():
+        missing.append(p)
+        if p.parent == p:
+            break
+        p = p.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    for d in missing:
+        os.chmod(d, 0o700)
+
+
 def generate(key_path, backup_path):
     """Write key + backup, verify via the preflight's own checks.
 
@@ -73,8 +94,8 @@ def generate(key_path, backup_path):
     seed_hex = seed.hex()
     key_path = Path(key_path)
     backup_path = Path(backup_path)
-    key_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_parent(key_path)
+    _ensure_parent(backup_path)
     _write_secret(key_path, seed_hex)       # O_EXCL: never overwrite
     _write_secret(backup_path, seed_hex)    # O_EXCL: never overwrite
     pub_hex, problems = np.check_key_file(key_path)

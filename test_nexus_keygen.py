@@ -90,6 +90,19 @@ with tempfile.TemporaryDirectory() as td:
     _check(not dangling.exists(),
            "partial generation has no backup copy (dangling link only)")
 
+    # A parent dir keygen itself creates is born 0700 (the key's
+    # directory must not be world-listable); a pre-existing dir is
+    # left exactly as found.
+    nested = td / "vault" / "nexus-name.key"
+    pub3, problems3 = nk.generate(nested, td / "vault" / "nexus-name.key.bak")
+    _check(problems3 == [], f"nested generation must verify, got {problems3}")
+    _check(stat.S_IMODE((td / "vault").stat().st_mode) == 0o700,
+           "keygen-created parent dir must be born 0700")
+    before_mode = stat.S_IMODE(td.stat().st_mode)
+    nk.generate(td / "plain.key", td / "plain.key.bak")
+    _check(stat.S_IMODE(td.stat().st_mode) == before_mode,
+           "pre-existing parent dir mode must be left unchanged")
+
 if fails:
     print(f"{fails} FAILURES")
     sys.exit(1)
