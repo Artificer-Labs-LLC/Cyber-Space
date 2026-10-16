@@ -110,11 +110,25 @@ def check_backup(primary_path, backup_path):
     if mode & 0o077:
         problems.append(f"backup {b} is group/other-accessible "
                         f"(mode {mode:04o})")
+    # Bounded reads, twin of check_key_file's _SEED_MAX cap above and
+    # mint_name._read_seed's: a backup is a copy of a seed file, which
+    # is never over _SEED_MAX bytes, yet this seat loaded BOTH files
+    # via read_bytes() unbounded before comparing (probed 2026-10-16:
+    # a 50 MB backup pulled ~63 MB RSS into a readiness check). Read
+    # at most _SEED_MAX + 1 bytes of each; anything larger is not a
+    # copy of the seed and blocks by size, never by full comparison.
     try:
-        primary_raw = Path(primary_path).read_bytes()
-        backup_raw = b.read_bytes()
+        with Path(primary_path).open("rb") as f:
+            primary_raw = f.read(_SEED_MAX + 1)
+        with b.open("rb") as f:
+            backup_raw = f.read(_SEED_MAX + 1)
     except OSError as e:
         return problems + [f"backup comparison unreadable: {e}"]
+    if len(primary_raw) > _SEED_MAX or len(backup_raw) > _SEED_MAX:
+        return problems + [f"backup comparison oversize: a backup is "
+                           f"a copy of the seed file, which never "
+                           f"exceeds {_SEED_MAX} bytes — an oversize "
+                           f"primary or backup is not a verified copy"]
     if primary_raw.strip() != backup_raw.strip():
         problems.append("backup does not match the primary key — "
                         "a mismatched backup is no backup")

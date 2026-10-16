@@ -93,6 +93,21 @@ with tempfile.TemporaryDirectory() as td:
         _check(not _ready and any("same file" in b for b in _bl),
                f"same-file backup {seat} must block READY by name")
 
+    # Oversize backup: blocks by size, named — check_backup must not
+    # load either file unbounded (both are copies of a <=_SEED_MAX
+    # seed file). Oversize primary via the direct seat blocks too.
+    bak.write_bytes(b"A" * (np._SEED_MAX + 1))
+    _check(any("oversize" in p for p in np.check_backup(key, bak)),
+           "oversize backup must block by size, named")
+    bak.write_text(seed.hex())
+    big = td / "big.key"
+    big.write_bytes(b"B" * (np._SEED_MAX + 1))
+    _check(any("oversize" in p for p in np.check_backup(big, bak)),
+           "oversize primary must block check_backup by size, named")
+    ready, pub, blockers = np.preflight("nexus", key, bak, ROOT)
+    _check(ready and blockers == [],
+           "bounded backup check must keep a matching pair READY")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)
