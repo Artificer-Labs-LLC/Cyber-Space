@@ -193,6 +193,21 @@ with tempfile.TemporaryDirectory() as td:
         _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
                f"following flag must refuse as {_flag} needs a value")
 
+    # -h is a flag token too, not a space-form value: --key -h
+    # swallowed the help flag as the key path and reported on a
+    # file named "-h" in the cwd while the operator believed the
+    # kept key was checked (probed) -- twin of nexus_preflight's
+    # -h gate (d29e350). All four flags refuse it as a missing value.
+    for _argv, _flag in ((["--key", "-h"], "--key"),
+                         (["--backup", "-h"], "--backup"),
+                         (["--env-dir", "-h"], "--env-dir"),
+                         (["--expiry-days", "-h"], "--expiry-days")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nc.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"-h must refuse as {_flag} needs a value")
+
     # A repeated value flag refuses by name: the parser silently
     # last-won, so --key A --key B claimed with B while the operator
     # believed it claimed with A -- twin of nexus_status's,
