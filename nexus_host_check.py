@@ -895,6 +895,25 @@ _CONFUSABLES.update(str.maketrans({
     "\uab81": "r",
 }))
 
+# Vedic: the script's only letter-to-single-Latin mapping.
+# VEDIC SIGN JIHVAMULIYA (U+1CF5, category Lo despite the
+# SIGN in its name) is cut as a plain Latin X, and UTS #39
+# lists it against Latin X. A seat respelled with it
+# rendered as the origin and compared distinct (probed
+# this tick: machine and operator spellings each returned
+# ELIGIBLE as their own origin). Vedic has no case
+# distinction, so a single entry suffices; _norm's
+# case-fold unites it with the Latin lowercase. It is the
+# script's only letter-to-single-Latin mapping in the
+# full-table audit (150 escaping before this fold): the
+# remaining Vedic entries fold to combining marks, an
+# apostrophe pair, or a Devanagari letter, and SIGN
+# UPADHMANIYA (U+1CF6) has no UTS #39 entry at all -- all
+# stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "\u1cf5": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
