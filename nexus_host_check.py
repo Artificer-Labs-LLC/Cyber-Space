@@ -207,6 +207,23 @@ _CONFUSABLES.update(str.maketrans({
     "ꓜ": "Z",
 }))
 
+# Deseret: the phonetic alphabet's letters were cut to simple
+# geometric shapes, several of which duplicate Latin letters, and
+# UTS #39 lists 7 of them as confusable with single Latin letters
+# -- mappings taken from confusables.txt at unicode.org fetched
+# this tick, not guessed, and confirmed by a full-table audit of
+# _norm against every in-scope UTS #39 mapping (the audit is what
+# surfaced Deseret). A seat respelled with one rendered as the
+# origin and compared distinct (probed this tick: chee and
+# long-o seats returned ELIGIBLE). Both cases are listed, as
+# UTS #39 lists both; _norm's case-fold unites them. The other
+# Deseret letters have glyphs no Latin letter has (long i, for
+# one) and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐐽": "c", "𐐕": "C", "𐐛": "L", "𐐬": "o", "𐐄": "O",
+    "𐑈": "s", "𐐠": "S",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth

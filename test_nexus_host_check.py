@@ -74,6 +74,12 @@ _check(ok and not blockers,
        "a Lisu letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+des = dict(GOOD, candidate_machine_id="machine-𐐨")
+ok, blockers = nh.evaluate(des)
+_check(ok and not blockers,
+       "a Deseret letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -221,6 +227,10 @@ for key, bad, why in [
      "lisu-e-respelled same machine must fail"),
     ("candidate_operator", "op-ꓮ",
      "lisu-a-respelled same operator must fail"),
+    ("candidate_machine_id", "ma𐐽hine-a",
+     "deseret-chee-respelled same machine must fail"),
+    ("candidate_machine_id", "ma𐐕hine-a",
+     "deseret-capital-chee-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -262,6 +272,16 @@ for cand, orig, why in [
      "lisu-pha-respelled same operator must fail"),
     ("op-ꓳ", "op-o",
      "lisu-o-respelled same operator must fail"),
+    ("op-𐑈", "op-s",
+     "deseret-zhee-respelled same operator must fail"),
+    ("op-𐐠", "op-s",
+     "deseret-capital-zhee-respelled same operator must fail"),
+    ("op-𐐬", "op-o",
+     "deseret-long-o-respelled same operator must fail"),
+    ("op-𐐄", "op-o",
+     "deseret-capital-long-o-respelled same operator must fail"),
+    ("op-𐐛", "op-l",
+     "deseret-eth-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
