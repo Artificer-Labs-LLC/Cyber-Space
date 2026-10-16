@@ -471,6 +471,26 @@ _check(not ok and blockers,
        "a Bopomofo-A-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+cjkc = dict(GOOD, candidate_machine_id="machine-中")
+ok, blockers = nh.evaluate(cjkc)
+_check(ok and not blockers,
+       "a CJK ideograph with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+cjkt = dict(GOOD, candidate_machine_id="machine-丅",
+            origin_machine_id="machine-t")
+ok, blockers = nh.evaluate(cjkt)
+_check(not ok and blockers,
+       "a CJK-U+4E05-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+cjky = dict(GOOD, candidate_machine_id="machine-丫",
+            origin_machine_id="machine-y")
+ok, blockers = nh.evaluate(cjky)
+_check(not ok and blockers,
+       "a CJK-U+4E2B-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -975,6 +995,10 @@ for cand, orig, why in [
      "bopomofo-x-respelled same operator must fail"),
     ("op-ㄚ", "op-y",
      "bopomofo-a-respelled same operator must fail"),
+    ("op-丅", "op-t",
+     "cjk-u4e05-respelled same operator must fail"),
+    ("op-丫", "op-y",
+     "cjk-u4e2b-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

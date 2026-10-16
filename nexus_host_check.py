@@ -804,6 +804,27 @@ _CONFUSABLES.update(str.maketrans({
     "ㄒ": "T", "ㄚ": "Y",
 }))
 
+# CJK: two unified ideographs are cut as plain Latin shapes
+# (U+4E05 a plain T, U+4E2B a plain Y), and UTS #39 lists
+# each as confusable with a single Latin letter (U+4E05->T,
+# U+4E2B->Y), the script's only letter-to-single-Latin
+# mappings in the table -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table
+# audit of _norm against every letter-category UTS #39
+# mapping (163 still escaping before this fold). A seat
+# respelled with one rendered as the origin and compared
+# distinct (probed this tick: U+4E05 and U+4E2B machine
+# spellings and U+4E05 and U+4E2B operator spellings each
+# returned ELIGIBLE as their own origin). CJK ideographs
+# have no case distinction, so single entries suffice;
+# _norm's case-fold unites them with the Latin lowercase.
+# The other ideographs stay distinct: U+4E2D, for one, has
+# no UTS #39 single-Latin entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "丅": "T", "丫": "Y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
