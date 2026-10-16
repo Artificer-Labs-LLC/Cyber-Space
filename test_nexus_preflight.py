@@ -214,6 +214,21 @@ with tempfile.TemporaryDirectory() as td:
         _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
                f"following flag must refuse as {_flag} needs a value")
 
+    # -h is a flag token too, not a space-form value: --key -h
+    # swallowed the help flag as the key path and reported on a
+    # file named "-h" in the cwd while the operator believed the
+    # kept key was checked (probed) -- twin of nexus_status's
+    # -h gate (212ea75). Both flags refuse it as a missing value.
+    for _argv, _flag in ((["--key", "-h",
+                           "--backup", str(bak)], "--key"),
+                         (["--backup", "-h",
+                           "--key", str(key)], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = np.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"-h must refuse as {_flag} needs a value")
+
     # A repeated value flag refuses by name: the parser silently
     # last-won, so --key A --key B checked B while the operator
     # believed it checked A — twin of nexus_keygen's duplicate gate.
