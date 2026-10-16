@@ -589,6 +589,25 @@ _CONFUSABLES.update(str.maketrans({
     "𐴇": "o",
 }))
 
+# Chakma: the script whose letter WAA is likewise a plain
+# ring, and UTS #39 lists it as confusable with the single
+# Latin letter o, the script's only letter-to-single-Latin
+# mapping in the table -- mapping taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with it rendered as the origin and compared
+# distinct (probed this tick: a WAA machine spelling and a WAA
+# operator spelling each returned ELIGIBLE as their own
+# origin). Chakma has no case distinction, so a single entry
+# suffices. The other Chakma letters stay distinct: AA, for
+# one, has no UTS #39 single-Latin entry (its entry is a
+# multi-character mapping), and DANDA folds to l but is
+# punctuation, outside this table's letter scope.
+_CONFUSABLES.update(str.maketrans({
+    "𑄤": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
