@@ -431,6 +431,26 @@ _check(not ok and blockers,
        "a Malayalam-TTA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+ethc = dict(GOOD, candidate_machine_id="machine-ለ")
+ok, blockers = nh.evaluate(ethc)
+_check(ok and not blockers,
+       "an Ethiopic syllable with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+ethp = dict(GOOD, candidate_machine_id="machine-ዐ",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(ethp)
+_check(not ok and blockers,
+       "an Ethiopic-PHARYNGEAL-A-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+ethh = dict(GOOD, candidate_machine_id="machine-ሀ",
+            origin_machine_id="machine-u")
+ok, blockers = nh.evaluate(ethh)
+_check(not ok and blockers,
+       "an Ethiopic-HA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -927,6 +947,10 @@ for cand, orig, why in [
      "malayalam-ttha-respelled same operator must fail"),
     ("op-ട", "op-s",
      "malayalam-tta-respelled same operator must fail"),
+    ("op-ዐ", "op-o",
+     "ethiopic-pharyngeal-a-respelled same operator must fail"),
+    ("op-ሀ", "op-u",
+     "ethiopic-ha-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
