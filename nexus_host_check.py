@@ -1087,6 +1087,25 @@ _CONFUSABLES.update(str.maketrans({
     "\U0001d6a5": "j",
 }))
 
+# The three singleton CAPITAL I spellings outside the styled
+# blocks above: FULLWIDTH LATIN CAPITAL LETTER I, SCRIPT
+# CAPITAL I, and BLACK-LETTER CAPITAL I. All three NFKC-land
+# on ASCII I (case-folds to i) while UTS #39 lists each
+# against l -- the same stemless-I asymmetry as the styled
+# capitals. Mappings taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not guessed,
+# spelled as escapes; the pre-NFKC translate must carry
+# them for the same reason as the mathematical set. Their
+# small/fullwidth-i counterparts need no entry: FULLWIDTH
+# LATIN SMALL LETTER I is listed by UTS #39 against i
+# itself, which is exactly where NFKC already lands it.
+# ASCII I itself stays unfolded (within-Latin, out of
+# scope). With these, the only letter mappings still
+# escaping are the within-Latin set (44).
+_CONFUSABLES.update(str.maketrans({
+    "\uff29": "l", "\u2110": "l", "\u2111": "l",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

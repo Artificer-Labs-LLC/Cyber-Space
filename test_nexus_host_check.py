@@ -770,6 +770,31 @@ for bad, orig, why in [
            f"a MATHEMATICAL-{why}-respelled same operator must fail "
            f"(bar blockers: {blockers})")
 
+sgctl = dict(GOOD, candidate_machine_id="machine-\uff2b")
+ok, blockers = nh.evaluate(sgctl)
+_check(ok and not blockers,
+       "a fullwidth letter whose UTS target matches its NFKC "
+       f"landing is a genuinely distinct seat and must stay "
+       f"ELIGIBLE: {blockers}")
+
+for bad, why in [
+    ("\uff29", "FULLWIDTH CAPITAL I"),
+    ("\u2110", "SCRIPT CAPITAL I"),
+    ("\u2111", "BLACK-LETTER CAPITAL I"),
+]:
+    sg = dict(GOOD, candidate_machine_id="machine-" + bad,
+              origin_machine_id="machine-l")
+    ok, blockers = nh.evaluate(sg)
+    _check(not ok and blockers,
+           f"a {why}-respelled same machine must fail "
+           f"(bar blockers: {blockers})")
+    sg = dict(GOOD, candidate_operator="op-" + bad,
+              origin_operator="op-l")
+    ok, blockers = nh.evaluate(sg)
+    _check(not ok and blockers,
+           f"a {why}-respelled same operator must fail "
+           f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
