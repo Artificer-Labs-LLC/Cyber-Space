@@ -35,9 +35,34 @@ from fed import ed25519 as _fed_ed25519
 from fed import envelope as _fed_env
 import rendezvous
 
+def _ensure_private_dir(d):
+    """Create dir d; any dir WE create is born 0700.
+
+    _DB_DIR holds .node.key (the node's federation identity seed,
+    born 0600) and cybernet.db, but plain makedirs left a fresh
+    CYBERNET_DB_DIR at the umask default (0755, probed 2026-10-16) —
+    world-listable and world-traversable, the same leak
+    mint_name._ensure_dir and nexus_keygen._ensure_parent closed
+    for the name-key seats. Only dirs this call creates are
+    tightened — a pre-existing dir (the repo-dir default included)
+    is the operator's own and is left exactly as found.
+    """
+    missing = []
+    p = os.path.abspath(d)
+    while not os.path.exists(p):
+        missing.append(p)
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    os.makedirs(d, exist_ok=True)
+    for m in missing:
+        os.chmod(m, 0o700)
+
+
 _DB_DIR = os.environ.get("CYBERNET_DB_DIR") or os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_DB_DIR, "cybernet.db")
-os.makedirs(_DB_DIR, exist_ok=True)
+_ensure_private_dir(_DB_DIR)
 NAME_RE = re.compile(r"^[a-z0-9_-]{3,32}$")
 CAP_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 MAX_BODY = 2000

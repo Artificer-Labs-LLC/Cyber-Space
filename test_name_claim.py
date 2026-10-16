@@ -14,11 +14,13 @@ Run: cd ~/workspace/cybernet && ./venv/bin/python test_name_claim.py
 """
 
 import os
+import stat
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _name_claim_beats, _name_claim_payload, _node_url_host, _old_binding_beaten, _parse_claim_time, _reach_canonical, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _ensure_private_dir, _name_claim_beats, _name_claim_payload, _node_url_host, _old_binding_beaten, _parse_claim_time, _reach_canonical, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -315,8 +317,31 @@ def claim_payload_cases():
                 check(f"{nm} field{i} {bad!r} refused as ValueError", False, "built")
 
 
+def db_dir_cases():
+    print("db dir privacy:")
+    def mode(p):
+        return stat.S_IMODE(os.stat(p).st_mode)
+    with tempfile.TemporaryDirectory() as td:
+        fresh = os.path.join(td, "a", "b")
+        _ensure_private_dir(fresh)
+        check("fresh nested db dir born 0700", mode(fresh) == 0o700,
+              oct(mode(fresh)))
+        check("fresh parent dir born 0700",
+              mode(os.path.join(td, "a")) == 0o700,
+              oct(mode(os.path.join(td, "a"))))
+        _ensure_private_dir(fresh)  # re-run is a no-op, never re-chmods
+        check("re-run keeps created dir 0700", mode(fresh) == 0o700)
+        pre = os.path.join(td, "pre")
+        os.mkdir(pre)
+        os.chmod(pre, 0o755)
+        _ensure_private_dir(pre)
+        check("pre-existing dir left exactly as found", mode(pre) == 0o755,
+              oct(mode(pre)))
+
+
 def main():
     print("names-registry primitive tests (core.py):")
+    db_dir_cases()
     label_cases()
     conflict_cases()
     claim_beats_pubkey_cases()
