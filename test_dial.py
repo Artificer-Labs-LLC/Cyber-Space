@@ -210,6 +210,22 @@ class DialPlanTests(unittest.TestCase):
             self.assertEqual(code, 4, mirror)
             self.assertIn("malformed mirror URL", lines[0])
 
+    def test_misspelled_mirror_is_bad_argument(self):
+        # Twin of mint_name._valid_mirror's gates: a userinfo spelling
+        # dials a host the operator never named, a query/fragment
+        # spelling mangles the appended fetch, and an out-of-class
+        # host can never be dialed as written — all are exit 4 (bad
+        # argument), never exit 2 (a well-formed mirror merely silent).
+        for mirror in ("http://127.0.0.1@127.0.0.1:8471",
+                       "http://127.0.0.1:8471?x=1",
+                       "http://127.0.0.1:8471#frag",
+                       "http://x%40evil.example:8471",
+                       "http://x\\evil.example:8471",
+                       "http://é.example:8471"):
+            code, lines = dial.plan(ADDR, mirror)
+            self.assertEqual(code, 4, mirror)
+            self.assertIn("malformed mirror URL", lines[0])
+
     def test_no_binding_is_name_side(self):
         with _fixture():
             code, lines = dial.plan(ADDR, MIRROR)

@@ -25,6 +25,7 @@ reach (silent host) | 4 bad arguments.
 """
 
 import argparse
+import ipaddress
 import os
 import sys
 import urllib.parse
@@ -78,13 +79,35 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
     # parts.port raises for the last two) passed this gate and read as
     # the same false "silent". A port no dial can ever attempt is a
     # bad argument, exactly as core._valid_node_url ruled for node URLs.
+    # The rest of the mirror shape is mint_name._valid_mirror's: a
+    # userinfo spelling dials the host AFTER the "@" while spelling
+    # like the one before it, a query/fragment spelling mangles the
+    # appended "/api/v1/..." fetch, and a host spelled outside the
+    # stored-address host class (percent escape, backslash, non-ASCII)
+    # can never be dialed as written — each passed this gate and read
+    # as the same false "silent" (probed this tick). A bracketed IPv6
+    # literal stays valid, judged by parsing it (zone included).
     try:
         parts = urllib.parse.urlsplit(mirror)
         port = parts.port
+        host = parts.hostname
+        if not host:
+            host_ok = False
+        elif ":" in host:
+            try:
+                ipaddress.IPv6Address(host)
+                host_ok = True
+            except ValueError:
+                host_ok = False
+        else:
+            host_ok = all(c.isascii() and (c.isalnum() or c in "._-")
+                          for c in host)
         mirror_ok = (
             parts.scheme in ("http", "https")
-            and bool(parts.hostname)
+            and host_ok
+            and parts.username is None and parts.password is None
             and (port is None or 1 <= port <= 65535)
+            and "?" not in mirror and "#" not in mirror
         )
     except ValueError:
         mirror_ok = False
