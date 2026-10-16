@@ -251,6 +251,26 @@ for _argv in (("probe", "--expiry-days", "7", "--expiry-days", "9"),
         print(f"FAIL: main duplicate {_argv} -> rc={_rc} err={_err.getvalue()!r}")
         fails += 1
 
+# main() flag-shaped gate: a space-form value starting with "-" is a
+# flag token, not a value -- --env-dir -x took "-x" as the directory
+# and proceeded to generate a key and attempt a claim (probed), the
+# Nexus -h spoof generalised to the generic mint seat. Both flags x
+# -x must refuse by name (exit 2) before any key/network.
+for _argv in (("probe", "--env-dir", "-x"),
+              ("probe", "--expiry-days", "-x")):
+    _flag = _argv[1]
+    _err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(_err):
+            _rc = mint_name.main(list(_argv))
+    except Exception as _e:  # noqa: BLE001
+        print(f"FAIL: main flag-shaped {_argv} raised {type(_e).__name__}: {_e}")
+        fails += 1
+        continue
+    if _rc != 2 or f"{_flag} needs a value" not in _err.getvalue():
+        print(f"FAIL: main flag-shaped {_argv} -> rc={_rc} err={_err.getvalue()!r}")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)

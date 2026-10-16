@@ -372,7 +372,16 @@ def main(argv: list[str]) -> int:
                 return 2
             if not eq:
                 i += 1
-                if i >= len(argv) or argv[i].startswith("--"):
+                # Any flag-shaped token is a flag token, not a value:
+                # the "--" check alone let --env-dir -x take "-x" as
+                # the directory and proceed to generate a key and
+                # attempt a claim (probed this tick), the Nexus -h
+                # spoof generalised to the generic mint seat. No
+                # documented value for either flag here begins with
+                # "-"; the equals spelling stays the deliberate way
+                # to write one. Refuse it as a missing value, twin
+                # of the Nexus parsers' flag-shaped gate (c113e46).
+                if i >= len(argv) or argv[i].startswith("-"):
                     print(f"refused: {name} needs a value", file=sys.stderr)
                     return 2
                 val = argv[i]
