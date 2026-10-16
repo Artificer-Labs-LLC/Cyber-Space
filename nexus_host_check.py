@@ -127,6 +127,24 @@ _CONFUSABLES.update(str.maketrans({
     "օ": "o", "Օ": "O",
 }))
 
+# Latin small capitals and the single-story a/g: these are not
+# different letters that happen to look alike (the l/1, O/0 scope
+# exclusion above) -- a small capital IS its letter in small-cap
+# dress (its Unicode name says so), and ɑ/ɡ are the single-story
+# printed forms of a/g. NFKC folds neither. A seat respelled with
+# one rendered as the origin in a log or a reviewer's eye and
+# compared distinct. Only the plain small capitals fold; the
+# barred, hooked, reversed and turned variants are genuinely
+# different letters and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e",
+    "ꜰ": "f", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j",
+    "ᴋ": "k", "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o",
+    "ᴘ": "p", "ꞯ": "q", "ʀ": "r", "ꜱ": "s", "ᴛ": "t",
+    "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
+    "ɑ": "a", "ɡ": "g",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
