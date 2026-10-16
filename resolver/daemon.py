@@ -300,8 +300,18 @@ def _daemon_config_warnings() -> list[str]:
             else:
                 host_ok = all(c.isascii() and (c.isalnum() or c in "._-")
                               for c in host)
+            # The raw-string gate is _valid_mirror's/dial.plan's too,
+            # and this twin had not carried it: whitespace/control
+            # characters surviving the outer strip (an interior
+            # newline/tab — urlsplit silently strips \t\r\n before
+            # parsing — a space, or a \x01 in the path) passed every
+            # check here silent, though no honest mirror contains one
+            # and the fetch can never ask for the URL as written.
+            ws_ok = not any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F
+                            for c in raw)
             mirror_ok = (
-                parts.scheme in ("http", "https")
+                ws_ok
+                and parts.scheme in ("http", "https")
                 and host_ok
                 and parts.username is None and parts.password is None
                 and (port is None or 1 <= port <= 65535)

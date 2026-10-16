@@ -175,6 +175,23 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         self.assertEqual(
             self._warns(CYBERNET_MIRROR_URL="http://mirror.example:8471/prefix"), [])
 
+    def test_mirror_whitespace_control_warns(self):
+        # Twin of dial.plan's raw-string gate (ac61d04): interior
+        # whitespace/control surviving the outer strip — urlsplit
+        # silently strips \t\r\n, a space or \x01 in the path is
+        # never fetchable as written — warned silent before.
+        for bad in ("http://mirror.example:8471/a b",
+                    "http://mirror.example:8471/a\nb",
+                    "http://mirror.example:8471/a\tb",
+                    "http://mirror.example:8471/\x01x",
+                    "http://mirror.example:8471/\x7fx"):
+            warns = self._warns(CYBERNET_MIRROR_URL=bad)
+            self.assertEqual(len(warns), 1, bad)
+            self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+            self.assertNotIn(bad, warns[0])
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="http://mirror.example:8471/prefix"), [])
+
     def test_bind_ipv4_and_wildcard_are_silent(self):
         self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="127.0.0.1"), [])
         self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="0.0.0.0"), [])
