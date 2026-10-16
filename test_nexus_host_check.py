@@ -1348,6 +1348,26 @@ for cand, orig, why in [
     ok, blockers = nh.evaluate(seat)
     _check(not ok and blockers, f"{why} (bar blockers: {blockers})")
 
+# The equals spelling (--feed=gossip) is accepted by main, twin
+# of the both-spellings parsers nexus_keygen / nexus_preflight /
+# nexus_status / nexus_claim already carry; an empty equals value
+# and a boolean flag given a value are usage refusals, and the
+# space form missing its value stays refused.
+_eq = [f"--{k.replace('_', '-')}={v}" for k, v in (
+    ("candidate-machine-id", "machine-B"),
+    ("origin-machine-id", "machine-A"),
+    ("candidate-operator", "op-B"), ("origin-operator", "op-A"),
+    ("evidence-source", "machine-itself"), ("feed", "gossip"),
+    ("pin-source", "out-of-band"))]
+_check(nh.main(_eq) == 0,
+       "equals spelling must reach ELIGIBLE for a clearing seat")
+_check(nh.main(["--feed="]) == 2,
+       "empty equals value must be a usage refusal")
+_check(nh.main(["--candidate-is-hq=yes"]) == 2,
+       "a boolean flag given an equals value must be refused")
+_check(nh.main(["--feed"]) == 2,
+       "space form with a missing value must stay refused")
+
 if fails:
     print(f"test_nexus_host_check: {fails} FAIL")
     sys.exit(1)

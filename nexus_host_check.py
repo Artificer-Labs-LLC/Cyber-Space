@@ -1228,6 +1228,18 @@ def main(argv):
             return 0
         if a in _BOOL_FLAGS:
             c[_BOOL_FLAGS[a]] = True
+        elif a.startswith("--") and "=" in a:
+            opt, _, v = a.partition("=")
+            if opt in _BOOL_FLAGS:
+                print(f"refused: {opt} takes no value", file=sys.stderr)
+                return 2
+            if opt not in _VALUE_FLAGS:
+                print(f"refused: unknown argument {a!r}", file=sys.stderr)
+                return 2
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            c[_VALUE_FLAGS[opt]] = v
         elif a in _VALUE_FLAGS:
             i += 1
             if i >= len(argv):
