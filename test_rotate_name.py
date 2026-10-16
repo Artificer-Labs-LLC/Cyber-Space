@@ -399,6 +399,57 @@ with _tempfile2.TemporaryDirectory() as _td:
     finally:
         os.fsync = _orig_fsync
 
+# Promote fsyncs the parent dir AFTER its .next -> key rename:
+# _write_secret(.prev) fsyncs the same dir, but that lands BEFORE
+# the replace and cannot make the rename durable — a crash after a
+# successful promote could roll it back, resurrecting the old key
+# and the .next seed beside a durable .prev that already points at
+# the new key (the entry-durability rule, one seat over).
+import tempfile as _tempfile_p
+from pathlib import Path as _PathP
+import mint_name as _mint_p
+with _tempfile_p.TemporaryDirectory() as _tdp:
+    _phome = _PathP(_tdp)
+    _pk1, _pk2 = (secrets.token_bytes(32) for _ in range(2))
+    _mint_p._write_secret(_phome / "foo-name.key", _pk1.hex())
+    _prec = rotate_name.mint_rotation("foo", _pk1, publickey(_pk2).hex())
+    import json as _jsonp
+    (_phome / "foo-rotate.json").write_text(_jsonp.dumps(_prec) + "\n")
+    _mint_p._write_secret(_phome / "foo-name.key.next", _pk2.hex())
+    _events = []
+    _orig_replace, _orig_fsync2 = os.replace, os.fsync
+    def _probe_replace(_s, _d, *a, **k):
+        _events.append(("replace", os.path.basename(str(_s)),
+                        os.path.basename(str(_d))))
+        return _orig_replace(_s, _d, *a, **k)
+    def _probe_fsync2(_fd):
+        _events.append(("fsync", "dir" if _stat.S_ISDIR(
+            os.fstat(_fd).st_mode) else "file"))
+        return _orig_fsync2(_fd)
+    os.replace, os.fsync = _probe_replace, _probe_fsync2
+    try:
+        _pok, _pmsg = rotate_name.promote_rotation(
+            "foo", _phome, installed_env=_phome / "absent.env")
+    finally:
+        os.replace, os.fsync = _orig_replace, _orig_fsync2
+    if not _pok:
+        print(f"FAIL: promote fsync probe promote refused: {_pmsg!r}")
+        fails += 1
+    else:
+        _ridx = [i for i, e in enumerate(_events)
+                 if e[0] == "replace" and e[1].endswith(".next")]
+        if not _ridx or not any(e == ("fsync", "dir")
+                                for e in _events[_ridx[0] + 1:]):
+            print("FAIL: promote did not fsync the parent dir after "
+                  "the .next -> key rename")
+            fails += 1
+        if (_phome / "foo-name.key").read_text().strip() != _pk2.hex():
+            print("FAIL: promote fsync probe key did not land")
+            fails += 1
+        if (_phome / "foo-name.key.next").exists():
+            print("FAIL: promote fsync probe left .next unconsumed")
+            fails += 1
+
 # Second rotation promote: the first promote leaves .prev behind,
 # and the second promote must overwrite that single latest-
 # predecessor slot atomically — the O_EXCL write raised

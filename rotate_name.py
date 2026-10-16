@@ -681,6 +681,13 @@ def promote_rotation(label: str, home: Path,
     prev_path = home / f"{label}-name.key.prev"
     _write_secret(prev_path, old_priv.hex() + "\n", overwrite=True)
     os.replace(next_path, key_path)
+    # The rename itself must be durable, not just the bytes it moves:
+    # _write_secret fsynced this dir for the .prev entry BEFORE the
+    # replace, which cannot cover it — a crash after a successful
+    # promote could roll the rename back, resurrecting the old key and
+    # the .next seed beside a durable .prev (and a hostd env refreshed
+    # below) that already point at the new key.
+    _fsync_dir(key_path.parent)
     os.chmod(key_path, 0o600)
     # hostd signs its reach announces with CYBERNET_NAME_PRIVKEY from the
     # env mint wrote (home/hostd/<label>.env) — NOT from the key file just
