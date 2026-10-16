@@ -728,6 +728,48 @@ for bad, orig, why in [
            f"an Arabic-{why}-respelled same operator must fail "
            f"(bar blockers: {blockers})")
 
+matctl = dict(GOOD, candidate_machine_id="machine-\U0001d6b9")
+ok, blockers = nh.evaluate(matctl)
+_check(ok and not blockers,
+       "a mathematical symbol with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+mat_l = dict(GOOD, candidate_machine_id="machine-\U0001d408",
+             origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(mat_l)
+_check(not ok and blockers,
+       "a MATHEMATICAL-BOLD-CAPITAL-I-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+mat_i = dict(GOOD, candidate_machine_id="machine-\U0001d6a4",
+             origin_machine_id="machine-i")
+ok, blockers = nh.evaluate(mat_i)
+_check(not ok and blockers,
+       "a MATHEMATICAL-ITALIC-SMALL-DOTLESS-I-respelled same machine "
+       f"must fail (bar blockers: {blockers})")
+
+for bad, orig, why in [
+    ("\U0001d408", "l", "BOLD CAPITAL I"),
+    ("\U0001d43c", "l", "ITALIC CAPITAL I"),
+    ("\U0001d470", "l", "BOLD ITALIC CAPITAL I"),
+    ("\U0001d4d8", "l", "BOLD SCRIPT CAPITAL I"),
+    ("\U0001d540", "l", "DOUBLE-STRUCK CAPITAL I"),
+    ("\U0001d574", "l", "BOLD FRAKTUR CAPITAL I"),
+    ("\U0001d5a8", "l", "SANS-SERIF CAPITAL I"),
+    ("\U0001d5dc", "l", "SANS-SERIF BOLD CAPITAL I"),
+    ("\U0001d610", "l", "SANS-SERIF ITALIC CAPITAL I"),
+    ("\U0001d644", "l", "SANS-SERIF BOLD ITALIC CAPITAL I"),
+    ("\U0001d678", "l", "MONOSPACE CAPITAL I"),
+    ("\U0001d6a4", "i", "ITALIC SMALL DOTLESS I"),
+    ("\U0001d6a5", "j", "ITALIC SMALL DOTLESS J"),
+]:
+    mat = dict(GOOD, candidate_operator="op-" + bad,
+               origin_operator="op-" + orig)
+    ok, blockers = nh.evaluate(mat)
+    _check(not ok and blockers,
+           f"a MATHEMATICAL-{why}-respelled same operator must fail "
+           f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),

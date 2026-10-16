@@ -1056,6 +1056,37 @@ _CONFUSABLES.update(str.maketrans({
     "\u06c1": "o", "\u06d5": "o",
 }))
 
+# Mathematical alphanumeric symbols: the styled Latin letters
+# mostly ride NFKC home (a mathematical bold A folds onto ASCII
+# A and case-folds with it), but thirteen escape that ride, all
+# surfaced by the full-table audit of _norm against every
+# letter-category UTS #39 mapping. Eleven are styled CAPITAL I
+# variants: NFKC lands them on ASCII I, which case-folds to i,
+# while UTS #39 lists each against l -- a stemless styled I
+# renders as l, the same asymmetry UTS keeps for the Greek
+# capital IOTA above. The other two are the italic dotless i
+# and j, whose NFKC landing is the Latin dotless letter, itself
+# still unfolded. Mappings taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not guessed,
+# spelled as escapes. A seat respelled with one rendered as
+# the origin and compared distinct (probed this tick: BOLD
+# CAPITAL I, DOUBLE-STRUCK CAPITAL I, and both dotless machine
+# spellings each returned ELIGIBLE as their own origin). The
+# pre-NFKC translate must carry these: after NFKC the styled
+# spelling is gone, replaced by the very ASCII/dotless letter
+# that escapes. ASCII I itself stays unfolded -- within-Latin
+# I/l is a font question, out of scope by the rule above. With
+# these, no mathematical symbol still escapes; the Greek-letter
+# symbols stay distinct: BOLD CAPITAL THETA folds only onto
+# Greek theta, which has no UTS #39 single-Latin entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "\U0001d408": "l", "\U0001d43c": "l", "\U0001d470": "l",
+    "\U0001d4d8": "l", "\U0001d540": "l", "\U0001d574": "l",
+    "\U0001d5a8": "l", "\U0001d5dc": "l", "\U0001d610": "l",
+    "\U0001d644": "l", "\U0001d678": "l", "\U0001d6a4": "i",
+    "\U0001d6a5": "j",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
