@@ -289,6 +289,27 @@ def plan(address: str, mirror: str) -> tuple[int, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # argparse silently last-wins on a repeated value flag, so
+    # --mirror A --mirror B planned against B while the operator
+    # believed the trust-anchor was A (probed this tick). Refuse a
+    # repeated --mirror by name, in space, equals or mixed spelling,
+    # before argparse runs — before any mirror is fetched. Exit 4 is
+    # this planner's bad-argument code. Twin of resolve_chain's gate.
+    _seen: set[str] = set()
+    for _tok in argv:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _name = _tok.partition("=")[0]
+        if _name == "--mirror":
+            if _name in _seen:
+                print(f"refused: {_name} given more than once",
+                      file=sys.stderr)
+                return 4
+            _seen.add(_name)
     parser = argparse.ArgumentParser(
         description="Dry-run dial planner for .cyberspace names."
     )

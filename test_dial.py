@@ -158,6 +158,26 @@ class DialPlanTests(unittest.TestCase):
         code, _ = dial.plan(ADDR + "..", MIRROR)
         self.assertEqual(code, 1)
 
+    def test_repeated_mirror_flag_refused(self):
+        # argparse silently last-won on --mirror A --mirror B, planning
+        # against B while the operator believed the trust-anchor was A.
+        # A repeated --mirror in space, equals or mixed spelling refuses
+        # by name (exit 4, this planner's bad-argument code) before any
+        # mirror is fetched; a single --mirror still reaches its verdict.
+        import contextlib
+        import io
+        for extra in (["--mirror", "a", "--mirror", "b"],
+                      ["--mirror=a", "--mirror=b"],
+                      ["--mirror", "a", "--mirror=b"],
+                      ["--mirror=a", "--mirror", "b"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = dial.main([ADDR] + extra)
+            self.assertEqual(code, 4, extra)
+            self.assertIn("--mirror given more than once", err.getvalue())
+        with _fixture(alive=False):
+            self.assertEqual(dial.main([ADDR, "--mirror", MIRROR]), 2)
+
     def test_silent_mirror_is_exit_2(self):
         with _fixture(alive=False):
             code, lines = dial.plan(ADDR, MIRROR)
