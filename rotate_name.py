@@ -1014,7 +1014,20 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--promote", action="store_true",
                     help="promote <label>-name.key.next to the name key "
                          "after the record is seen in the wild")
-    args = ap.parse_args(argv)
+    # argparse itself still raises SystemExit on the bad arguments
+    # no in-main gate can pre-empt -- an unknown flag, a value flag
+    # left dangling, a missing or surplus positional -- and on
+    # --help (code 0). Every gate in this CLI refuses by return,
+    # yet a bare --bogus still crashed an in-process caller of
+    # main() (probed this tick). Convert argparse's exit into this
+    # CLI's return: its usage/error text has already printed, the
+    # code is argparse's own (2 for bad arguments, 0 for --help),
+    # and the __main__ seat re-raises it as the process exit, so
+    # shell behaviour is unchanged. Twin of resolve_chain.py.
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
     label = _normalize(args.label)
     if not _valid_label(label):
         print(f"refused: {label!r} is not a valid .cyberspace label",

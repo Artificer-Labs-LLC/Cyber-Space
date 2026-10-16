@@ -706,6 +706,30 @@ if _code != 2 or "--expiry-days only applies with --submit" not in _err.getvalue
           f"err={_err.getvalue()!r}")
     fails += 1
 
+# In-process parse seat: argparse raises SystemExit on the bad
+# arguments no in-main gate can pre-empt (unknown flag, dangling
+# value flag, missing/surplus positional) and on --help. main()
+# must convert that exit into its own return (2 bad args, 0
+# --help) so an in-process caller is never crashed; the shell
+# exit is unchanged because __main__ re-raises the return.
+for _argv, _want in ((["foo", "--bogus"], 2),
+                      (["foo", "--expiry-days"], 2),
+                      ([], 2),
+                      (["a", "extra"], 2),
+                      (["--help"], 0)):
+    _err = _io.StringIO()
+    try:
+        with _contextlib.redirect_stderr(_err), \
+                _contextlib.redirect_stdout(_io.StringIO()):
+            _rc = rotate_name.main(_argv)
+    except SystemExit as _e:
+        print(f"FAIL: main({_argv}) raised SystemExit {_e.code}, want return {_want}")
+        fails += 1
+        continue
+    if _rc != _want:
+        print(f"FAIL: main({_argv}) -> {_rc}, want {_want}")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
