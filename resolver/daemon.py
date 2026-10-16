@@ -331,10 +331,16 @@ def _config() -> tuple[str, int, str, tuple[str, int], int]:
     )
 
 
-def run() -> None:
+def run() -> int:
     """Bind (UDP+TCP) and answer until SIGINT/SIGTERM. Returns, never
     raises — a bind failure (port taken, address not local) refuses
-    loudly on stderr and returns before either face is served."""
+    loudly on stderr and returns 2 before either face is served; a
+    clean stop returns 0. The return IS the process exit (the __main__
+    seat raises it): a bind refusal that exited 0 read as success to
+    the supervisor — under the HQ unit's Restart=on-failure the dead
+    daemon was never restarted and the unit stayed green, the exact
+    green-but-dead wire the runbook warns against. Twin of host.py,
+    whose run() has always returned its exit."""
     bind_host, port, mirror_url, upstream, ttl_cap = _config()
     for warn in _daemon_config_warnings():
         print(f"resolverd: config: {warn}", file=sys.stderr)
@@ -369,7 +375,7 @@ def run() -> None:
               f"{bind_host}:{port} ({getattr(exc, 'strerror', None) or exc})"
               f" — is another resolverd already running?",
               file=sys.stderr)
-        return
+        return 2
     running = True
 
     def _stop(_signum, _frame):
@@ -406,6 +412,7 @@ def run() -> None:
                 sock.close()
             except OSError:
                 pass
+    return 0
 
 
 def _serve_udp(sock, mirror_url, upstream, ttl_cap) -> None:
@@ -518,4 +525,4 @@ if __name__ == "__main__":
               f"by environment only, no arguments are accepted",
               file=sys.stderr)
         raise SystemExit(2)
-    run()
+    raise SystemExit(run())

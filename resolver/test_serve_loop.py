@@ -158,7 +158,7 @@ def main():
     daemon.select = _FakeSelect
 
     try:
-        daemon.run()  # answers the script, then the stop handler ends the loop
+        rc_a = daemon.run()  # answers the script, then the stop handler ends the loop
     finally:
         __import__("socket").socket = real_socket
         signal.signal = real_signal
@@ -168,6 +168,8 @@ def main():
     replies = fake.sent
 
     check("run() returned, loop did not die on the script", True)
+    check("clean serve: run() returns 0 (the process exit)",
+          rc_a == 0, f"rc={rc_a!r}")
     check("SIGTERM handler captured and stopped the loop",
           signal.SIGTERM in handlers)
     check("socket bound from env config", fake.bound == ("127.0.0.1", 5353),
@@ -220,12 +222,16 @@ def main():
     occ_tcp.bind(("127.0.0.1", busy_port))
     occ_tcp.listen(1)
     err = io.StringIO()
+    rc_b1 = None
     try:
         with contextlib.redirect_stderr(err):
-            daemon.run()
+            rc_b1 = daemon.run()
         check("bind failure: run() returned, never raised", True)
     except Exception as exc:  # noqa: BLE001 — the contract is the test
         check("bind failure: run() returned, never raised", False, repr(exc))
+    check("bind failure: run() returns 2, not 0 — a refused daemon must "
+          "not exit as success under Restart=on-failure",
+          rc_b1 == 2, f"rc={rc_b1!r}")
     check("bind failure: refusal names the bind on stderr",
           "refusing to start" in err.getvalue()
           and "cannot bind" in err.getvalue(),
@@ -243,7 +249,9 @@ def main():
     occ_tcp.listen(1)
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        daemon.run()
+        rc_b2 = daemon.run()
+    check("tcp-only bind failure: run() returns 2",
+          rc_b2 == 2, f"rc={rc_b2!r}")
     check("tcp-only bind failure: refusal on stderr",
           "cannot bind" in err.getvalue(), f"stderr={err.getvalue()!r}")
     occ_tcp.close()
@@ -263,13 +271,16 @@ def main():
     # not OSError. run() must still refuse loudly and return.
     os.environ["CYBERNET_RESOLVER_PORT"] = "70000"
     err = io.StringIO()
+    rc_b3 = None
     try:
         with contextlib.redirect_stderr(err):
-            daemon.run()
+            rc_b3 = daemon.run()
         check("oversize port: run() returned, never raised", True)
     except Exception as exc:  # noqa: BLE001 — the contract is the test
         check("oversize port: run() returned, never raised", False,
               repr(exc))
+    check("oversize port: run() returns 2",
+          rc_b3 == 2, f"rc={rc_b3!r}")
     check("oversize port: refusal names the bind on stderr",
           "refusing to start" in err.getvalue()
           and "cannot bind" in err.getvalue(),
