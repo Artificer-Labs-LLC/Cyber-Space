@@ -974,6 +974,32 @@ _CONFUSABLES.update(str.maketrans({
     "\u04ae": "Y", "\u04af": "y",
 }))
 
+# Armenian, completed: the Armenian block above folded only
+# the oh pair, but the full-table audit shows 13 more Armenian
+# letters carry UTS #39 single-Latin mappings it missed -- the
+# small letters KEH to f, CO to g, HO to h, YIWN to i, YI to j,
+# VO and RA to n, GIM and ZA to q, SEH to u, AYB to w, and the
+# capitals TIWN to S and SEH to U. Mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed. A seat respelled with one rendered
+# as the origin and compared distinct (probed this tick: all
+# thirteen machine spellings each returned ELIGIBLE as their
+# own origin). Entries are spelled as explicit escapes;
+# capitals whose small the table now holds reach the fold
+# through _norm's post-case-fold translate, TIWN's capital is
+# in the table itself because its small (U+057F) has no UTS
+# #39 entry at all, and SEH is listed in both cases as UTS #39
+# lists both. With these, no Armenian letter still escapes;
+# the other Armenian letters stay distinct: BEN, for one, has
+# no UTS #39 entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "\u0584": "f", "\u0581": "g", "\u0570": "h",
+    "\u0582": "i", "\u0575": "j", "\u0578": "n",
+    "\u057c": "n", "\u0563": "q", "\u0566": "q",
+    "\u054f": "S", "\u057d": "u", "\u054d": "U",
+    "\u0561": "w",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

@@ -622,6 +622,41 @@ for bad, orig, why in [
            f"a Cyrillic-{why}-respelled same operator must fail "
            f"(bar blockers: {blockers})")
 
+armctl = dict(GOOD, candidate_machine_id="machine-\u0562")
+ok, blockers = nh.evaluate(armctl)
+_check(ok and not blockers,
+       "an Armenian letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+arm_w = dict(GOOD, candidate_machine_id="machine-\u0561",
+             origin_machine_id="machine-w")
+ok, blockers = nh.evaluate(arm_w)
+_check(not ok and blockers,
+       "an Armenian-AYB-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+arm_s = dict(GOOD, candidate_machine_id="machine-\u054f",
+             origin_machine_id="machine-s")
+ok, blockers = nh.evaluate(arm_s)
+_check(not ok and blockers,
+       "an Armenian-TIWN-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+for bad, orig, why in [
+    ("\u0584", "f", "KEH"), ("\u0581", "g", "CO"),
+    ("\u0570", "h", "HO"), ("\u0582", "i", "YIWN"),
+    ("\u0575", "j", "YI"), ("\u0578", "n", "VO"),
+    ("\u057c", "n", "RA"), ("\u0563", "q", "GIM"),
+    ("\u0566", "q", "ZA"), ("\u057d", "u", "SEH"),
+    ("\u054d", "u", "SEH cap"), ("\u0561", "w", "AYB"),
+]:
+    arm = dict(GOOD, candidate_operator="op-" + bad,
+               origin_operator="op-" + orig)
+    ok, blockers = nh.evaluate(arm)
+    _check(not ok and blockers,
+           f"an Armenian-{why}-respelled same operator must fail "
+           f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
