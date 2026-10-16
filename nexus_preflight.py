@@ -202,32 +202,52 @@ def check_backup(primary_path, backup_path):
 
 
 def _read_tree_text(path):
-    """Return (text, oversize). Bounded twin of the seed caps above:
-    check_tree loaded both source files via read_text() unbounded
-    (probed 2026-10-16: a 50 MB federation.py pulled ~114 MB peak
-    RSS into a readiness check), yet it only searches each file for
-    one short marker. Read at most _TREE_MAX + 1 bytes (the real
-    files are ~84 KB / ~13 KB); an oversize file is named by the
-    caller and blocks fail-closed, never searched in full. An
-    unreadable or non-UTF-8 file reads as empty, as before."""
+    """Return (text, oversize, nonregular). Bounded twin of the seed
+    caps above: check_tree loaded both source files via read_text()
+    unbounded (probed 2026-10-16: a 50 MB federation.py pulled
+    ~114 MB peak RSS into a readiness check), yet it only searches
+    each file for one short marker. Read at most _TREE_MAX + 1 bytes
+    (the real files are ~84 KB / ~13 KB); an oversize file is named
+    by the caller and blocks fail-closed, never searched in full.
+    An unreadable or non-UTF-8 file reads as empty, as before.
+
+    Only a regular file may be opened: open() on a FIFO blocks until
+    a writer appears, so a planted FIFO at either tree seat hung
+    this fail-closed check forever instead of reporting NOT READY
+    (probed 2026-10-16: check_tree on a FIFO federation.py never
+    returned) — the same unguarded open check_key_file/check_backup
+    were gated against. stat follows symlinks, so a symlink TO a
+    regular file stays valid while a symlink to a FIFO/device/dir
+    is refused here, unopened. A missing file still reads as empty
+    (the caller then names the missing marker, as before)."""
+    try:
+        if not stat.S_ISREG(path.stat().st_mode):
+            return "", False, True
+    except OSError:
+        return "", False, False
     try:
         with path.open("rb") as f:
             raw = f.read(_TREE_MAX + 1)
     except OSError:
-        return "", False
+        return "", False, False
     if len(raw) > _TREE_MAX:
-        return "", True
+        return "", True, False
     try:
-        return raw.decode("utf-8"), False
+        return raw.decode("utf-8"), False, False
     except UnicodeDecodeError:
-        return "", False
+        return "", False, False
 
 
 def check_tree(root):
     """The local tree must carry the gossip receive route and the pin."""
     problems = []
-    fed_text, fed_over = _read_tree_text(Path(root) / "federation.py")
-    if fed_over:
+    fed_text, fed_over, fed_nonreg = _read_tree_text(
+        Path(root) / "federation.py")
+    if fed_nonreg:
+        problems.append("federation.py is not a regular file — "
+                        "tree check refused: the gossip receive "
+                        "route cannot be verified; nothing was opened")
+    elif fed_over:
         problems.append(f"federation.py exceeds {_TREE_MAX} bytes — "
                         f"tree check oversize: the gossip receive "
                         f"route cannot be verified without an "
@@ -235,9 +255,13 @@ def check_tree(root):
     elif '"/fed/names/gossip"' not in fed_text:
         problems.append("federation.py lacks the /fed/names/gossip "
                         "receive route — names cannot federate")
-    verify_text, verify_over = _read_tree_text(Path(root)
-                                               / "verify_name.py")
-    if verify_over:
+    verify_text, verify_over, verify_nonreg = _read_tree_text(
+        Path(root) / "verify_name.py")
+    if verify_nonreg:
+        problems.append("verify_name.py is not a regular file — "
+                        "tree check refused: the --expect-pubkey "
+                        "pin cannot be verified; nothing was opened")
+    elif verify_over:
         problems.append(f"verify_name.py exceeds {_TREE_MAX} bytes — "
                         f"tree check oversize: the --expect-pubkey "
                         f"pin cannot be verified without an "

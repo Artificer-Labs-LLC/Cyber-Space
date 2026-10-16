@@ -232,6 +232,39 @@ with tempfile.TemporaryDirectory() as td:
                for p in np.check_tree(troot)),
            "oversize verify_name.py must block by size, named")
 
+    # Non-regular tree files: a FIFO at either seat must be refused
+    # by name WITHOUT being opened — open() on a FIFO blocks until a
+    # writer appears, so it hung this fail-closed check forever
+    # (probed 2026-10-16). A symlink to a FIFO is the same seat.
+    (troot / "verify_name.py").write_text("--expect-pubkey")
+    tfifo = troot / "federation.py"
+    tfifo.unlink()
+    os.mkfifo(tfifo)
+    _check(any("not a regular file" in p and "federation" in p
+               for p in np.check_tree(troot)),
+           "FIFO federation.py must block by name, unopened")
+    tfifo.unlink()
+    tfifo.write_text('"/fed/names/gossip"')
+    vfifo = troot / "verify_name.py"
+    vfifo.unlink()
+    os.mkfifo(vfifo)
+    _check(any("not a regular file" in p and "verify_name" in p
+               for p in np.check_tree(troot)),
+           "FIFO verify_name.py must block by name, unopened")
+    vfifo.unlink()
+    vlink = troot / "verify_name.py"
+    realfifo = troot / "real.fifo"
+    os.mkfifo(realfifo)
+    vlink.symlink_to(realfifo)
+    _check(any("not a regular file" in p and "verify_name" in p
+               for p in np.check_tree(troot)),
+           "symlink to a FIFO verify_name.py must block by name, "
+           "unopened")
+    vlink.unlink()
+    vlink.write_text("--expect-pubkey")
+    _check(np.check_tree(troot) == [],
+           "regular tree files must restore a clean check_tree")
+
     # Tree checks pass on the real tree (gossip route + pin present).
     _check(np.check_tree(ROOT) == [], "real tree must pass tree checks")
 
