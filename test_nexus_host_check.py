@@ -167,6 +167,19 @@ _check(not ok and blockers,
        "an Osage-small-O-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+nko = dict(GOOD, candidate_machine_id="machine-ߡ")
+ok, blockers = nh.evaluate(nko)
+_check(ok and not blockers,
+       "an NKo letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+nkom = dict(GOOD, candidate_machine_id="machine-ߊ",
+            origin_machine_id="machine-l")
+ok, blockers = nh.evaluate(nkom)
+_check(not ok and blockers,
+       "an NKo-A-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -571,6 +584,18 @@ for cand, orig, why in [
      "osage-small-u-respelled same operator must fail"),
     ("op-𐓎", "op-u",
      "osage-capital-u-respelled same operator must fail"),
+    ("op-ߕ", "op-b",
+     "nko-ta-respelled same operator must fail"),
+    ("op-ߓ", "op-f",
+     "nko-ba-respelled same operator must fail"),
+    ("op-ߊ", "op-l",
+     "nko-a-respelled same operator must fail"),
+    ("op-ߋ", "op-o",
+     "nko-ee-respelled same operator must fail"),
+    ("op-ߠ", "op-t",
+     "nko-na-woloso-respelled same operator must fail"),
+    ("op-ߌ", "op-y",
+     "nko-i-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

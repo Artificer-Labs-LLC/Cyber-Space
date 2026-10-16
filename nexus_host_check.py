@@ -462,6 +462,24 @@ _CONFUSABLES.update(str.maketrans({
     "𐓪": "o", "𐓂": "O", "𐒴": "R", "𐓶": "u", "𐓎": "U",
 }))
 
+# NKo: the West African script whose letterforms are built from
+# a few spare strokes, and UTS #39 lists 6 of its letters as
+# confusable with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: A machine spelling; TA, BA, A,
+# EE, NA WOLOSO and I operator spellings each returned ELIGIBLE
+# as their own origin). NKo has no case distinction, so single
+# entries suffice; _norm's case-fold unites the capital targets
+# with the Latin lowercase. The other NKo letters stay distinct:
+# MA folds only to a Greek Delta, and DIGIT ZERO's source is a
+# digit, outside the letter-category scope of this table.
+_CONFUSABLES.update(str.maketrans({
+    "ߕ": "b", "ߓ": "F", "ߊ": "l", "ߋ": "o", "ߠ": "T", "ߌ": "Y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
