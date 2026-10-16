@@ -64,6 +64,17 @@ with tempfile.TemporaryDirectory() as td:
            and "Independent host: ELIGIBLE" not in text,
            "even READY, host stays NOT EVALUATED -- READY is not depth")
 
+    # The equals spelling (--key=PATH) is accepted by main, twin
+    # of nexus_preflight's both-spellings parser; an empty equals
+    # value is a usage refusal, and the space form missing its
+    # value stays refused.
+    _check(ns.main([f"--key={key}", f"--backup={bak}"]) == 0,
+           "equals spelling must reach READY for a matching pair")
+    _check(ns.main(["--key=", f"--backup={bak}"]) == 2,
+           "empty equals value must be a usage refusal")
+    _check(ns.main([f"--backup={bak}", "--key"]) == 2,
+           "space form with a missing value must stay refused")
+
     bak.unlink()
     code, lines = ns.status(key, bak, ROOT)
     _check(code == 1, "key without backup must be NOT READY")

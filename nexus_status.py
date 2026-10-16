@@ -35,6 +35,8 @@ nothing.
 Exit codes: 0 = READY (next step is the claim), 1 = NOT READY
 (next step named), 2 = usage.
 Usage: ./venv/bin/python nexus_status.py [--key PATH] [--backup PATH]
+(each option also accepted in the --key=PATH / --backup=PATH spelling,
+the twin of nexus_keygen's and nexus_preflight's both-spellings parsers)
 """
 
 import os
@@ -114,6 +116,17 @@ def main(argv):
         if a in ("-h", "--help"):
             print(__doc__.strip())
             return 0
+        if a.startswith(("--key=", "--backup=")):
+            opt, _, v = a.partition("=")
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            if opt == "--key":
+                key_path = Path(v)
+            else:
+                backup_path = Path(v)
+            i += 1
+            continue
         if a in ("--key", "--backup"):
             i += 1
             if i >= len(argv):
