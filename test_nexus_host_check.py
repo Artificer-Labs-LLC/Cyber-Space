@@ -411,6 +411,26 @@ _check(not ok and blockers,
        "an Ahom-SA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+mal = dict(GOOD, candidate_machine_id="machine-ക")
+ok, blockers = nh.evaluate(mal)
+_check(ok and not blockers,
+       "a Malayalam letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+malt = dict(GOOD, candidate_machine_id="machine-ഠ",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(malt)
+_check(not ok and blockers,
+       "a Malayalam-TTHA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+mals = dict(GOOD, candidate_machine_id="machine-ട",
+            origin_machine_id="machine-s")
+ok, blockers = nh.evaluate(mals)
+_check(not ok and blockers,
+       "a Malayalam-TTA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -903,6 +923,10 @@ for cand, orig, why in [
      "ahom-la-respelled same operator must fail"),
     ("op-𑜏", "op-w",
      "ahom-sa-respelled same operator must fail"),
+    ("op-ഠ", "op-o",
+     "malayalam-ttha-respelled same operator must fail"),
+    ("op-ട", "op-s",
+     "malayalam-tta-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

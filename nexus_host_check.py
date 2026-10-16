@@ -741,6 +741,27 @@ _CONFUSABLES.update(str.maketrans({
     "𑜆": "v", "𑜊": "w", "𑜎": "w", "𑜏": "w",
 }))
 
+# Malayalam: the script whose letters TTHA and TTA are cut
+# as plain Latin shapes (TTHA a plain ring, TTA a plain s),
+# and UTS #39 lists each as confusable with a single Latin
+# letter (TTHA->o, TTA->s), the script's only letter-to-
+# single-Latin mappings in the table -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table
+# audit of _norm against every letter-category UTS #39
+# mapping (169 still escaping before this fold). A seat
+# respelled with one rendered as the origin and compared
+# distinct (probed this tick: TTHA and TTA machine spellings
+# and TTHA and TTA operator spellings each returned ELIGIBLE
+# as their own origin). Malayalam has no case distinction,
+# so single entries suffice. The other Malayalam letters
+# stay distinct: KA, for one, has no UTS #39 entry at all
+# (the ANUSVARA folds to o but is a sign, outside this
+# table's letter scope).
+_CONFUSABLES.update(str.maketrans({
+    "ഠ": "o", "ട": "s",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
