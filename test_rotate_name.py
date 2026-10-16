@@ -628,6 +628,30 @@ for _argv, _flag in (
               f"err={_err.getvalue()!r}")
         fails += 1
 
+# A repeated boolean flag refuses by name too: store_true repeats
+# silently, so --promote --promote passed to a verdict (probed: it
+# reached the no-pending-rotation verdict) while every value flag
+# above refused its repeat — twin of nexus_claim's --dry-run
+# boolean gate (ce55b85). Space and mixed spellings refuse, exit 2,
+# via captured stderr; a single --promote still reaches its verdict.
+for _argv in (["foo", "--promote", "--promote"],
+              ["foo", "--promote", "--promote=x"],
+              ["foo", "--promote=x", "--promote"]):
+    _err = _io.StringIO()
+    with _contextlib.redirect_stderr(_err):
+        _code = rotate_name.main(_argv)
+    if _code != 2 or "--promote given more than once" not in _err.getvalue():
+        print(f"FAIL: duplicate --promote in {_argv!r} -> rc={_code} "
+              f"err={_err.getvalue()!r}")
+        fails += 1
+_err = _io.StringIO()
+with _contextlib.redirect_stderr(_err):
+    _code = rotate_name.main(["foo", "--promote"])
+if _code != 1 or "no pending rotation" not in _err.getvalue():
+    print(f"FAIL: single exact --promote -> rc={_code} "
+          f"err={_err.getvalue()!r}")
+    fails += 1
+
 # An abbreviated long-option spelling refuses by name before
 # argparse runs: argparse accepts any unambiguous prefix, so
 # --new-k silently became --new-key-seed and dodged the duplicate

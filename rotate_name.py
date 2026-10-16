@@ -957,6 +957,11 @@ def main(argv: list[str]) -> int:
     # submitted to / bound at the second value the same way. Refuse a
     # repeated value flag by name, in space, equals or mixed spelling,
     # before argparse runs — before any key is read, generated or sent.
+    # The boolean --promote gates the same way: store_true repeats
+    # silently too, so --promote --promote passed to a verdict (probed:
+    # it reached the no-pending-rotation verdict) while every value
+    # flag refused its repeat by name — twin of nexus_claim's
+    # --dry-run boolean gate (ce55b85).
     _seen: set[str] = set()
     _long_opts = ("--new-key-seed", "--submit", "--expiry-days",
                   "--promote", "--help")
@@ -981,7 +986,8 @@ def main(argv: list[str]) -> int:
                 print(f"refused: {_name} is an abbreviation of "
                       f"{_full[0]} — spell it out", file=sys.stderr)
                 return 2
-        if _name in ("--new-key-seed", "--submit", "--expiry-days"):
+        if _name in ("--new-key-seed", "--submit", "--expiry-days",
+                     "--promote"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
                       file=sys.stderr)
