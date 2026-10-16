@@ -279,10 +279,33 @@ def _daemon_config_warnings() -> list[str]:
             # does not validate it, so parts.port must be read — it
             # raises for non-numeric/out-of-range — and 0 refused.
             port = parts.port
+            # The rest of the mirror shape is mint_name._valid_mirror's
+            # (dial.plan twin): a userinfo spelling dials the host AFTER
+            # the "@" while warning-clean here, a query/fragment
+            # spelling mangles the appended "/api/v1/..." fetch, and a
+            # host outside the stored-address class (%40, backslash,
+            # non-ASCII) can never be dialed as written — each passed
+            # this gate silent (probed) while every .cyberspace query
+            # NXDOMAINed or dialed a host the operator never named. A
+            # bracketed IPv6 literal stays valid, judged by parsing it.
+            host = parts.hostname
+            if not host:
+                host_ok = False
+            elif ":" in host:
+                try:
+                    ipaddress.IPv6Address(host)
+                    host_ok = True
+                except ValueError:
+                    host_ok = False
+            else:
+                host_ok = all(c.isascii() and (c.isalnum() or c in "._-")
+                              for c in host)
             mirror_ok = (
                 parts.scheme in ("http", "https")
-                and bool(parts.hostname)
+                and host_ok
+                and parts.username is None and parts.password is None
                 and (port is None or 1 <= port <= 65535)
+                and "?" not in raw and "#" not in raw
             )
         except ValueError:
             mirror_ok = False

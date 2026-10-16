@@ -155,6 +155,26 @@ class TestDaemonConfigWarnings(unittest.TestCase):
         self.assertEqual(len(warns), 1)
         self.assertIn("CYBERNET_MIRROR_URL", warns[0])
 
+    def test_mirror_misspellings_warn(self):
+        # Twin of mint_name._valid_mirror / dial.plan: userinfo dials
+        # the host after the "@", query/fragment mangles the appended
+        # fetch, and an out-of-class host is undialable as written —
+        # each warned silent before, while queries NXDOMAINed.
+        for bad in ("http://127.0.0.1@evil.example:8471",
+                    "http://mirror.example:8471?x=1",
+                    "http://mirror.example:8471#frag",
+                    "http://x%40evil.example:8471",
+                    "http://x\\evil.example:8471",
+                    "http://é.example:8471"):
+            warns = self._warns(CYBERNET_MIRROR_URL=bad)
+            self.assertEqual(len(warns), 1, bad)
+            self.assertIn("CYBERNET_MIRROR_URL", warns[0])
+            self.assertNotIn(bad, warns[0])
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="http://[::1]:8471"), [])
+        self.assertEqual(
+            self._warns(CYBERNET_MIRROR_URL="http://mirror.example:8471/prefix"), [])
+
     def test_bind_ipv4_and_wildcard_are_silent(self):
         self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="127.0.0.1"), [])
         self.assertEqual(self._warns(CYBERNET_RESOLVER_BIND="0.0.0.0"), [])
