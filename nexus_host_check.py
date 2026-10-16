@@ -444,6 +444,24 @@ _CONFUSABLES.update(str.maketrans({
     "𐤦": "l", "𐤬": "o",
 }))
 
+# Osage: the Dhegiha Siouan alphabet, cut in the same simple
+# strokes, and UTS #39 lists 5 of its letters as confusable with
+# single Latin letters -- mappings taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not guessed, and
+# surfaced by a full-table audit of _norm against every
+# letter-category UTS #39 mapping. A seat respelled with one
+# rendered as the origin and compared distinct (probed this tick:
+# small-O machine spelling and capital-O, capital-BRA, small-U
+# and capital-U operator spellings each returned ELIGIBLE as
+# their own origin). Osage is bicameral and UTS #39 lists both
+# cases, so both are listed; _norm's case-fold unites them. The
+# other Osage letters stay distinct: small A folds only to a
+# turned V, capital ZA only to the digit seven, and the rest to
+# Greek, Cyrillic or runic letters or symbols.
+_CONFUSABLES.update(str.maketrans({
+    "𐓪": "o", "𐓂": "O", "𐒴": "R", "𐓶": "u", "𐓎": "U",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

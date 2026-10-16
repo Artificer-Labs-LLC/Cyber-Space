@@ -154,6 +154,19 @@ _check(not ok and blockers,
        "a Lydian-I-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+osg = dict(GOOD, candidate_machine_id="machine-𐓘")
+ok, blockers = nh.evaluate(osg)
+_check(ok and not blockers,
+       "an Osage letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+osgm = dict(GOOD, candidate_machine_id="machine-𐓪",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(osgm)
+_check(not ok and blockers,
+       "an Osage-small-O-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -550,6 +563,14 @@ for cand, orig, why in [
      "lydian-i-respelled same operator must fail"),
     ("op-𐤬", "op-o",
      "lydian-o-respelled same operator must fail"),
+    ("op-𐓂", "op-o",
+     "osage-capital-o-respelled same operator must fail"),
+    ("op-𐒴", "op-r",
+     "osage-capital-bra-respelled same operator must fail"),
+    ("op-𐓶", "op-u",
+     "osage-small-u-respelled same operator must fail"),
+    ("op-𐓎", "op-u",
+     "osage-capital-u-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
