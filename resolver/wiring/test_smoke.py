@@ -48,7 +48,17 @@ def _run_main_with_fake(fake_query, argv_extra=()):
     real = smoke._query
     smoke._query = fake_query
     old_argv = sys.argv
-    sys.argv = ["smoke.py", "--server", "127.0.0.1", "--port", "53599"] + list(argv_extra)
+    # Base --server/--port are defaults, not a second occurrence: a
+    # case supplying its own --server/--port replaces them, it does
+    # not repeat them (a true repeat is _test_repeated_value_flag's).
+    _extra_flags = {t.partition("=")[0] for t in argv_extra
+                    if t.startswith("--")}
+    _base = []
+    if "--server" not in _extra_flags:
+        _base += ["--server", "127.0.0.1"]
+    if "--port" not in _extra_flags:
+        _base += ["--port", "53599"]
+    sys.argv = ["smoke.py"] + _base + list(argv_extra)
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
@@ -246,6 +256,51 @@ def _test_undialable_port():
               and "unreachable" not in out, f"rc={rc} calls={calls['n']} out={out[:80]!r}")
     rc, _ = _run_main_with_fake(_counting)
     check("valid port 53599 still dials (control)", rc == 0)
+
+
+# 5e2. repeated value flag is a bad argument, never last-wins:
+#     argparse silently last-won, so --port 5353 --port 5354 smoked
+#     5354 while the operator believed the port was 5353 (and a
+#     repeated --name/--server redirected the smoke the same way);
+#     a repeat in space, equals or mixed spelling refuses by name
+#     with exit 1 before any query is attempted (twin of client)
+def _test_repeated_value_flag():
+    calls = {"n": 0}
+
+    def _counting(name, qtype, server, port, timeout=3.0):
+        calls["n"] += 1
+        return (3, 0, 0) if name.startswith("zz-") else (0, 1, 0)
+
+    cases = (
+        ("--name", "genesis.cyberspace", "nexus.cyberspace"),
+        ("--server", "127.0.0.1", "127.0.0.2"),
+        ("--port", "5353", "5354"),
+    )
+    for flag, first, second in cases:
+        for extra in ([flag, first, flag, second],
+                      [f"{flag}={first}", f"{flag}={second}"],
+                      [flag, first, f"{flag}={second}"],
+                      [f"{flag}={first}", flag, second]):
+            calls["n"] = 0
+            real = smoke._query
+            smoke._query = _counting
+            old_argv = sys.argv
+            sys.argv = ["smoke.py"] + list(extra)
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    rc = smoke.main()
+            finally:
+                smoke._query = real
+                sys.argv = old_argv
+            out = buf.getvalue()
+            check(f"repeated {flag} {extra[0][:18]!r} -> exit 1, no query",
+                  rc == 1 and calls["n"] == 0
+                  and f"{flag} given more than once" in out,
+                  f"rc={rc} calls={calls['n']} out={out[:80]!r}")
+    rc, _ = _run_main_with_fake(_counting)
+    check("single value flags still smoke (control)", rc == 0,
+          f"rc={rc}")
 
 
 # 5f. malformed --name is a bad argument, never a daemon verdict:
@@ -2037,6 +2092,7 @@ if __name__ == "__main__":
     _test_ipv6_server_forms()
     _test_aaaa_fallback()
     _test_undialable_port()
+    _test_repeated_value_flag()
     _test_malformed_name()
     _test_undialable_server()
     _test_env_port_default()

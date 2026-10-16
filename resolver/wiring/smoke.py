@@ -709,6 +709,30 @@ def _query_tcp(name: str, qtype: int, server: str, port: int,
 
 
 def main() -> int:
+    # Duplicate gate, twin of resolver/client (434e0ae), dial,
+    # resolve_chain and verify_name: argparse silently last-wins on
+    # a repeated value flag, so --port 5353 --port 5354 smoked port
+    # 5354 while the operator believed the daemon port was 5353, and
+    # a repeated --name/--server redirected the smoke the same way
+    # (probed: duplicates proceeded to the wire and read back a
+    # transport verdict against the second value). main() takes no
+    # argv, so scan sys.argv directly; refuse a repeated value flag
+    # by name, in space, equals or mixed spelling, before argparse
+    # runs — before any query is built or sent. Exit 1 is this
+    # smoke's bad-argument code (see the --port gate below).
+    _seen: set[str] = set()
+    for _tok in sys.argv[1:]:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _flag = _tok.partition("=")[0]
+        if _flag in ("--name", "--server", "--port"):
+            if _flag in _seen:
+                print(f"FAIL: {_flag} given more than once — "
+                      f"bad argument, no query attempted")
+                return 1
+            _seen.add(_flag)
     ap = argparse.ArgumentParser(description="smoke-test the .cyberspace daemon")
     ap.add_argument("--name", default="genesis.cyberspace",
                     help="registered name to resolve (default: genesis.cyberspace)")
