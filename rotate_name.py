@@ -185,10 +185,22 @@ def _load_record(rec_path):
     """Load the rotation record at rec_path under the read bound.
 
     Returns (record, None) or (None, kind), kind one of "missing"
-    (OSError), "oversize" (over _RECORD_MAX chars), or "badjson" —
-    each caller maps the kind to its own refusal wording, exactly as
-    the two seats worded their OSError/ValueError branches before.
+    (OSError), "nonregular" (not a regular file), "oversize" (over
+    _RECORD_MAX chars), or "badjson" — each caller maps the kind to
+    its own refusal wording, exactly as the two seats worded their
+    OSError/ValueError branches before.
     """
+    # Only a regular file may be opened: open() on a FIFO blocks until
+    # a writer appears, so a FIFO (or device) at either record seat
+    # hung the rotation forever instead of refusing — twin of the
+    # _read_seed S_ISREG gate in this file. os.stat follows symlinks,
+    # so a symlink TO a regular file stays valid while a symlink to
+    # a FIFO is refused; a missing path is "missing" as before.
+    try:
+        if not stat.S_ISREG(os.stat(rec_path).st_mode):
+            return None, "nonregular"
+    except OSError:
+        return None, "missing"
     try:
         with rec_path.open(encoding="utf-8") as f:
             raw = f.read(_RECORD_MAX + 1)
@@ -315,6 +327,15 @@ def _read_env_text(path):
     existing OSError refusal wording is untouched; oversize returns
     None and each caller maps it to its own not-accounted-for warning,
     never parsing or writing the file."""
+    # Only a regular file may be opened: open() on a FIFO blocks until
+    # a writer appears, so a FIFO (or device) at either env seat hung
+    # the rotation forever instead of warning — twin of the _read_seed
+    # S_ISREG gate in this file. os.stat follows symlinks, so a
+    # symlink TO a regular file stays valid while a symlink to a FIFO
+    # is refused; a missing path raises OSError from the stat, exactly
+    # as the open did before.
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        raise OSError(f"env file at {path} is not a regular file")
     with path.open(encoding="utf-8") as f:
         raw = f.read(_ENV_MAX + 1)
     return None if len(raw) > _ENV_MAX else raw
@@ -656,6 +677,9 @@ def promote_rotation(label: str, home: Path,
         return False, (f"rotation record at {rec_path} exceeds "
                        f"{_RECORD_MAX} bytes — a rotation record is a "
                        f"few hundred bytes, refuse")
+    if _rec_err == "nonregular":
+        return False, (f"rotation record at {rec_path} is not a "
+                       f"regular file — refuse")
     if _rec_err is not None:
         return False, f"rotation record at {rec_path} is not readable JSON"
     reason = verify_rotation(record)
@@ -815,6 +839,9 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
         return False, (f"rotation record at {rec_path} exceeds "
                        f"{_RECORD_MAX} bytes — a rotation record is a "
                        f"few hundred bytes; nothing was sent")
+    if _rec_err == "nonregular":
+        return False, (f"rotation record at {rec_path} is not a "
+                       f"regular file — refuse; nothing was sent")
     if _rec_err is not None:
         return False, f"rotation record at {rec_path} is not readable JSON"
     reason = verify_rotation(record)

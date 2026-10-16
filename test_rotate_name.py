@@ -538,6 +538,67 @@ with tempfile.TemporaryDirectory() as _td:
             print(f"FAIL: _read_seed {_seat} raised {type(_e).__name__}: {_e}")
             fails += 1
 
+# _load_record / _read_env_text refuse a non-regular source WITHOUT
+# opening it: open() on a FIFO blocks until a writer appears, so a
+# FIFO at either seat hung the rotation forever instead of refusing
+# (probed 2026-10-16, killed by timeout on both). _load_record maps
+# it to its "nonregular" kind; _read_env_text raises OSError, the
+# contract its callers already catch. Symlink-to-FIFO is the same
+# seat; regular + symlink-to-regular still read byte-exact.
+with tempfile.TemporaryDirectory() as _td:
+    _fifo_rec = os.path.join(_td, "rec.json")
+    os.mkfifo(_fifo_rec)
+    _fifo_env = os.path.join(_td, "x.env")
+    os.mkfifo(_fifo_env)
+    _reg_rec = os.path.join(_td, "real.json")
+    with open(_reg_rec, "w", encoding="utf-8") as _f:
+        _f.write('{"a": 1}')
+    _reg_env = os.path.join(_td, "real.env")
+    with open(_reg_env, "w", encoding="utf-8") as _f:
+        _f.write("K=v\n")
+    _link_rec = os.path.join(_td, "link.json")
+    os.symlink(_fifo_rec, _link_rec)
+    _link_env = os.path.join(_td, "link.env")
+    os.symlink(_fifo_env, _link_env)
+    for _seat, _path in (("FIFO", _fifo_rec), ("symlink-to-FIFO", _link_rec)):
+        _rec, _err = rotate_name._load_record(_Path(_path))
+        if _rec is not None or _err != "nonregular":
+            print(f"FAIL: _load_record {_seat} -> {_rec!r},{_err!r}")
+            fails += 1
+    for _seat, _path in (("FIFO", _fifo_env), ("symlink-to-FIFO", _link_env)):
+        try:
+            rotate_name._read_env_text(_Path(_path))
+            print(f"FAIL: _read_env_text {_seat} read instead of refusing")
+            fails += 1
+        except OSError as _e:
+            if "not a regular file" not in str(_e):
+                print(f"FAIL: _read_env_text {_seat} OSError {_e!r}")
+                fails += 1
+        except Exception as _e:  # noqa: BLE001
+            print(f"FAIL: _read_env_text {_seat} raised {type(_e).__name__}: {_e}")
+            fails += 1
+    _good_rec = os.path.join(_td, "good.json")
+    os.symlink(_reg_rec, _good_rec)
+    _good_env = os.path.join(_td, "good.env")
+    os.symlink(_reg_env, _good_env)
+    for _seat, _path in (("regular", _reg_rec), ("symlink-to-regular", _good_rec)):
+        _rec, _err = rotate_name._load_record(_Path(_path))
+        if _rec != {"a": 1} or _err is not None:
+            print(f"FAIL: _load_record {_seat} -> {_rec!r},{_err!r}")
+            fails += 1
+    for _seat, _path in (("regular", _reg_env), ("symlink-to-regular", _good_env)):
+        try:
+            if rotate_name._read_env_text(_Path(_path)) != "K=v\n":
+                print(f"FAIL: _read_env_text {_seat} read wrong text")
+                fails += 1
+        except Exception as _e:  # noqa: BLE001
+            print(f"FAIL: _read_env_text {_seat} raised {type(_e).__name__}: {_e}")
+            fails += 1
+    _rec, _err = rotate_name._load_record(_Path(os.path.join(_td, "nope.json")))
+    if _rec is not None or _err != "missing":
+        print(f"FAIL: _load_record missing -> {_rec!r},{_err!r}")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
