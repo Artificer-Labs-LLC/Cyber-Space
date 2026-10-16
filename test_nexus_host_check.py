@@ -193,6 +193,19 @@ _check(not ok and blockers,
        "a Runic-EHWAZ-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+heb = dict(GOOD, candidate_machine_id="machine-א")
+ok, blockers = nh.evaluate(heb)
+_check(ok and not blockers,
+       "a Hebrew letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+hebm = dict(GOOD, candidate_machine_id="machine-ס",
+            origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(hebm)
+_check(not ok and blockers,
+       "a Hebrew-SAMEKH-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -613,6 +626,12 @@ for cand, orig, why in [
      "runic-ehwaz-e-respelled same operator must fail"),
     ("op-ᚷ", "op-x",
      "runic-gebo-g-respelled same operator must fail"),
+    ("op-ו", "op-l",
+     "hebrew-vav-respelled same operator must fail"),
+    ("op-ן", "op-l",
+     "hebrew-final-nun-respelled same operator must fail"),
+    ("op-ט", "op-v",
+     "hebrew-tet-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

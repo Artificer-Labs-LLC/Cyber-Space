@@ -498,6 +498,22 @@ _CONFUSABLES.update(str.maketrans({
     "ᛖ": "M", "ᚷ": "X",
 }))
 
+# Hebrew: the alphabet whose spare strokes duplicate Latin
+# shapes, and UTS #39 lists 4 of its letters as confusable
+# with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: a SAMEKH machine spelling; VAV,
+# FINAL NUN and TET operator spellings each returned ELIGIBLE
+# as their own origin). Hebrew has no case distinction, so
+# single entries suffice. The other Hebrew letters stay
+# distinct: ALEPH, for one, has no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "ו": "l", "ן": "l", "ס": "o", "ט": "v",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
