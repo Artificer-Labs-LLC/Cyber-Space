@@ -1473,6 +1473,32 @@ def _resolve_memo_put(label: str, mirror: str, result: dict,
     _resolve_memo[key] = (time.monotonic() + ttl, result)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx. Twin of mint_name._NoRedirect /
+    rotate_name._NoRedirect / resolver/host._NoRedirect /
+    hold_open._NoRedirect / resolve_chain._NoRedirect. The mirror
+    is operator-chosen but still just a server on the wire, and
+    urllib's default opener followed its 301/302/303 (as GET) to a
+    server of the mirror's choosing and accepted THAT server's
+    answer as the mirror's (probed 2026-10-16: a redirected name
+    GET returned the foreign target's document, target contacted)
+    — a third party could fake a binding, a reach descriptor, or
+    a directory for a resolution the real mirror never served.
+    A mirror answer is only a mirror answer when it comes from
+    the mirror itself; a 3xx reads through _resolve_get_json's
+    existing contract (None). Peer-supplied addresses are NOT
+    this helper's seat: they ride _resolve_peer_get_json /
+    _peer_urlopen, whose gated handler re-runs the SSRF gate on
+    every redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_RESOLVE_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _resolve_get_json(url: str):
     """GET a URL and parse the JSON body. Fail-closed helper for the
     resolver: any network error, non-200, or bad JSON returns None —
@@ -1482,7 +1508,7 @@ def _resolve_get_json(url: str):
     own mirror URL, never peer-supplied addresses."""
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=_RESOLVE_TIMEOUT) as resp:
+        with _RESOLVE_OPENER.open(req, timeout=_RESOLVE_TIMEOUT) as resp:
             if resp.status != 200:
                 return None
             return _read_peer_json(resp)

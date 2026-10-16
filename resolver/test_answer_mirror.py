@@ -173,8 +173,72 @@ def run_bad_result_shapes():
         answer.resolve_cyberspace = real
 
 
+def run_redirect_refusal():
+    """Real-transport seat: core._resolve_get_json must refuse a mirror
+    redirect, not follow it. A local mirror 3xxs to a local foreign
+    target; every code must read as None, the target must never be
+    contacted, and a direct mirror 200 must still parse. Twin of the
+    mint_name/rotate_name redirect belts."""
+    import json as _json
+    import threading as _threading
+    from http.server import BaseHTTPRequestHandler as _H, HTTPServer as _S
+
+    hits = []
+
+    class _Target(_H):
+        def do_GET(self):
+            hits.append(self.path)
+            body = _json.dumps({"foreign": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    target = _S(("127.0.0.1", 0), _Target)
+    _threading.Thread(target=target.serve_forever, daemon=True).start()
+    turl = f"http://127.0.0.1:{target.server_address[1]}"
+    servers = [target]
+    try:
+        for code in (301, 302, 303, 307, 308):
+            class _Mirror(_H):
+                _code = code
+
+                def do_GET(self):
+                    self.send_response(self._code)
+                    self.send_header("Location", turl + "/api/v1/names/x")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+                def log_message(self, *a):
+                    pass
+
+            mirror = _S(("127.0.0.1", 0), _Mirror)
+            servers.append(mirror)
+            _threading.Thread(target=mirror.serve_forever, daemon=True).start()
+            murl = f"http://127.0.0.1:{mirror.server_address[1]}"
+            hits.clear()
+            got = core._resolve_get_json(murl + "/api/v1/names/x")
+            check(f"redirect {code}: reads as None", got is None,
+                  f"got {got!r}")
+            check(f"redirect {code}: target never contacted", not hits,
+                  f"hits={hits!r}")
+        check("direct mirror 200 still parses",
+              core._resolve_get_json(turl + "/api/v1/names/x") == {"foreign": True})
+        check("_NoRedirect.redirect_request is None",
+              core._NoRedirect().redirect_request(
+                  None, None, 302, "Found", {}, "http://127.0.0.1/") is None)
+    finally:
+        for srv in servers:
+            srv.shutdown()
+
+
 def main():
     print("fake-mirror unit tests (resolver/answer.py):")
+    run_redirect_refusal()
     run_bad_result_shapes()
     run("good", LABEL + ".cyberspace", 0, 1)
     run("bad-sig", LABEL + ".cyberspace", 3, 0)
