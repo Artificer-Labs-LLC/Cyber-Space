@@ -491,6 +491,19 @@ _check(not ok and blockers,
        "a CJK-U+4E2B-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+oriyac = dict(GOOD, candidate_machine_id="machine-କ")
+ok, blockers = nh.evaluate(oriyac)
+_check(ok and not blockers,
+       "an Oriya letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+oriyat = dict(GOOD, candidate_machine_id="machine-ଠ",
+              origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(oriyat)
+_check(not ok and blockers,
+       "an Oriya-TTHA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -999,6 +1012,8 @@ for cand, orig, why in [
      "cjk-u4e05-respelled same operator must fail"),
     ("op-丫", "op-y",
      "cjk-u4e2b-respelled same operator must fail"),
+    ("op-ଠ", "op-o",
+     "oriya-ttha-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

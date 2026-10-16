@@ -825,6 +825,28 @@ _CONFUSABLES.update(str.maketrans({
     "丅": "T", "丫": "Y",
 }))
 
+# Oriya: one letter is cut as a plain Latin shape (U+0B20
+# LETTER TTHA, a plain ring, as Latin O), and UTS #39 lists
+# it as confusable with that single Latin letter
+# (U+0B20->O), the script's only letter-to-single-Latin
+# mapping in the table -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table
+# audit of _norm against every letter-category UTS #39
+# mapping (161 still escaping before this fold). A seat
+# respelled with it rendered as the origin and compared
+# distinct (probed this tick: U+0B20 machine spelling and
+# U+0B20 operator spelling each returned ELIGIBLE as their
+# own origin). Oriya has no case distinction, so a single
+# entry suffices; _norm's case-fold unites it with the
+# Latin lowercase. The other Oriya letters stay distinct:
+# KA, for one, has no UTS #39 single-Latin entry at all --
+# and DIGIT ZERO folds to o but is a digit, outside the
+# letter scope.
+_CONFUSABLES.update(str.maketrans({
+    "ଠ": "O",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
