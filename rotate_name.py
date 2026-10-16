@@ -341,6 +341,31 @@ def _read_env_text(path):
     return None if len(raw) > _ENV_MAX else raw
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: returning None makes urllib raise
+    HTTPError for the 3xx. Twin of mint_name._NoRedirect /
+    resolver/host._NoRedirect / hold_open._NoRedirect /
+    resolve_chain._NoRedirect. The mirror is operator-chosen but
+    still just a server on the wire, and urllib's default opener
+    followed its 301/302/303 (as GET) to a server of the mirror's
+    choosing and accepted THAT server's answer as the mirror's
+    (probed 2026-10-16: a redirected rotate POST returned the
+    foreign target's 200, and a redirected name GET returned its
+    document, target contacted) — a third party could fake an
+    accepted rotation or the resolve-back / served-chain proof
+    submit_rotation verifies before promote. A mirror answer is
+    only a mirror answer when it comes from the mirror itself; a
+    3xx reads through each helper's existing contract (_post_form
+    returns the 3xx status, which its caller refuses on the status;
+    _get_json returns None)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def _post_form(url: str, fields: dict, timeout: float = 30.0
                ) -> tuple[int | None, str]:
     """POST urlencoded form; returns (status, body). status None = no HTTP
@@ -355,7 +380,7 @@ def _post_form(url: str, fields: dict, timeout: float = 30.0
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             raw = _read_bounded(resp)
             return resp.status, "" if raw is None else raw.decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
@@ -367,7 +392,7 @@ def _post_form(url: str, fields: dict, timeout: float = 30.0
 
 def _get_json(url: str, timeout: float = 30.0) -> dict | None:
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with _OPENER.open(url, timeout=timeout) as resp:
             raw = _read_bounded(resp)
             if raw is None:
                 return None

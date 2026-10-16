@@ -730,6 +730,118 @@ for _argv, _want in ((["foo", "--bogus"], 2),
         print(f"FAIL: main({_argv}) -> {_rc}, want {_want}")
         fails += 1
 
+# Mirror redirects refused, not followed: _post_form/_get_json rode
+# urllib's default opener, which followed a mirror 301/302/303 (as
+# GET) to a foreign server and accepted THAT server's answer as the
+# mirror's (probed 2026-10-16) — a fake accepted rotation / resolve-
+# back proof. Both now ride the no-redirect opener: every 3xx reads
+# through the existing contracts (post: the 3xx status itself, which
+# the caller refuses; get: None), the target is never contacted,
+# and a direct mirror 200 still parses. Twin of mint_name 73bb354.
+import threading as _threading
+from http.server import BaseHTTPRequestHandler as _H
+from http.server import HTTPServer as _S
+
+_rot_target_hits = []
+
+
+class _RotTarget(_H):
+    def _answer(self):
+        _rot_target_hits.append(self.path)
+        _body = b'{"ok": true}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(_body)))
+        self.end_headers()
+        self.wfile.write(_body)
+
+    def do_GET(self):
+        self._answer()
+
+    def do_POST(self):
+        _n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(_n)
+        self._answer()
+
+    def log_message(self, *a):
+        pass
+
+
+_rot_target = _S(("127.0.0.1", 0), _RotTarget)
+_threading.Thread(target=_rot_target.serve_forever, daemon=True).start()
+_rtport = _rot_target.server_address[1]
+
+
+def _rot_mirror_handler(code):
+    class _Mirror(_H):
+        def _redir(self):
+            self.send_response(code)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{_rtport}/stolen")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_GET(self):
+            self._redir()
+
+        def do_POST(self):
+            _n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(_n)
+            self._redir()
+
+        def log_message(self, *a):
+            pass
+
+    return _Mirror
+
+
+_rot_servers = [_rot_target]
+try:
+    for _code in (301, 302, 303, 307, 308):
+        _mirror = _S(("127.0.0.1", 0), _rot_mirror_handler(_code))
+        _rot_servers.append(_mirror)
+        _threading.Thread(target=_mirror.serve_forever,
+                          daemon=True).start()
+        _murl = f"http://127.0.0.1:{_mirror.server_address[1]}"
+        _rot_target_hits.clear()
+        _st, _body = rotate_name._post_form(
+            _murl + "/api/v1/names/rotate", {"a": "b"}, timeout=5.0)
+        if _st == 200 or "foreign" in _body or _st is None:
+            print(f"FAIL: _post_form followed mirror redirect {_code} "
+                  f"-> status={_st!r}")
+            fails += 1
+        if _st != _code:
+            print(f"FAIL: _post_form redirect {_code} -> status={_st!r}, "
+                  f"want the 3xx itself")
+            fails += 1
+        if rotate_name._get_json(_murl + "/api/v1/names/x",
+                                 timeout=5.0) is not None:
+            print(f"FAIL: _get_json followed mirror redirect {_code}")
+            fails += 1
+        if _rot_target_hits:
+            print(f"FAIL: mirror redirect {_code} contacted the "
+                  f"target: {_rot_target_hits!r}")
+            fails += 1
+    _direct = _S(("127.0.0.1", 0), _RotTarget)
+    _rot_servers.append(_direct)
+    _threading.Thread(target=_direct.serve_forever, daemon=True).start()
+    _durl = f"http://127.0.0.1:{_direct.server_address[1]}"
+    if rotate_name._get_json(_durl + "/api/v1/names/x",
+                             timeout=5.0) != {"ok": True}:
+        print("FAIL: direct mirror 200 no longer parses in _get_json")
+        fails += 1
+    _st, _body = rotate_name._post_form(
+        _durl + "/api/v1/names/rotate", {"a": "b"}, timeout=5.0)
+    if _st != 200:
+        print(f"FAIL: direct mirror 200 _post_form status={_st!r}")
+        fails += 1
+    if rotate_name._NoRedirect().redirect_request(
+            None, None, 302, "Found", {}, "http://127.0.0.1/") is not None:
+        print("FAIL: _NoRedirect.redirect_request is not None")
+        fails += 1
+finally:
+    for _srv in _rot_servers:
+        _srv.shutdown()
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
