@@ -219,6 +219,19 @@ _check(not ok and blockers,
        "a Tifinagh-YADD-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+vai = dict(GOOD, candidate_machine_id="machine-ꔀ")
+ok, blockers = nh.evaluate(vai)
+_check(ok and not blockers,
+       "a Vai syllable with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+vaim = dict(GOOD, candidate_machine_id="machine-ꕗ",
+            origin_machine_id="machine-b")
+ok, blockers = nh.evaluate(vaim)
+_check(not ok and blockers,
+       "a Vai-GBA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -659,6 +672,16 @@ for cand, orig, why in [
      "tifinagh-yadh-respelled same operator must fail"),
     ("op-ⵝ", "op-x",
      "tifinagh-yath-respelled same operator must fail"),
+    ("op-ꕗ", "op-b",
+     "vai-gba-respelled same operator must fail"),
+    ("op-ꗋ", "op-e",
+     "vai-to-respelled same operator must fail"),
+    ("op-ꕯ", "op-l",
+     "vai-na-respelled same operator must fail"),
+    ("op-ꕶ", "op-s",
+     "vai-poo-respelled same operator must fail"),
+    ("op-ꔋ", "op-t",
+     "vai-gbee-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

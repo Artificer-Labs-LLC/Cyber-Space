@@ -534,6 +534,26 @@ _CONFUSABLES.update(str.maketrans({
     "ⴸ": "V", "ⵝ": "X",
 }))
 
+# Vai: the Liberian syllabary whose signs are likewise simple
+# shapes, and UTS #39 lists 5 of its syllables as confusable
+# with single Latin letters -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: a GBA machine spelling; TO, NA,
+# POO and GBEE operator spellings each returned ELIGIBLE as
+# their own origin). Vai is caseless, so single entries
+# suffice; _norm's case-fold unites the capital targets with
+# the Latin lowercase (NA's own UTS #39 target is small l).
+# The other Vai syllables stay distinct: EE, for one, has no
+# UTS #39 entry at all, KI and ZOO fold only to digits, KPA
+# only to Greek Delta, and SEE only inside a multi-letter
+# mapping.
+_CONFUSABLES.update(str.maketrans({
+    "ꕗ": "B", "ꗋ": "E", "ꕯ": "l", "ꕶ": "S", "ꔋ": "T",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
