@@ -514,6 +514,26 @@ _CONFUSABLES.update(str.maketrans({
     "ו": "l", "ן": "l", "ס": "o", "ט": "v",
 }))
 
+# Tifinagh: the Berber script whose geometric letterforms
+# duplicate Latin shapes, and UTS #39 lists 7 of its letters
+# as confusable with single Latin letters -- mappings taken
+# from confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with one rendered as the origin and compared
+# distinct (probed this tick: a YADD machine spelling; YAZH,
+# YAN, YAR, YARR, YADH and YATH operator spellings each
+# returned ELIGIBLE as their own origin). Tifinagh has no
+# case distinction, so single entries suffice; _norm's
+# case-fold unites the capital targets with the Latin
+# lowercase. With these, no Tifinagh letter still escapes;
+# the other Tifinagh letters stay distinct: YA, for one, has
+# no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "ⴹ": "E", "ⵊ": "l", "ⵏ": "l", "ⵔ": "O", "ⵕ": "Q",
+    "ⴸ": "V", "ⵝ": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

@@ -206,6 +206,19 @@ _check(not ok and blockers,
        "a Hebrew-SAMEKH-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+tif = dict(GOOD, candidate_machine_id="machine-ⴰ")
+ok, blockers = nh.evaluate(tif)
+_check(ok and not blockers,
+       "a Tifinagh letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+tifm = dict(GOOD, candidate_machine_id="machinⴹ-a",
+            origin_machine_id="machine-a")
+ok, blockers = nh.evaluate(tifm)
+_check(not ok and blockers,
+       "a Tifinagh-YADD-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -632,6 +645,20 @@ for cand, orig, why in [
      "hebrew-final-nun-respelled same operator must fail"),
     ("op-ט", "op-v",
      "hebrew-tet-respelled same operator must fail"),
+    ("op-ⴹ", "op-e",
+     "tifinagh-yadd-respelled same operator must fail"),
+    ("op-ⵊ", "op-l",
+     "tifinagh-yazh-respelled same operator must fail"),
+    ("op-ⵏ", "op-l",
+     "tifinagh-yan-respelled same operator must fail"),
+    ("op-ⵔ", "op-o",
+     "tifinagh-yar-respelled same operator must fail"),
+    ("op-ⵕ", "op-q",
+     "tifinagh-yarr-respelled same operator must fail"),
+    ("op-ⴸ", "op-v",
+     "tifinagh-yadh-respelled same operator must fail"),
+    ("op-ⵝ", "op-x",
+     "tifinagh-yath-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
