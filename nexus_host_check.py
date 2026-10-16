@@ -572,6 +572,23 @@ _CONFUSABLES.update(str.maketrans({
     "ࡀ": "o",
 }))
 
+# Hanifi Rohingya: the script whose letter HA is likewise a
+# plain ring, and UTS #39 lists it as confusable with the
+# single Latin letter o, the script's only letter-to-single-
+# Latin mapping in the table -- mapping taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table audit
+# of _norm against every letter-category UTS #39 mapping. A
+# seat respelled with it rendered as the origin and compared
+# distinct (probed this tick: a HA machine spelling and a HA
+# operator spelling each returned ELIGIBLE as their own
+# origin). Hanifi Rohingya has no case distinction, so a
+# single entry suffices. The other Hanifi letters stay
+# distinct: A, for one, has no UTS #39 single-Latin entry.
+_CONFUSABLES.update(str.maketrans({
+    "𐴇": "o",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
