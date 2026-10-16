@@ -480,6 +480,24 @@ _CONFUSABLES.update(str.maketrans({
     "ߕ": "b", "ߓ": "F", "ߊ": "l", "ߋ": "o", "ߠ": "T", "ߌ": "Y",
 }))
 
+# Runic, completed: the Runic block above folded five letters,
+# but the full-table audit shows two more of the futhark's
+# letters carry UTS #39 single-Latin mappings it missed --
+# EHWAZ EH E to M and GEBO GYFU G to X (the letters the earlier
+# block folded under those names are their block-mates MANNAZ
+# and FRANKS CASKET AC, whose folds stand). Mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed. A seat respelled with one rendered
+# as the origin and compared distinct (probed this tick: an
+# EHWAZ machine spelling and a GEBO operator spelling each
+# returned ELIGIBLE as their own origin). Runic is caseless,
+# so single entries suffice. With these, no Runic letter still
+# escapes; the other runes (ANSUZ, for one) have no UTS #39
+# single-Latin entry and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "ᛖ": "M", "ᚷ": "X",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
