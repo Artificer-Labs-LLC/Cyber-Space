@@ -154,6 +154,19 @@ def main(argv):
             print(__doc__.strip())
             return 0
         if a == "--dry-run":
+            # A repeated boolean flag must refuse by name too: every
+            # value flag in this parser already does, and the equals
+            # spelling of --dry-run is refused as unknown below, so a
+            # space-form repeat was the one flag spelling that passed
+            # silently to a verdict -- an operator who typed it twice
+            # (a paste, a wrapped command) got a claim preview with
+            # no sign the command they ran was not the command they
+            # wrote. Twin of nexus_host_check's boolean gate.
+            if a in seen:
+                print(f"refused: {a} given more than once",
+                      file=sys.stderr)
+                return 2
+            seen.add(a)
             dry_run = True
         elif a.startswith(("--key=", "--backup=", "--env-dir=",
                            "--expiry-days=")):

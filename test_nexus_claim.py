@@ -197,6 +197,19 @@ with tempfile.TemporaryDirectory() as td:
     # last-won, so --key A --key B claimed with B while the operator
     # believed it claimed with A -- twin of nexus_status's,
     # nexus_preflight's and nexus_keygen's duplicate gates.
+    # A repeated --dry-run refuses by name too: every value flag
+    # above already does, and --dry-run=true is refused as unknown,
+    # so a space-form repeat was the one flag spelling that passed
+    # silently to a verdict -- twin of nexus_host_check's boolean
+    # gate. A single --dry-run still reaches its dry-run (above).
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _code = nc.main(["http://127.0.0.1:9", f"--key={key}",
+                         f"--backup={bak}", "--dry-run", "--dry-run"])
+    _check(_code == 2 and "--dry-run given more than once"
+           in _err.getvalue(),
+           "duplicate --dry-run must refuse by name")
+
     for _argv, _flag in (
             (["--key", str(key), "--key", str(bak)], "--key"),
             ([f"--key={key}", f"--key={bak}"], "--key"),
