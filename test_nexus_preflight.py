@@ -160,6 +160,36 @@ with tempfile.TemporaryDirectory() as td:
     _check(_ready and _bl == [],
            f"tight resolved parent must restore READY, got {_bl}")
 
+    # Non-regular key/backup: a FIFO at either seat must be refused
+    # by name WITHOUT being opened — open() on a FIFO blocks until a
+    # writer appears, so the unbounded seat hung this fail-closed
+    # check forever (probed 2026-10-16). A symlink to a FIFO is the
+    # same seat (stat follows the link); a FIFO primary named via
+    # check_backup directly blocks too. Matching pair stays READY.
+    fifo = td / "fifo.key"
+    os.mkfifo(fifo)
+    os.chmod(fifo, 0o600)
+    pubf, probsf = np.check_key_file(fifo)
+    _check(pubf is None and any("not a regular file" in p
+                                 for p in probsf),
+           "FIFO key must block by name, unopened")
+    _check(any("not a regular file" in p
+               for p in np.check_backup(key, fifo)),
+           "FIFO backup must block by name, unopened")
+    _check(any("not a regular file" in p
+               for p in np.check_backup(fifo, bak)),
+           "FIFO primary must block check_backup by name, unopened")
+    flink = td / "fifo-link.key"
+    flink.symlink_to(fifo)
+    pubf, probsf = np.check_key_file(flink)
+    _check(pubf is None and any("not a regular file" in p
+                                for p in probsf),
+           "symlink to a FIFO key must block by name, unopened")
+    _ready, _pub, _bl = np.preflight("nexus", key, bak, ROOT)
+    _check(_ready and _bl == [],
+           f"regular-file gate must keep a matching pair READY, "
+           f"got {_bl}")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)

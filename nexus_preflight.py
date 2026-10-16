@@ -90,7 +90,19 @@ def check_key_file(path):
     if not p.exists():
         return None, [f"key file missing: {p} — the Nexus key has not "
                       f"been generated yet (supervised step, not a tick)"]
-    mode = stat.S_IMODE(p.stat().st_mode)
+    # Only a regular file may be opened: open() on a FIFO blocks until
+    # a writer appears, so a planted FIFO at the key seat hung this
+    # fail-closed check forever instead of reporting NOT READY
+    # (probed 2026-10-16: check_key_file on a FIFO never returned).
+    # stat follows symlinks, so a symlink TO a regular file stays
+    # valid (the seat the resolved-parent check guards) while a
+    # symlink to a FIFO/device/dir is refused here, unopened.
+    kst = p.stat()
+    if not stat.S_ISREG(kst.st_mode):
+        return None, [f"key file {p} is not a regular file — a name "
+                      f"key is a regular file holding one "
+                      f"64-hex-char seed; nothing was opened"]
+    mode = stat.S_IMODE(kst.st_mode)
     if mode & 0o077:
         problems.append(f"key file {p} is group/other-accessible "
                         f"(mode {mode:04o}); name keys are born 0600")
@@ -144,6 +156,20 @@ def check_backup(primary_path, backup_path):
                 "lost is the genesis shape)"]
     if not b.exists():
         return [f"backup key file missing: {b}"]
+    # Twin of check_key_file's regular-file gate: the bounded reads
+    # below open BOTH files, and open() on a FIFO blocks — a FIFO at
+    # either seat hung the comparison instead of blocking by name.
+    if not stat.S_ISREG(b.stat().st_mode):
+        return [f"backup {b} is not a regular file — a backup is a "
+                f"second copy of the seed file; nothing was opened"]
+    try:
+        _pst = Path(primary_path).stat()
+    except OSError:
+        _pst = None
+    if _pst is not None and not stat.S_ISREG(_pst.st_mode):
+        return [f"backup comparison refused: primary key "
+                f"{primary_path} is not a regular file; nothing "
+                f"was opened"]
     mode = stat.S_IMODE(b.stat().st_mode)
     problems = []
     if mode & 0o077:
