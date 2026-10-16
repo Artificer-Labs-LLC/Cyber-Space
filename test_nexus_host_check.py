@@ -504,6 +504,33 @@ _check(not ok and blockers,
        "an Oriya-TTHA-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+georgiac = dict(GOOD, candidate_machine_id="machine-ა")
+ok, blockers = nh.evaluate(georgiac)
+_check(ok and not blockers,
+       "a Georgian letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+georgias = dict(GOOD, candidate_machine_id="machine-Ⴝ",
+                origin_machine_id="machine-s")
+ok, blockers = nh.evaluate(georgias)
+_check(not ok and blockers,
+       "a Georgian-CHAR-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+georgiah = dict(GOOD, candidate_machine_id="machine-Ⴙ",
+                origin_machine_id="machine-h")
+ok, blockers = nh.evaluate(georgiah)
+_check(not ok and blockers,
+       "a Georgian-CHIN-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+georgiao = dict(GOOD, candidate_machine_id="machine-ჿ",
+                origin_machine_id="machine-o")
+ok, blockers = nh.evaluate(georgiao)
+_check(not ok and blockers,
+       "a Georgian-LABIAL-SIGN-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -1014,6 +1041,24 @@ for cand, orig, why in [
      "cjk-u4e2b-respelled same operator must fail"),
     ("op-ଠ", "op-o",
      "oriya-ttha-respelled same operator must fail"),
+    ("op-Ⴙ", "op-h",
+     "georgian-chin-respelled same operator must fail"),
+    ("op-ჿ", "op-o",
+     "georgian-labial-sign-respelled same operator must fail"),
+    ("op-Ჿ", "op-o",
+     "georgian-mtavruli-labial-sign-respelled same operator must fail"),
+    ("op-Ⴝ", "op-s",
+     "georgian-char-respelled same operator must fail"),
+    ("op-ჽ", "op-s",
+     "georgian-aen-respelled same operator must fail"),
+    ("op-Ჽ", "op-s",
+     "georgian-mtavruli-aen-respelled same operator must fail"),
+    ("op-ყ", "op-y",
+     "georgian-qar-respelled same operator must fail"),
+    ("op-ⴭ", "op-z",
+     "georgian-small-aen-respelled same operator must fail"),
+    ("op-Ⴭ", "op-z",
+     "georgian-capital-aen-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

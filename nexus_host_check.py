@@ -847,6 +847,33 @@ _CONFUSABLES.update(str.maketrans({
     "ଠ": "O",
 }))
 
+# Georgian: nine letters across its three cases are cut as
+# plain Latin shapes (the Asomtavruli capitals CHIN, CHAR
+# and AEN, the Mtavruli capitals LABIAL SIGN and AEN, the
+# unicameral LABIAL SIGN, AEN and QAR, and the Nuskhuri
+# small AEN), and UTS #39 lists each as confusable with a
+# single Latin letter (U+10B9->h, U+10FF->o, U+1CBF->O,
+# U+10BD->S, U+10FD->S, U+1CBD->S, U+10E7->y, U+2D2D->z,
+# U+10CD->Z) -- the script's only letter-to-single-Latin
+# mappings in the table, taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not
+# guessed, and surfaced by a full-table audit of _norm
+# against every letter-category UTS #39 mapping (160 still
+# escaping before this fold). A seat respelled with one
+# rendered as the origin and compared distinct (probed
+# this tick: U+10BD, U+10B9, U+10FF machine spellings and
+# U+2D2D operator spelling each returned ELIGIBLE as
+# their own origin). Entries are spelled as the table
+# gives them; _norm's case-fold unites each with the
+# Latin lowercase. The other Georgian letters stay
+# distinct: AN, for one, has no UTS #39 single-Latin
+# entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "\u10b9": "h", "\u10ff": "o", "\u1cbf": "O",
+    "\u10bd": "S", "\u10fd": "S", "\u1cbd": "S",
+    "\u10e7": "y", "\u2d2d": "z", "\u10cd": "Z",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
