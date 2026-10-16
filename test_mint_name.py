@@ -31,10 +31,12 @@ def _check(fn, arg, want, why):
 for bad in (123, 1.5, True, None, b"http://x:8471", ["http://x"], []):
     _check(mint_name._valid_mirror, bad, False, f"_valid_mirror({bad!r})")
 for good in ("http://127.0.0.1:8471", "https://node.example",
-             "http://x:65535"):
+             "http://x:65535", "http://x:8471/base"):
     _check(mint_name._valid_mirror, good, True, f"_valid_mirror({good!r})")
 for bad in ("", "ftp://x", "http://", "http://x:0", "http://x:65536",
-            "http://x:abc", " http://x", "http://x/\nEVIL=1"):
+            "http://x:abc", " http://x", "http://x/\nEVIL=1",
+            "http://x:8471?x=1", "http://x:8471?", "http://x:8471#frag",
+            "http://x:8471#", "http://x:8471/base?x=1"):
     _check(mint_name._valid_mirror, bad, False, f"_valid_mirror({bad!r})")
 
 for bad in (123, 1.5, True, b"foo", ["foo"], None):

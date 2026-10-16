@@ -258,7 +258,18 @@ def _valid_mirror(mirror: str) -> bool:
     injects whole env lines (a second MIRROR_URL, a forged NAME_PRIVKEY)
     into a 0600 file installed under /etc. A leading space / trailing
     tab passed the same way and wrote a value hostd never reads back
-    as written. No honest mirror contains whitespace; refuse it."""
+    as written. No honest mirror contains whitespace; refuse it.
+
+    A query or fragment is refused the same way: every caller builds
+    its fetch by appending "/api/v1/..." to this base, so a mirror
+    spelled "http://host:8471?x=1" or "http://host:8471#frag" fetched
+    "...?x=1/api/v1/..." — a URL that dials the host but asks for
+    nothing the mirror serves — and the failure read as a verdict on
+    the mirror (claim refused, no binding served) instead of the bad
+    argument it is. Stored node addresses refuse query/fragment
+    outright (core._valid_node_url's shape, "stored addresses stay
+    query-free"); a path prefix stays valid, since the appended
+    routes honestly extend it."""
     # A non-string has no mirror shape at all: it escaped as TypeError
     # from the iteration below (int/None) or AttributeError from a
     # bytes element's .isspace — a crash, not this predicate's False.
@@ -272,7 +283,8 @@ def _valid_mirror(mirror: str) -> bool:
     except ValueError:
         return False
     return (parts.scheme in ("http", "https") and bool(parts.hostname)
-            and (port is None or 1 <= port <= 65535))
+            and (port is None or 1 <= port <= 65535)
+            and "?" not in mirror and "#" not in mirror)
 
 
 def _valid_label(label: str) -> bool:
