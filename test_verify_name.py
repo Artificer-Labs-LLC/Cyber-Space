@@ -180,6 +180,28 @@ for _flag in ("--expect-name", "--expect-pubkey"):
             print(f"FAIL: duplicate {_flag} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
             fails += 1
 
+# CLI abbreviation gate: argparse accepts any unambiguous prefix,
+# so --expect-n silently became --expect-name and dodged the
+# duplicate gate above. An abbreviated spelling in space, equals
+# or paired-with-exact form must refuse by name, exit 2, before
+# any verdict; a single exact flag still reaches its verdict.
+for _flag, _abbr in (("--expect-name", "--expect-n"),
+                     ("--expect-name", "--e"),
+                     ("--expect-pubkey", "--expect-p"),
+                     ("--expect-name", "--expect-")):
+    for _extra in ([_abbr, "a"],
+                   [f"{_abbr}=a"],
+                   [_abbr, "a", _flag, "b"],
+                   [_flag, "a", _abbr, "b"]):
+        _r = _run_cli_args(_extra)
+        if _r.returncode != 2 or f"{_abbr} is an abbreviation of {_flag}" not in _r.stderr:
+            print(f"FAIL: abbreviated {_abbr} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
+            fails += 1
+_r = _run_cli_args(["--expect-name", "foo"])
+if _r.returncode != 2 or "cannot read" not in _r.stderr:
+    print(f"FAIL: single exact --expect-name -> rc={_r.returncode} {_r.stderr!r}")
+    fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)

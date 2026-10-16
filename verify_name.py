@@ -234,12 +234,28 @@ def main(argv: list[str]) -> int:
     # or mixed spelling, before argparse runs — before any input
     # is read.
     _seen: set[str] = set()
+    _long_opts = ("--expect-name", "--expect-pubkey", "--help")
     for _tok in argv:
         if _tok == "--":
             break
         if not _tok.startswith("--"):
             continue
         _name = _tok.partition("=")[0]
+        if _name not in _long_opts:
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --expect-n (even --e) silently became
+            # --expect-name and dodged the duplicate gate below: a
+            # --expect-n foo --expect-name bar pair verified against
+            # bar while the operator believed the pin was foo
+            # (probed this tick: the abbreviation proceeded to a
+            # verdict). Refuse the abbreviated spelling itself, by
+            # name, before argparse can expand it. Twin of
+            # resolve_chain's gate (c40491d) and dial's (3328e2d).
+            _full = [o for o in _long_opts if o.startswith(_name)]
+            if _full:
+                print(f"refused: {_name} is an abbreviation of "
+                      f"{_full[0]} — spell it out", file=sys.stderr)
+                return 2
         if _name in ("--expect-name", "--expect-pubkey"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
@@ -247,7 +263,8 @@ def main(argv: list[str]) -> int:
                 return 2
             _seen.add(_name)
     ap = argparse.ArgumentParser(
-        description="verify a .cyberspace name binding offline")
+        description="verify a .cyberspace name binding offline",
+        allow_abbrev=False)
     ap.add_argument("source", help="binding.json, or - for stdin")
     ap.add_argument("--expect-name",
                     help="fail unless the binding is for this label")
