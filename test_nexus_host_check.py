@@ -62,6 +62,12 @@ _check(ok and not blockers,
        "a non-look-alike Armenian letter is a genuinely distinct "
        f"seat and must stay ELIGIBLE: {blockers}")
 
+chk = dict(GOOD, candidate_machine_id="machine-Ꭶ")
+ok, blockers = nh.evaluate(chk)
+_check(ok and not blockers,
+       "a Cherokee letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -195,6 +201,14 @@ for key, bad, why in [
      "coptic-capital-alfa-respelled same machine must fail"),
     ("candidate_operator", "ⲟp-A",
      "coptic-o-respelled same operator must fail"),
+    ("candidate_machine_id", "mᎪchine-a",
+     "cherokee-go-respelled same machine must fail"),
+    ("candidate_machine_id", "machinᎬ-a",
+     "cherokee-gv-respelled same machine must fail"),
+    ("candidate_machine_id", "mꭺchine-a",
+     "cherokee-small-go-respelled same machine must fail"),
+    ("candidate_operator", "op-Ꭺ",
+     "cherokee-go-respelled same operator must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -228,6 +242,10 @@ for cand, orig, why in [
      "coptic-sima-respelled same operator must fail"),
     ("op-ⲡ", "op-n",
      "coptic-pi-respelled same operator must fail"),
+    ("op-Ꮟ", "op-b",
+     "cherokee-si-respelled same operator must fail"),
+    ("op-ꭰ", "op-d",
+     "cherokee-small-a-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

@@ -145,6 +145,27 @@ _CONFUSABLES.update(str.maketrans({
     "ɑ": "a", "ɡ": "g",
 }))
 
+# Cherokee: Sequoyah's syllabary was typeset with borrowed Latin
+# sorts, and UTS #39 lists a set of its letters as confusable with
+# single Latin letters (GO with A, GV with E, MI with H, and so
+# on). A seat respelled with one rendered as the origin and
+# compared distinct (probed this tick: GO and GV seats returned
+# ELIGIBLE). Only the single-Latin-letter mappings fold; the
+# digit mappings (SE to 4, WV to 6) stay out under the l/1, O/0
+# scope exclusion, and multi-letter or non-Latin targets
+# (NA to O + stroke, HU to Gamma) stay distinct. Cherokee small
+# letters need no entries of their own: Cherokee case-folding is
+# upward (small folds to capital), and _norm folds once more
+# after case-folding, below.
+_CONFUSABLES.update(str.maketrans({
+    "Ꭺ": "A", "Ᏼ": "B", "Ꮯ": "C", "Ꭰ": "D", "Ꭼ": "E",
+    "Ꮐ": "G", "Ᏻ": "G", "Ꮋ": "H", "Ꮒ": "h", "Ꮟ": "b",
+    "Ꮷ": "d", "Ꭵ": "i", "Ꭻ": "J", "Ꮶ": "K", "Ꮮ": "L",
+    "Ꮇ": "M", "Ꮲ": "P", "Ꭱ": "R", "Ꮢ": "R", "Ꮥ": "S",
+    "Ꮪ": "S", "Ꭲ": "T", "Ꮩ": "V", "Ꮃ": "W", "Ꮤ": "W",
+    "Ꭹ": "Y", "Ꮍ": "Y", "Ꮓ": "Z",
+}))
+
 # Coptic: the Coptic alphabet is Greek uncial in another name,
 # and the letters whose uncial shape IS a Latin letter duplicate
 # it exactly as their Greek cognates above do -- alfa, vida, eie,
@@ -191,7 +212,13 @@ def _norm(v):
     v = unicodedata.normalize("NFKC", v)
     v = "".join(ch for ch in v if not _invisible(ch))
     v = v.translate(_CONFUSABLES)
-    return " ".join(v.split()).casefold()
+    # One more fold after case-folding: Cherokee case-folds
+    # UPWARD (its small letters fold to the capitals), so a
+    # small-Cherokee spelling only becomes a character the
+    # table knows once case-folding has run -- a fold that
+    # ended at case-folding would hand it back unfolded.
+    return " ".join(v.split()).casefold() \
+        .translate(_CONFUSABLES).casefold()
 
 
 def evaluate(c):
