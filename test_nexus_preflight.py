@@ -133,6 +133,23 @@ with tempfile.TemporaryDirectory() as td:
     _check(np.check_tree(troot),
            "non-UTF-8 federation.py must block, not raise")
 
+    # Oversize tree files: block by size, named — check_tree must
+    # not load either source file unbounded (it only searches for
+    # one short marker per file). The marker sits inside the
+    # oversize file on purpose: size, not content, is the verdict.
+    (troot / "federation.py").write_bytes(
+        b'"/fed/names/gossip"' + b"x" * np._TREE_MAX)
+    (troot / "verify_name.py").write_text("--expect-pubkey")
+    _check(any("oversize" in p and "federation" in p
+               for p in np.check_tree(troot)),
+           "oversize federation.py must block by size, named")
+    (troot / "federation.py").write_text('"/fed/names/gossip"')
+    (troot / "verify_name.py").write_bytes(
+        b"--expect-pubkey" + b"x" * np._TREE_MAX)
+    _check(any("oversize" in p and "verify_name" in p
+               for p in np.check_tree(troot)),
+           "oversize verify_name.py must block by size, named")
+
     # Tree checks pass on the real tree (gossip route + pin present).
     _check(np.check_tree(ROOT) == [], "real tree must pass tree checks")
 

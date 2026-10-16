@@ -43,6 +43,7 @@ from fed.ed25519 import publickey  # noqa: E402
 _ROOT_LABEL = "nexus"
 _REFUSED_LABEL = "genesis"
 _SEED_MAX = 1024
+_TREE_MAX = 1_048_576
 
 
 def check_key_file(path):
@@ -135,23 +136,48 @@ def check_backup(primary_path, backup_path):
     return problems
 
 
+def _read_tree_text(path):
+    """Return (text, oversize). Bounded twin of the seed caps above:
+    check_tree loaded both source files via read_text() unbounded
+    (probed 2026-10-16: a 50 MB federation.py pulled ~114 MB peak
+    RSS into a readiness check), yet it only searches each file for
+    one short marker. Read at most _TREE_MAX + 1 bytes (the real
+    files are ~84 KB / ~13 KB); an oversize file is named by the
+    caller and blocks fail-closed, never searched in full. An
+    unreadable or non-UTF-8 file reads as empty, as before."""
+    try:
+        with path.open("rb") as f:
+            raw = f.read(_TREE_MAX + 1)
+    except OSError:
+        return "", False
+    if len(raw) > _TREE_MAX:
+        return "", True
+    try:
+        return raw.decode("utf-8"), False
+    except UnicodeDecodeError:
+        return "", False
+
+
 def check_tree(root):
     """The local tree must carry the gossip receive route and the pin."""
     problems = []
-    fed = Path(root) / "federation.py"
-    try:
-        fed_text = fed.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        fed_text = ""
-    if '"/fed/names/gossip"' not in fed_text:
+    fed_text, fed_over = _read_tree_text(Path(root) / "federation.py")
+    if fed_over:
+        problems.append(f"federation.py exceeds {_TREE_MAX} bytes — "
+                        f"tree check oversize: the gossip receive "
+                        f"route cannot be verified without an "
+                        f"unbounded read")
+    elif '"/fed/names/gossip"' not in fed_text:
         problems.append("federation.py lacks the /fed/names/gossip "
                         "receive route — names cannot federate")
-    verify = Path(root) / "verify_name.py"
-    try:
-        verify_text = verify.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        verify_text = ""
-    if "--expect-pubkey" not in verify_text:
+    verify_text, verify_over = _read_tree_text(Path(root)
+                                               / "verify_name.py")
+    if verify_over:
+        problems.append(f"verify_name.py exceeds {_TREE_MAX} bytes — "
+                        f"tree check oversize: the --expect-pubkey "
+                        f"pin cannot be verified without an "
+                        f"unbounded read")
+    elif "--expect-pubkey" not in verify_text:
         problems.append("verify_name.py lacks the --expect-pubkey pin — "
                         "the Depth Test cannot pin the Nexus key out-of-band")
     return problems
