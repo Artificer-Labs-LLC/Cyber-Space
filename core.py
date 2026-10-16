@@ -289,6 +289,40 @@ def _read_node_key_file() -> str:
     return raw.strip()
 
 
+# First-boot settle window: the winner's O_EXCL create lands the file
+# BEFORE its 64 bytes do (create, then looped write + fsync), so a
+# concurrent boot reading in that window sees an empty/partial file.
+# The winner finishes in milliseconds; a corrupt file never settles.
+_NODE_KEY_SETTLE_SECS = 2.0
+_NODE_KEY_SETTLE_POLL = 0.025
+
+
+def _read_node_key_settled() -> str:
+    """Read the saved node seed, briefly awaiting an in-flight writer.
+
+    Both existing-file seats in _node_keypair (the exists() read and
+    the first-boot race loser's read) can land while the winning
+    process is still mid-write: its file exists, but the seed does
+    not yet — and _node_keypair runs at import, so the old immediate
+    shape check killed that boot outright with RuntimeError beside
+    a key that became valid milliseconds later (probed 2026-10-16:
+    an empty .node.key read as "not a 32-byte hex seed"). Re-read
+    until the content is a whole 64-hex seed or the settle window
+    passes; a genuinely truncated/corrupt file (a crash left it that
+    way for good) still returns its raw content and hits the same
+    fail-closed RuntimeError in _node_keypair, just after the wait.
+    A valid saved key reads on the first pass, with no delay.
+    """
+    deadline = time.monotonic() + _NODE_KEY_SETTLE_SECS
+    while True:
+        raw = _read_node_key_file()
+        if re.fullmatch(r"[0-9a-fA-F]{64}", raw):
+            return raw
+        if time.monotonic() >= deadline:
+            return raw
+        time.sleep(_NODE_KEY_SETTLE_POLL)
+
+
 def _node_keypair() -> tuple[str, str]:
     """Node's persistent Ed25519 federation identity -> (privkey_hex, pubkey_hex).
 
@@ -302,19 +336,23 @@ def _node_keypair() -> tuple[str, str]:
     boot's shape check would strand as a permanent RuntimeError.
     The parent directory is fsynced after the create too (probed
     2026-10-16: fsync kinds ['file'] only): file fsync alone does
-    not make the .node.key directory entry durable.
+    not make the .node.key directory entry durable. Adoption is
+    settled, not instant (_read_node_key_settled): a loser — or a
+    plain second boot — can still read the winner's file between
+    its create and its write landing, and that in-flight window
+    must adopt the finished key, not die on the empty file.
     """
     env_key = os.environ.get("CYBERNET_NODE_PRIVKEY", "").strip()
     if env_key:
         priv = env_key
     elif os.path.exists(_NODE_KEY_PATH):
-        priv = _read_node_key_file()
+        priv = _read_node_key_settled()
     else:
         candidate = secrets.token_hex(32)
         try:
             fd = os.open(_NODE_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
-            priv = _read_node_key_file()  # lost the first-boot race
+            priv = _read_node_key_settled()  # lost the first-boot race
         else:
             data = candidate.encode()
             try:

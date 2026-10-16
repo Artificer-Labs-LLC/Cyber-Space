@@ -17,6 +17,8 @@ import os
 import stat
 import sys
 import tempfile
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -391,6 +393,46 @@ def node_key_cases():
                   fsync_kinds == ["file", "dir"], str(fsync_kinds))
             priv2, _ = _node_keypair()
             check("second boot reads the same identity", priv2 == priv)
+        # In-flight winner: the file exists (the winner won O_EXCL)
+        # but its bytes have not landed yet — the settled read must
+        # adopt the key once the write completes, not die on the
+        # empty file the old immediate read hit at import time.
+        inflight = os.path.join(td, "inflight.key")
+        with open(inflight, "w"):
+            pass  # created, zero bytes written yet
+
+        def finish_write():
+            time.sleep(0.3)
+            with open(inflight, "w") as f:
+                f.write(winner)
+
+        with _mock.patch.object(_core, "_NODE_KEY_PATH", inflight), \
+                _mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CYBERNET_NODE_PRIVKEY", None)
+            t = threading.Thread(target=finish_write)
+            t.start()
+            try:
+                priv3, _pub3 = _node_keypair()
+                check("in-flight winner adopted once its write lands",
+                      priv3 == winner)
+            except RuntimeError:
+                check("in-flight winner adopted once its write lands",
+                      False, "RuntimeError on an in-flight write")
+            t.join()
+        # A file that never settles (crash-truncated for good) still
+        # fails closed with the same RuntimeError after the window.
+        stuck = os.path.join(td, "stuck.key")
+        with open(stuck, "w"):
+            pass
+        with _mock.patch.object(_core, "_NODE_KEY_PATH", stuck), \
+                _mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CYBERNET_NODE_PRIVKEY", None)
+            try:
+                _node_keypair()
+                check("never-settling key file still refused", False,
+                      "no RuntimeError")
+            except RuntimeError:
+                check("never-settling key file still refused", True)
 
 
 def main():
