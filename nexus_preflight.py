@@ -318,7 +318,7 @@ def main(argv):
             continue
         if a in ("--key", "--backup"):
             i += 1
-            if i >= len(argv):
+            if i >= len(argv) or argv[i].startswith("--"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--key":

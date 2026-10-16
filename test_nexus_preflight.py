@@ -8,6 +8,8 @@ missing/mismatched backup, and a tree that cannot federate or pin.
 The READY path uses a throwaway key in a temp dir — never the real
 ~/.cyberspace — and proves the printed pub derives from that seed.
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -199,6 +201,18 @@ with tempfile.TemporaryDirectory() as td:
            "empty equals value must be a usage refusal")
     _check(np.main([f"--backup={bak}", "--key"]) == 2,
            "space spelling missing its value must stay a refusal")
+
+    # A following -- flag is not a space-form value: --key --backup
+    # swallowed the backup flag as the key path and then blamed the
+    # real backup path as unknown, instead of naming --key — twin
+    # of nexus_keygen's and nexus_depth_check's space-form gates.
+    for _argv, _flag in ((["--key", "--backup", str(bak)], "--key"),
+                         (["--backup", "--key", str(key)], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = np.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"following flag must refuse as {_flag} needs a value")
 
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
