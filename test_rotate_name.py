@@ -599,6 +599,35 @@ with tempfile.TemporaryDirectory() as _td:
         print(f"FAIL: _load_record missing -> {_rec!r},{_err!r}")
         fails += 1
 
+# A repeated value flag refuses by name before argparse runs:
+# argparse silently last-won, so --new-key-seed A --new-key-seed B
+# minted a rotation to B while the operator believed it rotated to
+# A — twin of the nexus_*/mint_name duplicate gates. Space, equals
+# and mixed spellings all refuse, exit 2, via captured stderr.
+import io as _io
+import contextlib as _contextlib
+for _argv, _flag in (
+        (["foo", "--new-key-seed", "aa" * 32, "--new-key-seed", "bb" * 32],
+         "--new-key-seed"),
+        (["foo", f"--new-key-seed={'aa' * 32}", f"--new-key-seed={'bb' * 32}"],
+         "--new-key-seed"),
+        (["foo", "--new-key-seed", "aa" * 32, f"--new-key-seed={'bb' * 32}"],
+         "--new-key-seed"),
+        (["foo", "--submit", "http://127.0.0.1:8471",
+          "--submit", "http://127.0.0.1:9999"], "--submit"),
+        (["foo", "--submit=http://127.0.0.1:8471", "--submit"], "--submit"),
+        (["foo", "--submit", "--expiry-days", "7", "--expiry-days", "9"],
+         "--expiry-days"),
+        (["foo", "--submit", "--expiry-days=7", "--expiry-days", "9"],
+         "--expiry-days")):
+    _err = _io.StringIO()
+    with _contextlib.redirect_stderr(_err):
+        _code = rotate_name.main(_argv)
+    if _code != 2 or f"{_flag} given more than once" not in _err.getvalue():
+        print(f"FAIL: duplicate {_flag} in {_argv!r} -> rc={_code} "
+              f"err={_err.getvalue()!r}")
+        fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

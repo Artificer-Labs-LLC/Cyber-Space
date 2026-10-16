@@ -949,6 +949,27 @@ def submit_rotation(label: str, mirror_url: str, home: Path,
 
 
 def main(argv: list[str]) -> int:
+    # Duplicate gate, twin of the nexus_*/mint_name parsers: argparse
+    # silently last-wins on a repeated value flag, so
+    # --new-key-seed A --new-key-seed B minted a rotation to B while
+    # the operator believed it rotated to A (probed this tick: the
+    # .next seed written was B's), and a repeated --submit/--expiry-days
+    # submitted to / bound at the second value the same way. Refuse a
+    # repeated value flag by name, in space, equals or mixed spelling,
+    # before argparse runs — before any key is read, generated or sent.
+    _seen: set[str] = set()
+    for _tok in argv:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _name = _tok.partition("=")[0]
+        if _name in ("--new-key-seed", "--submit", "--expiry-days"):
+            if _name in _seen:
+                print(f"refused: {_name} given more than once",
+                      file=sys.stderr)
+                return 2
+            _seen.add(_name)
     ap = argparse.ArgumentParser(
         description="mint a .cyberspace name-key rotation record")
     ap.add_argument("label", help="the .cyberspace label to rotate")
