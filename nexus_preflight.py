@@ -56,18 +56,31 @@ def _parent_dir_problem(path, what):
     key-writing tools (nexus_keygen._ensure_parent, mint_name
     ._ensure_dir) create these dirs born 0700 — yet preflight only
     ever statted the FILE (probed 2026-10-16: a tight 0600 key in a
-    0777 dir reported READY). Return a named problem, or []."""
-    parent = Path(path).parent
-    try:
-        mode = stat.S_IMODE(parent.stat().st_mode)
-    except OSError:
-        return []
-    if mode & 0o077:
-        return [f"{what} directory {parent} is group/other-accessible "
+    0777 dir reported READY). Return a named problem, or [].
+
+    A symlinked key has TWO parents that matter: the link's own
+    directory (write there repoints the link at a stranger's file)
+    and the resolved target's directory (write there replaces the
+    file itself). Checking only the literal parent missed the
+    second (probed 2026-10-16: a tight-dir symlink into a 0777 dir
+    reported READY). Check both, deduped when they coincide."""
+    parents = []
+    for cand in (Path(path).parent, Path(path).resolve().parent):
+        if cand not in parents:
+            parents.append(cand)
+    problems = []
+    for parent in parents:
+        try:
+            mode = stat.S_IMODE(parent.stat().st_mode)
+        except OSError:
+            continue
+        if mode & 0o077:
+            problems.append(
+                f"{what} directory {parent} is group/other-accessible "
                 f"(mode {mode:04o}); a name key's directory is born "
                 f"0700 — directory write would let a stranger "
-                f"replace the key, directory read lists it"]
-    return []
+                f"replace the key, directory read lists it")
+    return problems
 
 
 def check_key_file(path):

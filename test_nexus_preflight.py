@@ -136,6 +136,30 @@ with tempfile.TemporaryDirectory() as td:
     _check(_ready and _bl == [],
            f"tight parent dir must restore READY, got {_bl}")
 
+    # Symlinked key: the link sits in a tight dir but the FILE lives
+    # in a loose one — the resolved parent is where replacement
+    # happens, so it must be named and block READY; tightening the
+    # target's dir restores READY.
+    tdir = td / "tight"
+    tdir.mkdir()
+    os.chmod(tdir, 0o700)
+    skey = tdir / "nexus-name.key"
+    skey.symlink_to(lkey)
+    sbak = tdir / "nexus-name.key.bak"
+    sbak.write_text(seed.hex())
+    os.chmod(sbak, 0o600)
+    os.chmod(loose, 0o777)
+    _pub, _probs = np.check_key_file(skey)
+    _check(any("directory" in p for p in _probs),
+           "symlink into a loose dir must be named by check_key_file")
+    _ready, _pub, _bl = np.preflight("nexus", skey, sbak, ROOT)
+    _check(not _ready and any("directory" in b for b in _bl),
+           "symlink into a loose dir must block READY by name")
+    os.chmod(loose, 0o700)
+    _ready, _pub, _bl = np.preflight("nexus", skey, sbak, ROOT)
+    _check(_ready and _bl == [],
+           f"tight resolved parent must restore READY, got {_bl}")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)
