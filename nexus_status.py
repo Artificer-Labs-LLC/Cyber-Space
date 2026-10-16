@@ -140,7 +140,14 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            if i >= len(argv) or argv[i].startswith("--"):
+            # -h is a flag token too, not a value: the startswith
+            # check alone let --key -h swallow the help flag as the
+            # key path and report on a file named "-h" in the cwd
+            # while the operator believed the kept key was checked
+            # (probed this tick). Refuse it as a missing value, twin
+            # of nexus_keygen's -h gate (c0b00de).
+            if i >= len(argv) or argv[i].startswith("--") \
+                    or argv[i] == "-h":
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--key":
