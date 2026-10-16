@@ -105,6 +105,24 @@ with tempfile.TemporaryDirectory() as td:
     _check(not (td / "fv.key").exists() and not (td / "fv.bak").exists(),
            "flag-as-value refusal writes nothing")
 
+    # -h is a flag token too, not a space-form value: --key -h
+    # swallowed the help flag as the key path and GENERATED the
+    # root key into a file named "-h" in the cwd, backup at the
+    # default seat -- a split pair no later tool ever reads
+    # (probed). Both flags refuse it as a missing value.
+    for _argv, _flag in ((["--key", "-h",
+                           "--backup", str(td / "h.bak")], "--key"),
+                         (["--backup", "-h",
+                           "--key", str(td / "h.key")], "--backup")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nk.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"-h must refuse as {_flag} needs a value")
+    _check(not (td / "h.key").exists() and not (td / "h.bak").exists()
+           and not Path("-h").exists(),
+           "-h-as-value refusal writes nothing")
+
     # A repeated value flag must refuse, not silently last-win:
     # --key A --key B wrote the key to B while the operator believed
     # it sat at A (probed). Both spellings, both flags.

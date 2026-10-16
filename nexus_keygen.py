@@ -141,7 +141,15 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            if i >= len(argv) or argv[i].startswith("--"):
+            # -h is a flag token too, not a value: the startswith
+            # check alone let --key -h swallow the help flag as the
+            # key path and GENERATE the root key into a file named
+            # "-h" in the cwd, with the backup at the default seat
+            # -- a split pair whose primary no later tool ever reads
+            # (probed this tick). Refuse it as a missing value, twin
+            # of the -- flag check beside it.
+            if i >= len(argv) or argv[i].startswith("--") \
+                    or argv[i] == "-h":
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             if a == "--key":
