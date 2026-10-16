@@ -208,6 +208,23 @@ with tempfile.TemporaryDirectory() as td:
         _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
                f"-h must refuse as {_flag} needs a value")
 
+    # Any flag-shaped token is not a space-form value: --key -x
+    # reported on a file named "-x" while the operator believed
+    # the kept key was checked (probed) -- the -h gate left every
+    # other single-dash token open, twin of nexus_preflight's
+    # flag-shaped gate (9bf4eca). All four flags refuse -x by name
+    # (for --expiry-days, needs-a-value now precedes the integer
+    # refusal the bare -x token drew before).
+    for _argv, _flag in ((["--key", "-x"], "--key"),
+                         (["--backup", "-x"], "--backup"),
+                         (["--env-dir", "-x"], "--env-dir"),
+                         (["--expiry-days", "-x"], "--expiry-days")):
+        _err = io.StringIO()
+        with contextlib.redirect_stderr(_err):
+            _code = nc.main(_argv)
+        _check(_code == 2 and f"{_flag} needs a value" in _err.getvalue(),
+               f"-x must refuse as {_flag} needs a value")
+
     # A repeated value flag refuses by name: the parser silently
     # last-won, so --key A --key B claimed with B while the operator
     # believed it claimed with A -- twin of nexus_status's,

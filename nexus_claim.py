@@ -200,14 +200,19 @@ def main(argv):
                 return 2
             seen.add(a)
             i += 1
-            # -h is a flag token too, not a value: the startswith
-            # check alone let --key -h swallow the help flag as the
-            # key path and report on a file named "-h" in the cwd
-            # while the operator believed the kept key was checked
-            # (probed this tick). Refuse it as a missing value, twin
-            # of nexus_preflight's -h gate (d29e350).
-            if i >= len(argv) or argv[i].startswith("--") \
-                    or argv[i] == "-h":
+            # Any flag-shaped token is a flag token, not a value:
+            # the "--" check alone let --key -h swallow the help
+            # flag as the key path and report on a file named "-h"
+            # in the cwd while the operator believed the kept key
+            # was checked, and the -h-only gate left every other
+            # single-dash token open -- --key -x reported on a file
+            # named "-x" the same way (probed this tick). No
+            # documented value for any flag here begins with "-";
+            # the equals spelling stays the deliberate way to write
+            # one. Refuse it as a missing value, generalising
+            # nexus_claim's -h gate, twin of nexus_preflight's
+            # flag-shaped gate (9bf4eca).
+            if i >= len(argv) or argv[i].startswith("-"):
                 print(f"refused: {a} needs a value", file=sys.stderr)
                 return 2
             v = argv[i]
