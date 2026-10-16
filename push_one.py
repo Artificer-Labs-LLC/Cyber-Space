@@ -5,7 +5,7 @@ Usage: push_one.py <path> <repo-path> <commit-message>
 Exit codes: 0 = the push call ran (its RC is printed)
             2 = usage / unreadable / oversize input (no push attempted)
 """
-import json, subprocess, sys, os
+import json, stat, subprocess, sys, os
 
 # The github CLI takes --arguments-json as ONE argv entry, and the
 # kernel caps a single argv entry at MAX_ARG_STRLEN (128KB, including
@@ -28,6 +28,17 @@ def main(argv):
         return 2
     path, repo_path, message = argv[1], argv[2], argv[3]
     try:
+        # Only a regular file may be opened: open() on a FIFO blocks
+        # until a writer appears, so a FIFO (or device) at the input
+        # seat hung this push helper forever instead of refusing at
+        # exit 2 — the twin of the verify_name S_ISREG gate. os.stat
+        # follows symlinks, so a symlink TO a regular file stays
+        # valid while a symlink to a FIFO is refused; a missing path
+        # raises OSError into the cannot-read refusal below as before.
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            print(f"refused: {path} is not a regular file",
+                  file=sys.stderr)
+            return 2
         with open(path, "r", encoding="utf-8") as f:
             content = f.read(_FILE_MAX + 1)
     except OSError as e:

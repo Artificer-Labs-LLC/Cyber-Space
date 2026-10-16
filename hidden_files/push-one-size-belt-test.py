@@ -50,8 +50,11 @@ ENV = dict(os.environ, CYBERNET_GITHUB_BIN=FAKE)
 
 
 def run(args):
-    p = subprocess.run([PY, TOOL] + args, capture_output=True, text=True,
-                       cwd=ROOT, env=ENV, timeout=60)
+    try:
+        p = subprocess.run([PY, TOOL] + args, capture_output=True,
+                           text=True, cwd=ROOT, env=ENV, timeout=10)
+    except subprocess.TimeoutExpired:
+        return None, "", "TIMEOUT (blocked on open)"
     return p.returncode, p.stdout, p.stderr
 
 
@@ -105,6 +108,29 @@ check("missing file exit 2 cannot-read",
 rc, out, err = run([small])
 check("wrong argc exit 2 usage", rc == 2 and "usage:" in err,
       f"rc={rc} err={err!r}")
+
+# FIFO at the input seat: refused instantly, never opened (open() on a
+# FIFO blocks until a writer appears, so this hung forever pre-fix).
+fifo = os.path.join(TMP, "fifo")
+os.mkfifo(fifo)
+rc, out, err = run([fifo, "fifo", "msg"])
+check("FIFO exit 2 not-a-regular-file",
+      rc == 2 and "not a regular file" in err, f"rc={rc} err={err!r}")
+check("FIFO attempted no push", "FAKECALLED" not in out, f"out={out!r}")
+
+# Symlink to a FIFO: stat follows the link, so it is refused the same.
+fifo_link = os.path.join(TMP, "fifo-link")
+os.symlink(fifo, fifo_link)
+rc, out, err = run([fifo_link, "fifo-link", "msg"])
+check("symlink-to-FIFO exit 2 not-a-regular-file",
+      rc == 2 and "not a regular file" in err, f"rc={rc} err={err!r}")
+
+# Symlink TO a regular file: still valid, pushes byte-exact content.
+real_link = os.path.join(TMP, "real-link")
+os.symlink(small, real_link)
+rc, out, err = run([real_link, "real-link", "msg"])
+check("symlink-to-regular still pushes",
+      rc == 0 and "FAKECALLED" in out, f"rc={rc} out={out!r} err={err!r}")
 
 print(f"\n{PASSED} passed, {FAILED} failed")
 sys.exit(1 if FAILED else 0)
