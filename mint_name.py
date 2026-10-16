@@ -370,6 +370,17 @@ def main(argv: list[str]) -> int:
                 print(f"refused: unknown option {name!r} — supported: "
                       f"--env-dir DIR, --expiry-days N", file=sys.stderr)
                 return 2
+            if eq and not val:
+                # Empty equals gate (twin of every nexus_* parser's
+                # equals branch): --env-dir= carried "" past parsing,
+                # proceeded to generate a key and attempt a claim
+                # (probed), and on success Path("") would have put
+                # the key-bearing env in the cwd; --expiry-days= was
+                # caught only later, misnamed as a non-integer. An
+                # empty value is a missing value: refuse by name,
+                # exit 2, before any key is generated or read.
+                print(f"refused: {name} needs a value", file=sys.stderr)
+                return 2
             if not eq:
                 i += 1
                 # Any flag-shaped token is a flag token, not a value:

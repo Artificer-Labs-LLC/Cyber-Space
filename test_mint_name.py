@@ -271,6 +271,27 @@ for _argv in (("probe", "--env-dir", "-x"),
         print(f"FAIL: main flag-shaped {_argv} -> rc={_rc} err={_err.getvalue()!r}")
         fails += 1
 
+# main() empty-equals gate: --env-dir= / --expiry-days= carry an
+# empty value, which is a missing value -- --env-dir= proceeded to
+# generate a key and attempt a claim (probed), and on success
+# Path("") would have put the key-bearing env in the cwd. Both flags
+# must refuse by name (exit 2) before any key/network, twin of every
+# nexus_* parser's equals branch.
+for _argv in (("probe", "--env-dir="),
+              ("probe", "--expiry-days=")):
+    _flag = _argv[1].split("=")[0]
+    _err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(_err):
+            _rc = mint_name.main(list(_argv))
+    except Exception as _e:  # noqa: BLE001
+        print(f"FAIL: main empty-equals {_argv} raised {type(_e).__name__}: {_e}")
+        fails += 1
+        continue
+    if _rc != 2 or f"{_flag} needs a value" not in _err.getvalue():
+        print(f"FAIL: main empty-equals {_argv} -> rc={_rc} err={_err.getvalue()!r}")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)
