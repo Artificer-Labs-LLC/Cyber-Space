@@ -135,6 +135,12 @@ _check(ok and not blockers,
        "an Old Turkic letter with no UTS #39 entry is a genuinely "
        f"distinct seat and must stay ELIGIBLE: {blockers}")
 
+ohu = dict(GOOD, candidate_machine_id="machine-𐲀")
+ok, blockers = nh.evaluate(ohu)
+_check(ok and not blockers,
+       "an Old Hungarian letter with no UTS #39 entry is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -515,6 +521,18 @@ for cand, orig, why in [
      "oldturkic-aed-respelled same operator must fail"),
     ("op-𐰠", "op-y",
      "oldturkic-ael-respelled same operator must fail"),
+    ("op-𐲂", "op-x",
+     "oldhungarian-capital-eb-respelled same operator must fail"),
+    ("op-𐳂", "op-x",
+     "oldhungarian-small-eb-respelled same operator must fail"),
+    ("op-𐲥", "op-l",
+     "oldhungarian-capital-esz-respelled same operator must fail"),
+    ("op-𐳥", "op-l",
+     "oldhungarian-small-esz-respelled same operator must fail"),
+    ("op-𐳺", "op-l",
+     "oldhungarian-number-one-respelled same operator must fail"),
+    ("op-𐳼", "op-x",
+     "oldhungarian-number-ten-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)

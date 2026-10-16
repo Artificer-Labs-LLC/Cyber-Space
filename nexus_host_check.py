@@ -403,6 +403,28 @@ _CONFUSABLES.update(str.maketrans({
     "𐰾": "l", "𐰡": "M", "𐰗": "O", "𐰟": "V",
     "𐰓": "X", "𐰠": "Y",
 }))
+# Old Hungarian: the rovás letters are likewise simple
+# strokes, and UTS #39 lists 3 of its letters as confusable with
+# single Latin letters -- mappings taken from confusables.txt at
+# unicode.org (cached copy fetched 2026-10-15), not guessed, and
+# surfaced by a full-table audit of _norm against every
+# letter-category UTS #39 mapping. A seat respelled with one
+# rendered as the origin and compared distinct (probed this
+# tick: EB, ESZ, NUMBER ONE and NUMBER TEN operator spellings
+# each returned ELIGIBLE as their own origin). Both cases of
+# EB are listed, as UTS #39 lists both; for ESZ it lists only
+# the capital, so the small letter is added as its lowercase
+# counterpart -- _norm case-folds down, never up, so a table
+# holding only the capital would strand the small spelling
+# (the lowercase-counterpart trap named above). The two number
+# signs are included because their UTS #39 targets are Latin
+# letters, as with the Old Italic numerals; digit-target
+# mappings stay out. The other Old Hungarian letters have no
+# UTS #39 entry at all and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐲂": "X", "𐳂": "x", "𐲥": "l",
+    "𐳥": "l", "𐳺": "l", "𐳼": "X",
+}))
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
