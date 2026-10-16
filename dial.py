@@ -330,7 +330,17 @@ def main(argv: list[str] | None = None) -> int:
         "--mirror", default=_default_mirror(),
         help="mirror base URL (default: CYBERNET_MIRROR_URL or 127.0.0.1:8471)",
     )
-    args = parser.parse_args(argv)
+    # argparse itself still raises SystemExit on the bad arguments no
+    # gate above can pre-empt — an unknown flag, a dangling --mirror, a
+    # missing or surplus positional — crashing any in-process caller of
+    # main(); --help raises SystemExit 0 the same way. Convert the exit
+    # to this CLI's return after argparse prints its usage/error text;
+    # the __main__ seat re-raises the return, so shell behaviour is
+    # unchanged. Twin of rotate_name.py / resolve_chain.py.
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 2
 
     code, lines = plan(args.name, args.mirror)
     for line in lines:

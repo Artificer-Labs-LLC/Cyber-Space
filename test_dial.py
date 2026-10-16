@@ -395,5 +395,23 @@ class DialPlanTests(unittest.TestCase):
         self.assertEqual(code, 3)  # no reach, never a guess
 
 
+    def test_parse_errors_return_not_systemexit(self):
+        # argparse raised SystemExit on bad arguments no gate can
+        # pre-empt (unknown flag, dangling --mirror, missing/surplus
+        # positional) and on --help, crashing in-process callers of
+        # main(). main() now returns the code (2 bad args, 0 --help)
+        # after argparse prints its text; shell behaviour unchanged.
+        import contextlib
+        import io
+        for argv, want in ((["--bogus"], 2), (["--mirror"], 2),
+                           ([], 2), ([ADDR, "extra"], 2),
+                           (["--help"], 0)):
+            err, out = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(err), \
+                    contextlib.redirect_stdout(out):
+                code = dial.main(argv)
+            self.assertEqual(code, want, argv)
+
+
 if __name__ == "__main__":
     unittest.main()
