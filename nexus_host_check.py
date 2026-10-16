@@ -81,6 +81,21 @@ def _invisible(ch):
 # these scripts' single-letter Latin duplicates; within-Latin
 # look-alikes (l/1, O/0) are font questions, not script spoofing,
 # and are deliberately not folded.
+#
+# Audit closure (2026-10-16, Villhaze ruling under the standing
+# governance order): the full-table UTS #39 audit of _norm against
+# every single-character -> single-Latin-letter mapping is DONE.
+# Every cross-script alphabetic look-alike in that table now folds.
+# What still "escapes" falls only in classes ruled out of scope,
+# each visibly distinct evidence rather than a respelling:
+# digits in any script (a 1 in an id is a digit, not an l),
+# symbols and notation (APL, musical, alchemical, mathematical),
+# punctuation and dandas, combining marks, and within-Latin
+# distinct letters (thorn, wynn, dotless i, long s and kin are
+# real letters in real orthographies, not Latin in costume).
+# Folding any of those would conflate genuinely distinct seats,
+# so the table is closed: reopen only if UTS #39 adds a new
+# cross-script alphabetic single-letter mapping.
 _CONFUSABLES = str.maketrans({
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
     "у": "y", "х": "x", "ѕ": "s", "і": "i", "ј": "j",
