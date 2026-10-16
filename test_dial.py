@@ -175,6 +175,21 @@ class DialPlanTests(unittest.TestCase):
                 code = dial.main([ADDR] + extra)
             self.assertEqual(code, 4, extra)
             self.assertIn("--mirror given more than once", err.getvalue())
+        # Abbreviated spellings: argparse expands any unambiguous
+        # prefix, so --mir/--m silently became --mirror and dodged
+        # the gate above (a --mir A --mirror B pair planned against
+        # B). An abbreviated spelling refuses by name, exit 4,
+        # alone or paired, in space or equals spelling.
+        for extra in (["--mir", MIRROR],
+                      ["--m", MIRROR],
+                      ["--mir=" + MIRROR],
+                      ["--mir", "a", "--mirror", "b"],
+                      ["--mirror", "a", "--mir", "b"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = dial.main([ADDR] + extra)
+            self.assertEqual(code, 4, extra)
+            self.assertIn("abbreviation of --mirror", err.getvalue())
         with _fixture(alive=False):
             self.assertEqual(dial.main([ADDR, "--mirror", MIRROR]), 2)
 

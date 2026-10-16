@@ -304,6 +304,17 @@ def main(argv: list[str] | None = None) -> int:
         if not _tok.startswith("--"):
             continue
         _name = _tok.partition("=")[0]
+        if _name != "--mirror" and "--mirror".startswith(_name):
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --mir (even --m) silently became
+            # --mirror and dodged the duplicate gate below: a
+            # --mir A --mirror B pair planned against B while the
+            # operator believed the anchor was A (probed this
+            # tick). Refuse the abbreviated spelling itself, by
+            # name, before argparse can expand it.
+            print(f"refused: {_name} is an abbreviation of --mirror "
+                  f"— spell it out", file=sys.stderr)
+            return 4
         if _name == "--mirror":
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
@@ -311,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 4
             _seen.add(_name)
     parser = argparse.ArgumentParser(
-        description="Dry-run dial planner for .cyberspace names."
+        description="Dry-run dial planner for .cyberspace names.",
+        allow_abbrev=False,
     )
     parser.add_argument("name", help="the .cyberspace name to plan a dial to")
     parser.add_argument(
