@@ -755,12 +755,26 @@ def main(argv: list[str] | None = None) -> int:
     # equals or mixed spelling, before argparse runs — before any
     # query is built or sent. Exit 2 is this CLI's usage code.
     _seen: set[str] = set()
+    _long_opts = ("--qtype", "--server", "--port", "--tcp-only", "--help")
     for _tok in argv:
         if _tok == "--":
             break
         if not _tok.startswith("--"):
             continue
         _name = _tok.partition("=")[0]
+        if _name not in _long_opts:
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --por (even --p) silently became
+            # --port and dodged the duplicate gate below: a
+            # --por A --port B pair queried B while the operator
+            # believed the daemon port was A (probed this tick).
+            # Refuse the abbreviated spelling itself, by name,
+            # before argparse can expand it. Twin of dial's gate.
+            _full = [o for o in _long_opts if o.startswith(_name)]
+            if _full:
+                print(f"refused: {_name} is an abbreviation of "
+                      f"{_full[0]} — spell it out", file=sys.stderr)
+                return 2
         if _name in ("--qtype", "--server", "--port"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
@@ -771,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="resolver.client",
         description="Resolve a .cyberspace name through the local daemon face.",
+        allow_abbrev=False,
     )
     parser.add_argument("name", help="name to resolve, e.g. alice.cyberspace")
     parser.add_argument(

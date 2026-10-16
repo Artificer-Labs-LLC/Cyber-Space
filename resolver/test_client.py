@@ -1263,6 +1263,29 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("given more than once", err.getvalue())
 
+    def test_main_refuses_abbreviated_value_flag(self):
+        """CLI abbreviation gate, twin of dial's: argparse expands any
+        unambiguous prefix, so --por/--p silently became --port and
+        dodged the duplicate gate above (a --por A --port B pair
+        queried B). An abbreviated spelling of any long option
+        refuses by name with exit 2, alone or paired, in space or
+        equals spelling, before any query is sent."""
+        cases = (
+            ("--por", "--port"), ("--p", "--port"),
+            ("--q", "--qtype"), ("--ser", "--server"),
+            ("--tcp", "--tcp-only"), ("--h", "--help"),
+        )
+        for abbr, full in cases:
+            for extra in ([abbr, "x"], [f"{abbr}=x"],
+                          [abbr, "a", full, "b"],
+                          [full, "a", abbr, "b"]):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = client.main(["alice.cyberspace"] + extra)
+                self.assertEqual(code, 2, extra)
+                self.assertIn(f"{abbr} is an abbreviation of {full}",
+                              err.getvalue())
+
     def test_env_port_default(self):
         os.environ.pop("CYBERNET_RESOLVER_PORT", None)
         self.assertEqual(client._default_port(), 5353)
