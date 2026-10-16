@@ -385,6 +385,25 @@ _CONFUSABLES.update(str.maketrans({
     "ᛷ": "X",
 }))
 
+# Old Turkic: the Orkhon/Yenisei runiform letters are likewise
+# simple strokes, and UTS #39 lists 6 of them as confusable with
+# single Latin letters -- mappings taken from confusables.txt at
+# unicode.org fetched this tick, not guessed, and surfaced by a
+# full-table audit of _norm against every letter-category UTS #39
+# mapping. A seat respelled with one rendered as the origin and
+# compared distinct (probed this tick: an ELT machine seat and an
+# AY operator spelling each returned ELIGIBLE as their own
+# origin). Old Turkic is caseless, so single entries suffice;
+# _norm's case-fold unites them with the Latin lowercase (letter
+# AES's own UTS #39 target is small l). These 6 are the script's
+# only letter-to-single-Latin-letter mappings in the table; the
+# other Old Turkic letters have no UTS #39 entry at all and stay
+# distinct.
+_CONFUSABLES.update(str.maketrans({
+    "𐰾": "l", "𐰡": "M", "𐰗": "O", "𐰟": "V",
+    "𐰓": "X", "𐰠": "Y",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

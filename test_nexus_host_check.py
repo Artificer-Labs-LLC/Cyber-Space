@@ -129,6 +129,12 @@ _check(ok and not blockers,
        "a Runic letter with no single-Latin look-alike is a "
        f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
 
+otu = dict(GOOD, candidate_machine_id="machine-𐰀")
+ok, blockers = nh.evaluate(otu)
+_check(ok and not blockers,
+       "an Old Turkic letter with no UTS #39 entry is a genuinely "
+       f"distinct seat and must stay ELIGIBLE: {blockers}")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -308,6 +314,8 @@ for key, bad, why in [
      "canadian-carrier-go-respelled same machine must fail"),
     ("candidate_machine_id", "ᛗachine-a",
      "runic-ehwaz-respelled same machine must fail"),
+    ("candidate_machine_id", "𐰡achine-a",
+     "oldturkic-elt-respelled same machine must fail"),
 ]:
     seat = dict(GOOD)
     seat[key] = bad
@@ -495,6 +503,18 @@ for cand, orig, why in [
      "runic-short-twig-tyr-respelled same operator must fail"),
     ("op-ᛷ", "op-x",
      "runic-gebo-respelled same operator must fail"),
+    ("op-𐰾", "op-l",
+     "oldturkic-aes-respelled same operator must fail"),
+    ("op-𐰡", "op-m",
+     "oldturkic-elt-respelled same operator must fail"),
+    ("op-𐰗", "op-o",
+     "oldturkic-ay-respelled same operator must fail"),
+    ("op-𐰟", "op-v",
+     "oldturkic-al-respelled same operator must fail"),
+    ("op-𐰓", "op-x",
+     "oldturkic-aed-respelled same operator must fail"),
+    ("op-𐰠", "op-y",
+     "oldturkic-ael-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
