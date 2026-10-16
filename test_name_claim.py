@@ -20,7 +20,9 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import _ensure_private_dir, _name_claim_beats, _name_claim_payload, _node_url_host, _old_binding_beaten, _parse_claim_time, _reach_canonical, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+from core import _ensure_private_dir, _name_claim_beats, _name_claim_payload, _node_keypair, _node_url_host, _old_binding_beaten, _parse_claim_time, _reach_canonical, _reject_nonpublic_node_url, _valid_name_label, _valid_node_url  # noqa: E402
+import core as _core  # noqa: E402
+from unittest import mock as _mock  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 CASES = {"passed": 0, "failed": 0}
@@ -339,9 +341,51 @@ def db_dir_cases():
               oct(mode(pre)))
 
 
+def node_key_cases():
+    print("node key first-boot race:")
+    winner = "ab" * 32
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, ".node.key")
+        with open(path, "w") as f:
+            f.write(winner)
+        real_exists = os.path.exists
+        calls = {"n": 0}
+
+        def racy(p, _path=path):
+            if p == _path:
+                calls["n"] += 1
+                return False if calls["n"] == 1 else real_exists(p)
+            return real_exists(p)
+
+        with _mock.patch.object(_core, "_NODE_KEY_PATH", path), \
+                _mock.patch.object(os.path, "exists", racy), \
+                _mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CYBERNET_NODE_PRIVKEY", None)
+            try:
+                priv, pub = _node_keypair()
+                check("first-boot race loser adopts winner key",
+                      priv == winner and len(pub) == 64)
+            except FileExistsError:
+                check("first-boot race loser adopts winner key", False,
+                      "FileExistsError uncaught")
+        fresh = os.path.join(td, "fresh.key")
+        with _mock.patch.object(_core, "_NODE_KEY_PATH", fresh), \
+                _mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CYBERNET_NODE_PRIVKEY", None)
+            priv, _pub = _node_keypair()
+            mode = stat.S_IMODE(os.stat(fresh).st_mode)
+            with open(fresh) as f:
+                saved = f.read().strip()
+            check("fresh node key born 0600, saved whole",
+                  mode == 0o600 and saved == priv, oct(mode))
+            priv2, _ = _node_keypair()
+            check("second boot reads the same identity", priv2 == priv)
+
+
 def main():
     print("names-registry primitive tests (core.py):")
     db_dir_cases()
+    node_key_cases()
     label_cases()
     conflict_cases()
     claim_beats_pubkey_cases()

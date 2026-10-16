@@ -263,27 +263,48 @@ _NODE_KEY_PATH = os.path.join(_DB_DIR, ".node.key")
 # RuntimeError the shape check already raises.
 _NODE_KEY_MAX = 1024
 
+def _read_node_key_file() -> str:
+    """Read the saved node seed (bounded; oversize is not a seed)."""
+    with open(_NODE_KEY_PATH) as f:
+        raw = f.read(_NODE_KEY_MAX + 1)
+    if len(raw) > _NODE_KEY_MAX:
+        raise RuntimeError("node key is not a 32-byte hex seed")
+    return raw.strip()
+
+
 def _node_keypair() -> tuple[str, str]:
     """Node's persistent Ed25519 federation identity -> (privkey_hex, pubkey_hex).
 
     Operator may set CYBERNET_NODE_PRIVKEY instead. First run without it
     generates a key and saves it to .node.key (0600, gitignored) so the
-    identity survives restarts.
+    identity survives restarts. Two processes booting together race the
+    O_EXCL create: the loser must adopt the winner's key — that key IS
+    the node's identity — not die on FileExistsError (probed
+    2026-10-16). The winning write is looped + fsynced before close,
+    so a key the create reported is never a truncated file the next
+    boot's shape check would strand as a permanent RuntimeError.
     """
     env_key = os.environ.get("CYBERNET_NODE_PRIVKEY", "").strip()
     if env_key:
         priv = env_key
     elif os.path.exists(_NODE_KEY_PATH):
-        with open(_NODE_KEY_PATH) as f:
-            raw = f.read(_NODE_KEY_MAX + 1)
-        if len(raw) > _NODE_KEY_MAX:
-            raise RuntimeError("node key is not a 32-byte hex seed")
-        priv = raw.strip()
+        priv = _read_node_key_file()
     else:
-        priv = secrets.token_hex(32)
-        fd = os.open(_NODE_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(priv)
+        candidate = secrets.token_hex(32)
+        try:
+            fd = os.open(_NODE_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            priv = _read_node_key_file()  # lost the first-boot race
+        else:
+            data = candidate.encode()
+            try:
+                written = 0
+                while written < len(data):
+                    written += os.write(fd, data[written:])
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            priv = candidate
     if not re.fullmatch(r"[0-9a-fA-F]{64}", priv):
         raise RuntimeError("node key is not a 32-byte hex seed")
     pub = _fed_ed25519.publickey(bytes.fromhex(priv)).hex()
