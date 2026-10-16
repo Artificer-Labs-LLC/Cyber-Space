@@ -226,6 +226,26 @@ def check_live(name: str, mirror: str, terminal_key: str) -> str:
 
 
 def main(argv: list[str]) -> int:
+    # Duplicate gate, twin of verify_name / rotate_name / the nexus_*
+    # parsers: argparse silently last-wins on a repeated value flag,
+    # so --expect-original-key A --expect-original-key B walked the
+    # chain against pin B while the operator believed the pin was A
+    # (probed this tick). Refuse a repeated value flag by name, in
+    # space, equals or mixed spelling, before argparse runs — before
+    # any input is read or fetched.
+    _seen: set[str] = set()
+    for _tok in argv:
+        if _tok == "--":
+            break
+        if not _tok.startswith("--"):
+            continue
+        _name = _tok.partition("=")[0]
+        if _name in ("--mirror", "--expect-original-key"):
+            if _name in _seen:
+                print(f"refused: {_name} given more than once",
+                      file=sys.stderr)
+                return 2
+            _seen.add(_name)
     ap = argparse.ArgumentParser(
         description="follow a .cyberspace name's rotation chain end to end")
     ap.add_argument("source", help="<name>, or - for rotations JSON on stdin")

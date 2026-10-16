@@ -156,6 +156,32 @@ for first, second, want_note in (
               f"noted={_noted}, want {want_note}")
         fails += 1
 
+# CLI duplicate gate: argparse silently last-wins on a repeated
+# value flag, so --expect-original-key A --expect-original-key B
+# walked against pin B while the operator believed the pin was A.
+# A repeated --mirror/--expect-original-key in space, equals or
+# mixed spelling must refuse by name, exit 2, before any verdict.
+import subprocess  # noqa: E402
+
+_here = os.path.dirname(os.path.abspath(__file__))
+
+
+def _run_cli_args(extra):
+    return subprocess.run(
+        [sys.executable, os.path.join(_here, "resolve_chain.py"), "-"] + extra,
+        input="[]", capture_output=True, text=True, timeout=10)
+
+
+for _flag in ("--mirror", "--expect-original-key"):
+    for _extra in ([_flag, "a", _flag, "b"],
+                   [f"{_flag}=a", f"{_flag}=b"],
+                   [_flag, "a", f"{_flag}=b"],
+                   [f"{_flag}=a", _flag, "b"]):
+        _r = _run_cli_args(_extra)
+        if _r.returncode != 2 or f"{_flag} given more than once" not in _r.stderr:
+            print(f"FAIL: duplicate {_flag} {_extra} -> rc={_r.returncode} {_r.stderr!r}")
+            fails += 1
+
 if fails:
     print(f"test_resolve_chain: {fails} FAIL")
     sys.exit(1)
