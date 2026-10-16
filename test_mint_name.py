@@ -96,6 +96,49 @@ with tempfile.TemporaryDirectory() as _td:
         print(f"FAIL: _ensure_dir re-run changed mode to {oct(_m)}")
         fails += 1
 
+# _write_secret(overwrite=True): a stale fixed "<path>.tmp" left by a
+# crashed overwrite must not strand every later overwrite — the write
+# uses a unique temp sibling, lands atomically at 0600, and leaves the
+# stale file untouched (never deleted sight-unseen).
+with tempfile.TemporaryDirectory() as _td:
+    _p = os.path.join(_td, "k")
+    mint_name._write_secret(_p, "old")
+    with open(_p + ".tmp", "w") as _f:
+        _f.write("stale")
+    try:
+        mint_name._write_secret(_p, "new", overwrite=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: overwrite with stale .tmp raised "
+              f"{type(e).__name__}: {e}")
+        fails += 1
+    else:
+        with open(_p) as _f:
+            if _f.read() != "new":
+                print("FAIL: overwrite with stale .tmp did not land 'new'")
+                fails += 1
+        _m = stat.S_IMODE(os.stat(_p).st_mode)
+        if _m != 0o600:
+            print(f"FAIL: overwritten secret at {oct(_m)}, want 0o600")
+            fails += 1
+        with open(_p + ".tmp") as _f:
+            if _f.read() != "stale":
+                print("FAIL: stale .tmp was touched by the overwrite")
+                fails += 1
+        _left = [n for n in os.listdir(_td) if n.startswith("k.tmp-")]
+        if _left:
+            print(f"FAIL: unique temp siblings left behind: {_left}")
+            fails += 1
+    # a second overwrite also succeeds (no self-stranding)
+    try:
+        mint_name._write_secret(_p, "third", overwrite=True)
+        with open(_p) as _f:
+            if _f.read() != "third":
+                print("FAIL: second overwrite did not land 'third'")
+                fails += 1
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: second overwrite raised {type(e).__name__}: {e}")
+        fails += 1
+
 if fails:
     print(f"test_mint_name: {fails} FAIL")
     sys.exit(1)

@@ -100,9 +100,33 @@ def _write_secret(path, text, overwrite=False):
     """
     path = Path(path)
     if overwrite and path.exists():
-        tmp = Path(str(path) + ".tmp")
-        _write_secret(tmp, text)
-        os.replace(tmp, path)
+        # The temp sibling must be UNIQUE to this write, not the fixed
+        # "<path>.tmp": a crashed overwrite leaves that fixed name
+        # behind, and the next overwrite's O_EXCL write then raised
+        # FileExistsError on the stale file forever — stranding every
+        # later rotation promote / env refresh (probed 2026-10-16).
+        # A pid+random sibling cannot collide with a stale leftover
+        # (which is left untouched, never deleted sight-unseen);
+        # os.replace still lands the new content atomically.
+        for _attempt in range(3):
+            tmp = Path(str(path) + f".tmp-{os.getpid()}-"
+                       f"{os.urandom(4).hex()}")
+            try:
+                _write_secret(tmp, text)
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise FileExistsError(
+                f"no unique temp sibling available for {path}")
+        try:
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
         return
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     fd = os.open(path, flags, 0o600)
