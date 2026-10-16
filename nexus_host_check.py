@@ -720,6 +720,27 @@ _CONFUSABLES.update(str.maketrans({
     "ꛉ": "Z", "ꛟ": "V", "𖨙": "r",
 }))
 
+# Ahom: the Assamese script whose letters PA and JA and LA
+# and SA are cut as plain Latin shapes, and UTS #39 lists
+# each as confusable with a single Latin letter (PA->v,
+# JA->w, LA->w, SA->w), the script's only letter-to-single-
+# Latin mappings in the table -- mappings taken from
+# confusables.txt at unicode.org (cached copy fetched
+# 2026-10-15), not guessed, and surfaced by a full-table
+# audit of _norm against every letter-category UTS #39
+# mapping (173 still escaping before this fold). A seat
+# respelled with one rendered as the origin and compared
+# distinct (probed this tick: PA, JA, LA and SA machine
+# spellings and PA, JA, LA and SA operator spellings each
+# returned ELIGIBLE as their own origin). Ahom has no case
+# distinction, so single entries suffice; _norm's case-fold
+# unites them with the Latin lowercase. The other Ahom
+# letters stay distinct: KA, for one, folds only to the
+# two-character "rn", and A has no UTS #39 entry at all.
+_CONFUSABLES.update(str.maketrans({
+    "𑜆": "v", "𑜊": "w", "𑜎": "w", "𑜏": "w",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they

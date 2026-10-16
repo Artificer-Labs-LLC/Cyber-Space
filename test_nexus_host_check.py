@@ -377,6 +377,40 @@ _check(not ok and blockers,
        "a Bamum-PHASE-F-NU-respelled same machine must fail "
        f"(bar blockers: {blockers})")
 
+aho = dict(GOOD, candidate_machine_id="machine-𑜒")
+ok, blockers = nh.evaluate(aho)
+_check(ok and not blockers,
+       "an Ahom letter with no single-Latin look-alike is a "
+       f"genuinely distinct seat and must stay ELIGIBLE: {blockers}")
+
+ahop = dict(GOOD, candidate_machine_id="machine-𑜆",
+            origin_machine_id="machine-v")
+ok, blockers = nh.evaluate(ahop)
+_check(not ok and blockers,
+       "an Ahom-PA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+ahoj = dict(GOOD, candidate_machine_id="machine-𑜊",
+            origin_machine_id="machine-w")
+ok, blockers = nh.evaluate(ahoj)
+_check(not ok and blockers,
+       "an Ahom-JA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+ahol = dict(GOOD, candidate_machine_id="machine-𑜎",
+            origin_machine_id="machine-w")
+ok, blockers = nh.evaluate(ahol)
+_check(not ok and blockers,
+       "an Ahom-LA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
+ahos = dict(GOOD, candidate_machine_id="machine-𑜏",
+            origin_machine_id="machine-w")
+ok, blockers = nh.evaluate(ahos)
+_check(not ok and blockers,
+       "an Ahom-SA-respelled same machine must fail "
+       f"(bar blockers: {blockers})")
+
 for key, bad, why in [
     ("candidate_machine_id", "machine-A", "same machine must fail"),
     ("evidence_source", "registry", "registry evidence must fail"),
@@ -861,6 +895,14 @@ for cand, orig, why in [
      "bamum-ko-respelled same operator must fail"),
     ("op-𖨙", "op-r",
      "bamum-phase-f-nu-respelled same operator must fail"),
+    ("op-𑜆", "op-v",
+     "ahom-pa-respelled same operator must fail"),
+    ("op-𑜊", "op-w",
+     "ahom-ja-respelled same operator must fail"),
+    ("op-𑜎", "op-w",
+     "ahom-la-respelled same operator must fail"),
+    ("op-𑜏", "op-w",
+     "ahom-sa-respelled same operator must fail"),
 ]:
     seat = dict(GOOD, candidate_operator=cand, origin_operator=orig)
     ok, blockers = nh.evaluate(seat)
