@@ -299,6 +299,18 @@ def main(argv):
                 expect_pubkey = argv[i]
             else:
                 origin_url = argv[i]
+        elif a.startswith("--") and "=" in a:
+            opt, _, v = a.partition("=")
+            if opt not in ("--expect-pubkey", "--origin-url"):
+                print(f"refused: unknown argument {a!r}", file=sys.stderr)
+                return 2
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            if opt == "--expect-pubkey":
+                expect_pubkey = v
+            else:
+                origin_url = v
         elif a.startswith("--"):
             print(f"refused: unknown argument {a!r}", file=sys.stderr)
             return 2

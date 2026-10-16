@@ -245,6 +245,23 @@ with tempfile.TemporaryDirectory() as td:
         direct.shutdown()
         redir.shutdown()
 
+# The equals spelling (--expect-pubkey=<64hex>) is accepted by
+# main, twin of the both-spellings parsers nexus_keygen /
+# nexus_preflight / nexus_status / nexus_claim / nexus_host_check
+# already carry; an empty equals value is a usage refusal, and
+# the space form missing its value stays refused. The equals
+# case uses node == origin, which refuses (exit 1) before any
+# fetch, so it proves the parse without touching the network.
+_check(nd.main([node, f"--expect-pubkey={pub}",
+                f"--origin-url={node}"]) == 1,
+       "equals spelling must be accepted and reach the "
+       "same-node refusal (exit 1)")
+_check(nd.main([node, "--expect-pubkey=",
+                f"--origin-url={origin}"]) == 2,
+       "empty equals value must be a usage refusal")
+_check(nd.main([node, "--expect-pubkey"]) == 2,
+       "space form with a missing value must stay refused")
+
 if fails:
     print(f"test_nexus_depth_check: {fails} FAIL")
     sys.exit(1)
