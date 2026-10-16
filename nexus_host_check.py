@@ -145,6 +145,27 @@ _CONFUSABLES.update(str.maketrans({
     "ɑ": "a", "ɡ": "g",
 }))
 
+# Coptic: the Coptic alphabet is Greek uncial in another name,
+# and the letters whose uncial shape IS a Latin letter duplicate
+# it exactly as their Greek cognates above do -- alfa, vida, eie,
+# zata, hate, iauda, kapa, mi, ni, o, ro, sima, tau, ua, khi fold
+# to the same Latin letters the Greek set folds to (small pi to
+# n, per UTS #39, as with pi above; capital pi keeps its gate
+# shape and stays distinct). A seat respelled with one rendered
+# as the origin and compared distinct (probed this tick: alfa
+# and o seats returned ELIGIBLE). The remaining Coptic letters
+# (gamma, dalda, sou, thethe, laula, ksi, fi, psi, oou) keep
+# glyphs no Latin letter has and stay distinct.
+_CONFUSABLES.update(str.maketrans({
+    "Ⲁ": "A", "Ⲃ": "B", "Ⲉ": "E", "Ⲍ": "Z", "Ⲏ": "H",
+    "Ⲓ": "I", "Ⲕ": "K", "Ⲙ": "M", "Ⲛ": "N", "Ⲟ": "O",
+    "Ⲣ": "P", "Ⲥ": "C", "Ⲧ": "T", "Ⲩ": "Y", "Ⲭ": "X",
+    "ⲁ": "a", "ⲃ": "b", "ⲉ": "e", "ⲍ": "z", "ⲏ": "h",
+    "ⲓ": "i", "ⲕ": "k", "ⲙ": "m", "ⲛ": "n", "ⲟ": "o",
+    "ⲡ": "n", "ⲣ": "p", "ⲥ": "c", "ⲧ": "t", "ⲩ": "u",
+    "ⲭ": "x",
+}))
+
 
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
