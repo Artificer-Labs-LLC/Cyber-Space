@@ -680,6 +680,25 @@ _CONFUSABLES.update(str.maketrans({
     "ᝣ": "x",
 }))
 
+# Bassa Vah: the Liberian script whose letters GAH and OO are
+# cut as plain Latin shapes, and UTS #39 lists each as
+# confusable with a single Latin letter (GAH->S, OO->O), the
+# script's only letter-to-single-Latin mappings in the table --
+# mappings taken from confusables.txt at unicode.org (cached
+# copy fetched 2026-10-15), not guessed, and surfaced by a
+# full-table audit of _norm against every letter-category
+# UTS #39 mapping. A seat respelled with one rendered as the
+# origin and compared distinct (probed this tick: GAH and OO
+# machine spellings and GAH and OO operator spellings each
+# returned ELIGIBLE as their own origin). Bassa Vah has no
+# case distinction, so single entries suffice; _norm's
+# case-fold unites them with the Latin lowercase. The other
+# Bassa Vah letters stay distinct: KA, for one, folds only
+# to Armenian VO, and E only to a less-than sign.
+_CONFUSABLES.update(str.maketrans({
+    "𖫖": "S", "𖫩": "O",
+}))
+
 def _norm(v):
     """Identity evidence compares canonically: NFKC-folded (fullwidth
     and other compatibility spellings become the characters they
