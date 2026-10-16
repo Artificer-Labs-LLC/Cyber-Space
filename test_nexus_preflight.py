@@ -190,6 +190,16 @@ with tempfile.TemporaryDirectory() as td:
            f"regular-file gate must keep a matching pair READY, "
            f"got {_bl}")
 
+    # The equals spelling (--key=PATH) is accepted by main, twin
+    # of nexus_keygen's both-spellings parser; an empty equals
+    # value is a usage refusal (exit 2), never a silent default.
+    _check(np.main([f"--key={key}", f"--backup={bak}"]) == 0,
+           "equals spelling must reach READY for a matching pair")
+    _check(np.main(["--key=", f"--backup={bak}"]) == 2,
+           "empty equals value must be a usage refusal")
+    _check(np.main([f"--backup={bak}", "--key"]) == 2,
+           "space spelling missing its value must stay a refusal")
+
     # Malformed seed: no pub, named problem, never a crash.
     key.write_text("not-hex")
     pub3, problems = np.check_key_file(key)

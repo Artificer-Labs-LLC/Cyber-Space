@@ -30,6 +30,8 @@ Checks (all must pass for READY):
 
 Exit codes: 0 = READY, 1 = NOT READY (blockers listed), 2 = usage.
 Usage: ./venv/bin/python nexus_preflight.py [--key PATH] [--backup PATH]
+(each option also accepted in the --key=PATH / --backup=PATH spelling,
+the twin of nexus_keygen's both-spellings parser)
 """
 
 import os
@@ -303,6 +305,17 @@ def main(argv):
         if a in ("-h", "--help"):
             print(__doc__.strip())
             return 0
+        if a.startswith(("--key=", "--backup=")):
+            opt, _, v = a.partition("=")
+            if not v:
+                print(f"refused: {opt} needs a value", file=sys.stderr)
+                return 2
+            if opt == "--key":
+                key_path = Path(v)
+            else:
+                backup_path = Path(v)
+            i += 1
+            continue
         if a in ("--key", "--backup"):
             i += 1
             if i >= len(argv):
