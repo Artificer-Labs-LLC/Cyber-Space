@@ -17,15 +17,22 @@ law) are not handed to Nexus. "Root" names only that it is the
 first kept-key claim and the Depth Test target — the protocol
 treats it exactly like any other name.
 
-## Verified state when this packet was written (2026-10-15)
+## Verified state (updated 2026-10-16, after the key ceremony)
 
-- `nexus_status.py` on this tree: NOT READY, exit 1.
-- No Nexus name key is kept yet (`~/.cyberspace/nexus-name.key`
-  does not exist). Claim state: UNKNOWN (offline). Depth state:
-  UNKNOWN (offline). UNKNOWN is the honest seat — nothing below
-  turns it into a PASS except a live witness.
-- NEXT step is step 1, under supervision. Key generation is a
-  deliberate supervised act, never a cron improvisation.
+- Steps 1–2 are DONE (2026-10-16, supervised): the Nexus name key
+  is KEPT at `~/.cyberspace/nexus-name.key` (0600) with a verified
+  byte-identical backup. Do NOT re-run step 1 — keygen refuses to
+  overwrite a kept key, and a second key would orphan the pin.
+- Out-of-band pin (public key, pin this before any claim):
+  `19f4916c9f08373fb0ac089ae37e1e52abfeca0d9e14819fbfca0e6f3bc2560d`
+- `nexus_preflight.py --backup ~/.cyberspace/nexus-name.key.bak`:
+  READY, exit 0. `nexus_status.py`: NEXT is step 3.
+- Nothing has been broadcast. Claim state: UNKNOWN (offline).
+  Depth state: UNKNOWN (offline). UNKNOWN is the honest seat —
+  nothing below turns it into a PASS except a live witness.
+- NEXT step is step 3 (`nexus_claim.py <mirror_url> --dry-run`),
+  under supervision. The real claim (step 4) still waits on the
+  naming-window CLEARs and the current tree reaching the mirror.
 - The full sequence below is rehearsed offline by
   `test_nexus_rehearsal.py` (step 0). A rehearsal PASS proves the
   tools compose in this order; it is not a claim and not depth.
@@ -62,9 +69,10 @@ byte-identical JSON-round-trip gossip copy feeds the fake
 independent node -> `nexus_host_check` ELIGIBLE for that seat ->
 depth check PASSes against the out-of-band pin. Exit 0 is the
 expected result. Real state is unchanged by a rehearsal:
-`nexus_status.py` still reads NOT READY afterwards. If the
-rehearsal fails, stop — do not start step 1 on a sequence whose
-wiring is broken, and report the rehearsal failure as itself.
+`nexus_status.py` still reads the real kept key afterwards
+(NEXT: step 3). If the rehearsal fails, stop — do not start
+step 3 on a sequence whose wiring is broken, and report the
+rehearsal failure as itself.
 
 ## Supervised sequence
 
@@ -73,8 +81,8 @@ its expected result; do not skip ahead.
 
 | # | Command | Proves / expected |
 |---|---------|-------------------|
-| 1 | `./venv/bin/python nexus_keygen.py` | Kept key + verified byte-identical backup, both born 0600. Prints the pub. Record the pub out-of-band (the pin for step 6). Sends nothing, claims nothing. |
-| 2 | `./venv/bin/python nexus_preflight.py --backup ~/.cyberspace/nexus-name.key.bak` | READY, exit 0: key kept, backup verified, tree carries the `/fed/names/gossip` receive route and the `--expect-pubkey` pin. The `--backup` argument is required — without it this step can never reach READY. |
+| 1 | `./venv/bin/python nexus_keygen.py` | DONE 2026-10-16 — do not re-run. Kept key + verified byte-identical backup, both born 0600. Prints the pub. Record the pub out-of-band (the pin for step 6). Sends nothing, claims nothing. |
+| 2 | `./venv/bin/python nexus_preflight.py --backup ~/.cyberspace/nexus-name.key.bak` | DONE 2026-10-16 — READY, exit 0: key kept, backup verified, tree carries the `/fed/names/gossip` receive route and the `--expect-pubkey` pin. The `--backup` argument is required — without it this step can never reach READY. Safe to re-run as a check. |
 | 3 | `./venv/bin/python nexus_claim.py <mirror_url> --dry-run` | Builds and signs the binding, prints it, sends nothing. Eyeball the binding against the step-1 pub before any real claim. |
 | 4 | `./venv/bin/python nexus_claim.py <mirror_url>` | Claims `nexus.cyberspace` at the mirror with the kept key, only if preflight is READY for the exact key+backup seats; verifies by resolving back and requiring the served binding to pass full verification against the kept pub pinned (name `nexus`, valid signature, live window — a pub-only, forged-signature, or expired resolve-back refuses). 409 or a resolve mismatch refuses with no hostd env written. The mirror should be a non-HQ node (rule 4). |
 | 5 | `./venv/bin/python nexus_host_check.py --candidate-machine-id <id> --origin-machine-id <id> --candidate-operator <name> --origin-operator <name> --evidence-source machine-itself --feed gossip --pin-source out-of-band` | ELIGIBLE, exit 0, only when all five bars pass on supplied evidence (distinct machine from the machine itself, distinct operator, neither side HQ, gossip-fed only with the claim key absent, pin out-of-band). NOT ELIGIBLE stops the sequence — step 6 is not run. |
@@ -107,8 +115,9 @@ the current blockers at any time; it is read-only and offline.
 2. Confirm the push path has taken the local Nexus commits
    (keygen, preflight, claim, depth check, status) — the sequence
    is only real to the fleet once it is off this one tree.
-3. Execute steps 1–3 under supervision in one sitting; pin the
-   pub out-of-band before leaving step 1.
+3. Steps 1–2 are already done (see Verified state above); do
+   not re-run keygen. Execute step 3 under supervision and
+   eyeball the dry-run binding against the pinned pub above.
 4. Attempt step 4 only against a non-HQ mirror; attempt steps
    5–6 only when an independent, gossip-fed node exists, and
    run step 6 only on a step-5 ELIGIBLE verdict.
