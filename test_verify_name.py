@@ -117,6 +117,47 @@ for _i in range(4):
         print(f"FAIL: _claim_payload field{_i} {_bad!r} built instead of ValueError")
         fails += 1
 
+# CLI source seat: only a regular file may be opened — open() on a
+# FIFO blocks until a writer appears, so a FIFO at the binding seat
+# hung the verifier forever instead of its no-verdict exit 2.
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+
+_here = os.path.dirname(os.path.abspath(__file__))
+
+
+def _run_cli(path):
+    return subprocess.run(
+        [sys.executable, os.path.join(_here, "verify_name.py"), path],
+        capture_output=True, text=True, timeout=10)
+
+
+with tempfile.TemporaryDirectory() as _td:
+    _fifo = os.path.join(_td, "binding.json")
+    os.mkfifo(_fifo)
+    for _seat, _path in (("FIFO", _fifo),
+                         ("symlink-to-FIFO", os.path.join(_td, "link.json"))):
+        if _seat.startswith("symlink"):
+            os.symlink(_fifo, _path)
+        try:
+            _r = _run_cli(_path)
+        except subprocess.TimeoutExpired:
+            print(f"FAIL: CLI hung on {_seat} source")
+            fails += 1
+            continue
+        if _r.returncode != 2 or "not a regular file" not in _r.stderr:
+            print(f"FAIL: CLI {_seat} -> rc={_r.returncode} { _r.stderr!r}")
+            fails += 1
+    # A regular file still reads: non-JSON content reaches the JSON
+    # refusal (exit 2, "not JSON"), proving the gate opens real files.
+    _reg = os.path.join(_td, "real.json")
+    with open(_reg, "w", encoding="utf-8") as _f:
+        _f.write("not json")
+    _r = _run_cli(_reg)
+    if _r.returncode != 2 or "not JSON" not in _r.stderr:
+        print(f"FAIL: CLI regular file -> rc={_r.returncode} {_r.stderr!r}")
+        fails += 1
+
 if fails:
     print(f"test_verify_name: {fails} FAIL")
     sys.exit(1)

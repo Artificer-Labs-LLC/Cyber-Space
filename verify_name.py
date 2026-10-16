@@ -25,6 +25,7 @@ lowercase-hex pub, exact issued/expires strings as signed.
 """
 
 import os
+import stat
 import sys
 import argparse
 import json
@@ -259,6 +260,18 @@ def main(argv: list[str]) -> int:
         if src == "-":
             raw = sys.stdin.read(_INPUT_MAX + 1)
         else:
+            # Only a regular file may be opened: open() on a FIFO blocks
+            # until a writer appears, so a FIFO (or device) at the
+            # binding seat hung this anyone-can-verify check forever
+            # instead of returning its no-verdict exit 2 — the twin of
+            # the nexus_preflight S_ISREG gates. os.stat follows
+            # symlinks, so a symlink TO a regular file stays valid
+            # while a symlink to a FIFO is refused; a missing path
+            # raises OSError into the refusal below as before.
+            if not stat.S_ISREG(os.stat(src).st_mode):
+                print(f"refused: {src} is not a regular file "
+                      "— no verdict", file=sys.stderr)
+                return 2
             with open(src, encoding="utf-8") as f:
                 raw = f.read(_INPUT_MAX + 1)
     except OSError as e:
