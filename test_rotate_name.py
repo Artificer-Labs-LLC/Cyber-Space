@@ -367,6 +367,29 @@ with _tempfile2.TemporaryDirectory() as _td:
     if not _rtarget.is_dir() or list(_rdir.glob("foo-rotate.json.tmp-*")):
         print("FAIL: _write_record failure left debris or harmed the target")
         fails += 1
+    # _write_record fsyncs its temp before close: os.replace alone
+    # does not make the renamed bytes durable, so a crash after a
+    # successful return could still leave an empty/truncated record
+    # that _load_record's badjson refusal strands beside a valid
+    # .next seed — the _write_secret fsync rule (0bddade), one layer
+    # down in the record half of the pair.
+    _fsyncs = []
+    _orig_fsync = os.fsync
+    os.fsync = lambda fd: _fsyncs.append(fd)
+    try:
+        _ftarget = _rdir / "fsync-rotate.json"
+        rotate_name._write_record(_ftarget, "{}\n")
+        if not _fsyncs:
+            print("FAIL: _write_record did not fsync before close")
+            fails += 1
+        if _ftarget.read_text() != "{}\n":
+            print("FAIL: _write_record fsync probe content did not land")
+            fails += 1
+        if list(_rdir.glob("fsync-rotate.json.tmp-*")):
+            print("FAIL: _write_record fsync probe left temp siblings")
+            fails += 1
+    finally:
+        os.fsync = _orig_fsync
 
 # Second rotation promote: the first promote leaves .prev behind,
 # and the second promote must overwrite that single latest-

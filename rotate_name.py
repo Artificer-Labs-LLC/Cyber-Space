@@ -212,7 +212,11 @@ def _write_record(path, text):
     A unique pid+random sibling (the _write_secret overwrite pattern)
     means the live path always holds the old record whole or the new
     record whole; a stale temp from a crashed write never blocks the
-    next write and is never deleted sight-unseen.
+    next write and is never deleted sight-unseen. The temp is flushed
+    + fsynced before close (the _write_secret / core node-key rule):
+    os.replace alone does not make the renamed bytes durable, so a
+    crash after a successful return could still publish an empty or
+    truncated record — the same badjson stranding, one layer down.
     """
     path = Path(path)
     for _attempt in range(3):
@@ -226,6 +230,8 @@ def _write_record(path, text):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
         except BaseException:
             try:
                 tmp.unlink()
