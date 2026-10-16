@@ -325,6 +325,48 @@ with _tempfile2.TemporaryDirectory() as _td:
     if _next.read_bytes() != _next_before:
         print("FAIL: rotate re-run clobbered the pending .next seed")
         fails += 1
+    # The record lands atomically (unique temp sibling + os.replace):
+    # no temp siblings remain, the record loads whole under the read
+    # bound, and an orphan record (its .next gone) is recovered by a
+    # fresh mint whose new pair is consistent — never truncated in
+    # place, the badjson stranding a crashed write_text left behind.
+    if list(_cs.glob("foo-rotate.json.tmp-*")):
+        print("FAIL: rotate main() left record temp siblings behind")
+        fails += 1
+    _loaded, _lerr = rotate_name._load_record(_cs / "foo-rotate.json")
+    if _loaded is None or _lerr is not None:
+        print(f"FAIL: rotate main() record does not load: {_lerr}")
+        fails += 1
+    _next.unlink()
+    _r3 = _subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "rotate_name.py"), "foo"],
+        capture_output=True, text=True, env=_env)
+    if _r3.returncode != 0:
+        print(f"FAIL: rotate orphan-record re-mint rc={_r3.returncode}: "
+              f"{_r3.stderr.strip()[:200]}")
+        fails += 1
+    else:
+        _loaded2, _lerr2 = rotate_name._load_record(_cs / "foo-rotate.json")
+        _seed2 = bytes.fromhex((_cs / "foo-name.key.next").read_text().strip())
+        if _loaded2 is None or _loaded2["new_pubkey"] != publickey(_seed2).hex():
+            print("FAIL: rotate orphan-record re-mint pair is inconsistent")
+            fails += 1
+    # _write_record failure seat: replacing onto a directory raises,
+    # the target is untouched, and its own temp is cleaned up.
+    _rdir = _Path2(_td) / "recseat"
+    _rdir.mkdir()
+    _rtarget = _rdir / "foo-rotate.json"
+    _rtarget.mkdir()
+    try:
+        rotate_name._write_record(_rtarget, "{}\n")
+        print("FAIL: _write_record onto a directory did not raise")
+        fails += 1
+    except OSError:
+        pass
+    if not _rtarget.is_dir() or list(_rdir.glob("foo-rotate.json.tmp-*")):
+        print("FAIL: _write_record failure left debris or harmed the target")
+        fails += 1
 
 # Second rotation promote: the first promote leaves .prev behind,
 # and the second promote must overwrite that single latest-

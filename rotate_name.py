@@ -201,6 +201,51 @@ def _load_record(rec_path):
         return None, "badjson"
 
 
+def _write_record(path, text):
+    """Write the rotation record atomically: temp sibling + os.replace.
+
+    The record is public (publish it), but it is half of the pending
+    pair: the old bare write_text truncated the live record in place,
+    so a crash mid-write left unparseable JSON beside a valid .next
+    seed — _load_record's badjson refusal then stranded a rotation
+    whose seed was fine (submit and promote both refuse badjson).
+    A unique pid+random sibling (the _write_secret overwrite pattern)
+    means the live path always holds the old record whole or the new
+    record whole; a stale temp from a crashed write never blocks the
+    next write and is never deleted sight-unseen.
+    """
+    path = Path(path)
+    for _attempt in range(3):
+        tmp = Path(str(path) + f".tmp-{os.getpid()}-"
+                   f"{os.urandom(4).hex()}")
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                         0o644)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+        break
+    else:
+        raise FileExistsError(
+            f"no unique temp sibling available for {path}")
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 # Key-seed read bound: a seed file is 64 hex chars plus whitespace, yet
 # every seed seat (promote x2, submit x2, main x1) loaded it via
 # read_text() unbounded before bytes.fromhex ran — the last unbounded
@@ -1038,7 +1083,7 @@ def main(argv: list[str]) -> int:
               f"{next_path} — nothing was minted and the pending "
               f"pair is untouched", file=sys.stderr)
         return 1
-    rec_path.write_text(json.dumps(record, indent=2) + "\n")
+    _write_record(rec_path, json.dumps(record, indent=2) + "\n")
     print(f"valid: {label}.cyberspace rotation minted and self-verified")
     print(f"  old key {record['old_pubkey'][:16]}... -> "
           f"new key {record['new_pubkey'][:16]}...")
