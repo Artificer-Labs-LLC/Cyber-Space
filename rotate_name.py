@@ -615,8 +615,14 @@ def promote_rotation(label: str, home: Path,
                        "old_pubkey — continuity broken, refuse")
     # Atomic close: old key -> .prev (kept for chain-walking history),
     # .next -> the name key. os.replace is never a half-written key.
+    # .prev is a single latest-predecessor slot: a SECOND rotation's
+    # promote finds it already present, and the O_EXCL write refused
+    # with FileExistsError — a crash, not this function's (False,
+    # reason) contract, stranding every later rotation unpromotable.
+    # overwrite=True lands the new predecessor atomically via the
+    # born-0600 temp sibling + os.replace, still never half-written.
     prev_path = home / f"{label}-name.key.prev"
-    _write_secret(prev_path, old_priv.hex() + "\n")
+    _write_secret(prev_path, old_priv.hex() + "\n", overwrite=True)
     os.replace(next_path, key_path)
     os.chmod(key_path, 0o600)
     # hostd signs its reach announces with CYBERNET_NAME_PRIVKEY from the

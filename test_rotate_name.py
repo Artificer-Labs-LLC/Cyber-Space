@@ -307,6 +307,55 @@ with _tempfile2.TemporaryDirectory() as _td:
         print("FAIL: rotate main() .next seed missing or not 0600")
         fails += 1
 
+# Second rotation promote: the first promote leaves .prev behind,
+# and the second promote must overwrite that single latest-
+# predecessor slot atomically — the O_EXCL write raised
+# FileExistsError and stranded every later rotation unpromotable.
+import json as _json
+import tempfile as _tempfile3
+from pathlib import Path as _Path3
+
+import mint_name as _mint_name
+with _tempfile3.TemporaryDirectory() as _td:
+    _home = _Path3(_td)
+    _absent = _home / "absent.env"
+    _k1, _k2, _k3 = (secrets.token_bytes(32) for _ in range(3))
+
+    def _stage(_old, _new):
+        _rec = rotate_name.mint_rotation(
+            "foo", _old, publickey(_new).hex())
+        (_home / "foo-rotate.json").write_text(_json.dumps(_rec) + "\n")
+        _mint_name._write_secret(_home / "foo-name.key.next", _new.hex())
+
+    _mint_name._write_secret(_home / "foo-name.key", _k1.hex())
+    _stage(_k1, _k2)
+    _ok, _msg = rotate_name.promote_rotation("foo", _home,
+                                             installed_env=_absent)
+    if not _ok or (_home / "foo-name.key.prev").read_text().strip() != _k1.hex():
+        print(f"FAIL: first promote in two-rotation run: {_msg!r}")
+        fails += 1
+    _stage(_k2, _k3)
+    try:
+        _ok, _msg = rotate_name.promote_rotation("foo", _home,
+                                                 installed_env=_absent)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: second promote raised {type(e).__name__}: {e}")
+        fails += 1
+        _ok = False
+    if _ok:
+        if (_home / "foo-name.key").read_text().strip() != _k3.hex():
+            print("FAIL: second promote did not install the third key")
+            fails += 1
+        if (_home / "foo-name.key.prev").read_text().strip() != _k2.hex():
+            print("FAIL: second promote .prev does not hold the second key")
+            fails += 1
+        if _stat.S_IMODE(os.stat(_home / "foo-name.key.prev").st_mode) != 0o600:
+            print("FAIL: second promote .prev is not 0600")
+            fails += 1
+        if (_home / "foo-name.key.next").exists():
+            print("FAIL: second promote left .next unconsumed")
+            fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)
