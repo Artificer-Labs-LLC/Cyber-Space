@@ -628,6 +628,60 @@ for _argv, _flag in (
               f"err={_err.getvalue()!r}")
         fails += 1
 
+# An abbreviated long-option spelling refuses by name before
+# argparse runs: argparse accepts any unambiguous prefix, so
+# --new-k silently became --new-key-seed and dodged the duplicate
+# gate above — a --new-k A --new-key-seed B pair minted a rotation
+# to B while the operator believed it rotated to A (probed:
+# --new-k/--prom/--sub/--exp/--h all expanded silently). Twin of
+# verify_name's abbreviation gate (67ecfc3). Space, equals and
+# paired-with-exact spellings all refuse, exit 2, via captured
+# stderr, and none may escape as argparse's SystemExit.
+for _flag, _abbr in (("--new-key-seed", "--new-k"),
+                     ("--new-key-seed", "--n"),
+                     ("--submit", "--sub"),
+                     ("--submit", "--s"),
+                     ("--expiry-days", "--exp"),
+                     ("--expiry-days", "--e")):
+    for _argv in (["foo", _abbr, "a"],
+                  ["foo", f"{_abbr}=a"],
+                  ["foo", _abbr, "a", _flag, "b"],
+                  ["foo", _flag, "a", _abbr, "b"]):
+        _err = _io.StringIO()
+        try:
+            with _contextlib.redirect_stderr(_err):
+                _code = rotate_name.main(_argv)
+        except SystemExit as _e:
+            _code = f"SystemExit {_e.code}"
+        if _code != 2 or f"{_abbr} is an abbreviation of {_flag}" not in _err.getvalue():
+            print(f"FAIL: abbreviated {_abbr} in {_argv!r} -> rc={_code} "
+                  f"err={_err.getvalue()!r}")
+            fails += 1
+for _flag, _abbr in (("--promote", "--prom"), ("--promote", "--p"),
+                     ("--help", "--h"), ("--help", "--he")):
+    for _argv in (["foo", _abbr],
+                  ["foo", _abbr, _flag],
+                  ["foo", _flag, _abbr]):
+        _err = _io.StringIO()
+        try:
+            with _contextlib.redirect_stderr(_err):
+                _code = rotate_name.main(_argv)
+        except SystemExit as _e:
+            _code = f"SystemExit {_e.code}"
+        if _code != 2 or f"{_abbr} is an abbreviation of {_flag}" not in _err.getvalue():
+            print(f"FAIL: abbreviated {_abbr} in {_argv!r} -> rc={_code} "
+                  f"err={_err.getvalue()!r}")
+            fails += 1
+# A single exact flag still reaches its own gate: --expiry-days
+# without --submit refuses on the combination, not the spelling.
+_err = _io.StringIO()
+with _contextlib.redirect_stderr(_err):
+    _code = rotate_name.main(["foo", "--expiry-days", "7"])
+if _code != 2 or "--expiry-days only applies with --submit" not in _err.getvalue():
+    print(f"FAIL: single exact --expiry-days -> rc={_code} "
+          f"err={_err.getvalue()!r}")
+    fails += 1
+
 if fails:
     print(f"test_rotate_name: {fails} FAIL")
     sys.exit(1)

@@ -958,12 +958,29 @@ def main(argv: list[str]) -> int:
     # repeated value flag by name, in space, equals or mixed spelling,
     # before argparse runs — before any key is read, generated or sent.
     _seen: set[str] = set()
+    _long_opts = ("--new-key-seed", "--submit", "--expiry-days",
+                  "--promote", "--help")
     for _tok in argv:
         if _tok == "--":
             break
         if not _tok.startswith("--"):
             continue
         _name = _tok.partition("=")[0]
+        if _name not in _long_opts:
+            # argparse accepts any unambiguous prefix as an
+            # abbreviation, so --new-k (even --n) silently became
+            # --new-key-seed and dodged the duplicate gate below: a
+            # --new-k A --new-key-seed B pair minted a rotation to
+            # B while the operator believed it rotated to A (probed
+            # this tick: --new-k/--prom/--sub/--exp/--h all expanded
+            # silently to their full spellings). Refuse the
+            # abbreviated spelling itself, by name, before argparse
+            # can expand it. Twin of verify_name's gate (67ecfc3).
+            _full = [o for o in _long_opts if o.startswith(_name)]
+            if _full:
+                print(f"refused: {_name} is an abbreviation of "
+                      f"{_full[0]} — spell it out", file=sys.stderr)
+                return 2
         if _name in ("--new-key-seed", "--submit", "--expiry-days"):
             if _name in _seen:
                 print(f"refused: {_name} given more than once",
@@ -971,7 +988,8 @@ def main(argv: list[str]) -> int:
                 return 2
             _seen.add(_name)
     ap = argparse.ArgumentParser(
-        description="mint a .cyberspace name-key rotation record")
+        description="mint a .cyberspace name-key rotation record",
+        allow_abbrev=False)
     ap.add_argument("label", help="the .cyberspace label to rotate")
     ap.add_argument("--new-key-seed",
                     help="64-hex seed for the new key (else generated)")
