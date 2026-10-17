@@ -10,7 +10,14 @@ head_hash is its entry_hash tip. No wok_merkle anywhere: the rows that were
 built on synthetic RFC 9162 roots are rebased onto real chains, and marks
 advance by chain extension over header skeletons. Examiner's fixture LW
 (23ae4b05) and rows LW-1..LW-10, Villhaze's tamper and gap rows, and
-Lodestar's fork-ordering row (b5334563) are at the end."""
+Lodestar's fork-ordering row (b5334563) are at the end.
+
+Examiner 888b3b3e (BLOCK on b1b88de, test gaps): rows BW-L (re-check and
+write in one locked section; kills M3), BW-MC (i) (a concurrent mark at a
+different seq, so only the re-check can refuse it; kills M3b with no UNIQUE
+key involved) and LW-9w (tamper with the replay cache warm; kills M4, M4b,
+M4c). No row catches a broad Exception any more: see VERDICTS / typed() /
+outcome() for how a row scores a typed refusal versus an error."""
 import contextlib
 import json
 import hashlib, os, sqlite3, sys, tempfile, time
@@ -59,8 +66,8 @@ _ed.checkvalid = _cv_memo
 # clock, then TimeoutError (the row ERRORs and fails; the file never spins).
 ROW_TIMEOUT = int(os.environ.get("WOK_WIRING_ROW_TIMEOUT", "60"))
 class RowTimeout(BaseException):
-    """BaseException so no row's own `except Exception` (typed(), the
-    try/except False guards, checkvalid) can swallow it into a fake kill."""
+    """BaseException so nothing in a row (typed(), outcome(), checkvalid)
+    can swallow it into a fake kill."""
 def _alarm(*_):
     raise RowTimeout(f"row exceeded {ROW_TIMEOUT}s")
 signal.signal(signal.SIGALRM, _alarm)
@@ -108,9 +115,37 @@ def snap(conn):
     return tuple((n, tuple(sorted(map(tuple, conn.execute(f"SELECT * FROM {n}").fetchall())))) for n in t)
 
 
+# Scoring (Examiner ART-42 888b3b3e #4). A row's verdict comes only from
+# its own assertions. The code under test answers with a return value or a
+# TYPED REFUSAL (hl.Refused / lw.WitnessRefused); those are verdicts a row
+# may assert on. Anything else (sqlite OperationalError / IntegrityError,
+# TypeError, KeyError, AssertionError in setup, ...) is not a verdict: it is
+# never caught by a row, it propagates, and the row is ERROR -- never a
+# kill. Setup steps are bare calls for the same reason.
+VERDICTS = (hl.Refused, lw.WitnessRefused)
+
+
 def typed(cls, fn):
-    try: fn(); return False
-    except Exception as e: return isinstance(e, cls)
+    """True iff fn() raises cls. Returning normally, or raising a DIFFERENT
+    typed refusal (a wrong verdict), is the row's own assertion failing
+    (False). A non-verdict exception propagates (ERROR)."""
+    try: fn()
+    except cls: return True
+    except VERDICTS: return False
+    return False
+
+
+def outcome(fn):
+    """Verdict of an action under test: its return value, or the typed
+    refusal it raised (the exception object). Non-verdicts propagate."""
+    try: return fn()
+    except VERDICTS as e: return e
+
+
+def status(r):
+    """'observed' / 'contested' / ... for a result dict, else the refusal's
+    class name (so a row compares verdicts, not exceptions)."""
+    return r.get("status") if isinstance(r, dict) else type(r).__name__
 
 
 def count(conn, table, where="1=1", args=()):
@@ -185,8 +220,7 @@ def row_gate():
     if not (typed(hl.DuplicateCosign, lambda: obs(c, sa, dup)) and typed(hl.MalformedCosign, lambda: obs(c, sa, mal))
             and snap(c) == s0):
         return False
-    try: ok = obs(c, sa, la)["status"] == "observed"
-    except Exception: return False
+    ok = status(outcome(lambda: obs(c, sa, la))) == "observed"
     ok = ok and count(c, "legacy_observed_heads") == 1 and count(c, "legacy_level_marks") == 1
     s1 = snap(c)
     sb, lb = root_head(B, 4)
@@ -205,8 +239,8 @@ def row_mapping():
             and typed(wiring.MappingMismatch, lambda: obs(c, sa, level(4, R(B, 4))))
             and snap(c) == s0):
         return False
-    try: obs(c, sa, level(4, R(A, 4)))
-    except Exception: return False
+    if status(outcome(lambda: obs(c, sa, level(4, R(A, 4))))) != "observed":
+        return False
     o = c.execute("SELECT seq, head_hash FROM legacy_observed_heads").fetchall()
     m = [(x.size, x.root.hex()) for x in wiring.proven_marks(c, LOG, GPUB, None, sig_ok)]
     return o == [(4, R(A, 4).hex())] and m == [(4, R(A, 4).hex())] and o == m
@@ -231,10 +265,8 @@ def row_rule3():
     # restart over an existing mark, and a chain from a non-latest mark are
     # all refused with nothing written.
     c = db()
-    try:
-        obs(c, *root_head(A, 4))
-        obs(c, *next_head(A, 4, 7))
-    except Exception: return False
+    obs(c, *root_head(A, 4))                # setup: bare (an exception is ERROR)
+    obs(c, *next_head(A, 4, 7))
     kinds = [r[0] for r in c.execute("SELECT proof_kind FROM legacy_level_marks ORDER BY tree_size")]
     marks = [(m.size, m.root) for m in wiring.proven_marks(c, LOG, GPUB, None, sig_ok)]
     if kinds != ["root", "chain"] or marks != [(4, R(A, 4)), (7, R(A, 7))]:
@@ -257,16 +289,14 @@ def row_fork():
     # a fork that chains from a shared proven mark.
     for pre in (False, True):
         c = db()
-        try:
-            if pre:
-                obs(c, *root_head(A, 2))
-                obs(c, *next_head(A, 2, 4))
-                r = obs(c, *next_head(B, 2, 4))
-            else:
-                obs(c, *root_head(A, 4))
-                r = obs(c, *root_head(B, 4))
-        except Exception: return False
-        if r["status"] != "contested": return False
+        if pre:
+            obs(c, *root_head(A, 2))
+            obs(c, *next_head(A, 2, 4))
+            r = outcome(lambda: obs(c, *next_head(B, 2, 4)))
+        else:
+            obs(c, *root_head(A, 4))
+            r = outcome(lambda: obs(c, *root_head(B, 4)))
+        if status(r) != "contested": return False
         s1 = snap(c)
         again = (typed(wiring.LogContested, lambda: obs(c, *(next_head(B, 2, 4) if pre else root_head(B, 4))))
                  and typed(wiring.LogContested, lambda: obs(c, *(next_head(C, 2, 4) if pre else root_head(C, 4)))))
@@ -284,14 +314,12 @@ def row_stale():
     # StaleHead (chained or root), nothing written; a replay of a STORED
     # head is already-observed, nothing written.
     c = db()
-    try:
-        obs(c, *root_head(A, 4)); obs(c, *next_head(A, 4, 7))
-    except Exception: return False
+    obs(c, *root_head(A, 4)); obs(c, *next_head(A, 4, 7))
     s0 = snap(c)
     return (typed(wiring.StaleHead, lambda: obs(c, *next_head(A, 4, 5)))
             and typed(wiring.StaleHead, lambda: obs(c, *root_head(A, 5))) and snap(c) == s0
-            and obs(c, *root_head(A, 4))["status"] == "already-observed"
-            and obs(c, *next_head(A, 4, 7))["status"] == "already-observed" and snap(c) == s0)
+            and status(outcome(lambda: obs(c, *root_head(A, 4)))) == "already-observed"
+            and status(outcome(lambda: obs(c, *next_head(A, 4, 7)))) == "already-observed" and snap(c) == s0)
 
 
 SEEN_BLOBS = []
@@ -337,12 +365,10 @@ def row_examiner():
                 and bytes.fromhex(lv["blob"]) not in SEEN_BLOBS
     # control: a real chain passes and the new head does reach cheap_head
     c = db()
-    try:
-        with mock.patch.object(hl, "cheap_head", _spy_cheap):
-            obs(c, *root_head(A, 2)); del SEEN_BLOBS[:]
-            s4, l4 = next_head(A, 2, 4); obs(c, s4, l4)
-    except Exception: return False
-    return ok and bytes.fromhex(l4["blob"]) in SEEN_BLOBS
+    with mock.patch.object(hl, "cheap_head", _spy_cheap):
+        obs(c, *root_head(A, 2)); del SEEN_BLOBS[:]
+        s4, l4 = next_head(A, 2, 4); r = outcome(lambda: obs(c, s4, l4))
+    return ok and status(r) == "observed" and bytes.fromhex(l4["blob"]) in SEEN_BLOBS
 
 
 # ---- item 1: request-path cost (route) ----------------------------------
@@ -449,8 +475,7 @@ def row_ndup_witness():
         per = {}
         def so(pub, msg, sig):
             per[pub] = per.get(pub, 0) + 1; return sig_ok(pub, msg, sig)
-        try: lw.verify_head(dict(sa, signatures=[s0] + pair), WSET, LOG, sig_ok=so)
-        except Exception: pass
+        outcome(lambda: lw.verify_head(dict(sa, signatures=[s0] + pair), WSET, LOG, sig_ok=so))
         ok = ok and per.get(W, 0) == 1 and max(per.values()) <= 1
     return ok
 
@@ -468,9 +493,8 @@ def row_norm_accept_witness():
     reset_route_db()
     r, _ = post({"head": body, "level": la})
     same = base[1] == "observed" and (r.status_code, r.json().get("status"), r.json().get("level"), VERIFIES[0]) == base
-    try: direct = lw.verify_head(body, WSET, LOG, sig_ok=sig_ok)["seq"] == 4
-    except Exception: return False
-    return same and direct
+    d = outcome(lambda: lw.verify_head(body, WSET, LOG, sig_ok=sig_ok))
+    return same and isinstance(d, dict) and d.get("seq") == 4
 
 
 def row_norm_strict_witness():
@@ -489,10 +513,9 @@ def row_norm_strict_witness():
     for bad in (X + "\n", X.upper() + "\n", " " + X, X[:63]):
         ok = ok and typed(lw.WitnessRefused, lambda b=bad: lw.verify_head(
             dict(sa, signatures=[s0, s1, {"witness": b, "sig": "00" * 64}]), WSET, LOG, sig_ok=sig_ok))
-    try: ok = ok and lw.verify_head(dict(sa, signatures=[s0, s1, {"witness": X.upper(), "sig": "00" * 64}]),
-                                    WSET, LOG, sig_ok=sig_ok)["seq"] == 4
-    except Exception: return False
-    return ok
+    d = outcome(lambda: lw.verify_head(dict(sa, signatures=[s0, s1, {"witness": X.upper(), "sig": "00" * 64}]),
+                                       WSET, LOG, sig_ok=sig_ok))
+    return ok and isinstance(d, dict) and d.get("seq") == 4
 
 
 def row_stored_lower():
@@ -515,11 +538,6 @@ def row_stored_lower():
     return len(rows) == 1 and len(pubs) == 2 and all(hl.PUB_RE.fullmatch(p) for p in pubs) and no_upper
 
 
-def _why(fn):
-    try: fn(); return ""
-    except Exception as e: return str(e)
-
-
 def row_tried_once():
     # item 1(c): lw.verify_head marks a witness tried before verifying it:
     # a valid 2-of-3 plus N bad-signature entries reusing one pinned key gives
@@ -529,9 +547,8 @@ def row_tried_once():
     per = {}
     def so(pub, msg, sig):
         per[pub] = per.get(pub, 0) + 1; return sig_ok(pub, msg, sig)
-    try: lw.verify_head(dict(sa, signatures=bad + sa["signatures"]), WSET, LOG, sig_ok=so)
-    except Exception: return False
-    return per.get(WP[2], 0) <= 1 and max(per.values()) <= 1
+    d = outcome(lambda: lw.verify_head(dict(sa, signatures=bad + sa["signatures"]), WSET, LOG, sig_ok=so))
+    return isinstance(d, dict) and per.get(WP[2], 0) <= 1 and max(per.values()) <= 1
 
 
 def row_pin_weak():
@@ -678,9 +695,7 @@ def refused_clean(c, cls, fn, zero=True):
     """Typed refusal, nothing written; with zero=True also 0 verifies and
     0 entry_hash calls in observe."""
     s0 = snap(c)
-    try: fn(); return False
-    except Exception as e:
-        if not isinstance(e, cls): return False
+    if not typed(cls, fn): return False
     return snap(c) == s0 and (not zero or (VCALLS[0] == 0 and HASHES[0] == 0))
 
 
@@ -690,9 +705,8 @@ def row_lw1_root():
     c = db()
     if not refused_clean(c, hl.ExtensionRefused, lambda: lw_obs(c, lw_head(2, H2), lw_level(2, H2, ext=sk(E, 0, 1)), True)):
         return False
-    try: r = lw_obs(c, *h2())
-    except Exception: return False
-    return r["status"] == "observed" and r["level"] == "single-operator" and kinds_of(c) == [(2, H2, "root")] \
+    r = outcome(lambda: lw_obs(c, *h2()))
+    return status(r) == "observed" and r["level"] == "single-operator" and kinds_of(c) == [(2, H2, "root")] \
         and marks_of(c) == [(2, H2)]
 
 
@@ -701,11 +715,9 @@ def row_lw2_advance():
     # observed and the latest mark is (4, H4), proof_kind chain; the
     # extension costs one entry_hash per skeleton.
     c = db()
-    try:
-        lw_obs(c, *h2())
-        r = lw_obs(c, *h4(), count=True)
-    except Exception: return False
-    return (r["status"] == "observed" and r["level"] == "single-operator" and HASHES[0] == 2
+    lw_obs(c, *h2())
+    r = outcome(lambda: lw_obs(c, *h4(), count=True))
+    return (status(r) == "observed" and r["level"] == "single-operator" and HASHES[0] == 2
             and kinds_of(c) == [(2, H2, "root"), (4, H4, "chain")] and marks_of(c) == [(2, H2), (4, H4)]
             and [x[0] for x in c.execute("SELECT seq FROM legacy_observed_heads ORDER BY seq")] == [2, 4])
 
@@ -717,8 +729,7 @@ def row_lw3_link():
     # nothing written, 0 verifies (the extension is checked before any
     # signature verify).
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     s3 = sk(E, 2, 4); s3[0] = dict(s3[0], prev_hash="ab" * 32)
     o4 = lw.entry_hash(O[3], L)
     return (refused_clean(c, hl.ExtensionRefused, lambda: lw_obs(c, *h4(ext=s3), count=True), zero=False) and VCALLS[0] == 0
@@ -730,8 +741,7 @@ def row_lw4_tail():
     # LW-4: skeletons that chain from H2 (sibling log F) but end at F's tip,
     # under a head signed with H4: refused (the tail must be head_hash).
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     return refused_clean(c, hl.ExtensionRefused, lambda: lw_obs(c, *h4(ext=sk(F, 2, 4)), count=True), zero=False) \
         and VCALLS[0] == 0 and marks_of(c) == [(2, H2)]
 
@@ -742,8 +752,7 @@ def row_lw5_span():
     # entry_hash call (0 hashes, 0 verifies), nothing written. Direct: an
     # empty extension with a moved tip, and n < m, are refused.
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     e5 = lw.skeleton(build([{"kind": "hold", "agent": 41, "name": "x"}], base=E)[4])
     s34 = sk(E, 2, 4)
     bad = [s34[1:], s34 + [e5], [dict(s34[0], name="bob"), s34[1]], [dict(s34[0], x=1), s34[1]], [dict(s34[0], agent_id="9"), s34[1]]]
@@ -756,8 +765,7 @@ def row_lw6_tamper_kind():
     # LW-6: kind flipped in skeleton 3: the recomputed entry_hash no longer
     # matches skeleton 4's prev_hash; refused, nothing written.
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     s = sk(E, 2, 4); s[0] = dict(s[0], kind="contest")
     return refused_clean(c, hl.ExtensionRefused, lambda: lw_obs(c, *h4(ext=s), count=True), zero=False) and VCALLS[0] == 0
 
@@ -767,8 +775,7 @@ def row_lw_tamper_link():
     # link, its head SIGNED over the tampered tip (so only the link check can
     # catch it): refused, nothing written.
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     T = build([{"kind": "hold", "agent": 9, "name": "bob"},
                {"kind": "migrate-pending", "agent": 7, "aps": 2, "name": "alice", "prev": "cd" * 32}], base=E[:2])
     t4 = lw.entry_hash(T[3], L)
@@ -782,13 +789,11 @@ def row_lw_gap():
     # (an entry missing from the numbering), head SIGNED over its tip at
     # seq 4: refused (gap). Nothing written.
     c = db()
-    try: lw_obs(c, *h2()); lw_obs(c, *h4())
-    except Exception: return False
+    lw_obs(c, *h2()); lw_obs(c, *h4())      # setup: bare
     s57 = sk(E7, 4, 7)
     i = refused_clean(c, hl.ExtensionRefused, lambda: lw_obs(c, lw_head(7, H[7]), lw_level(7, H[7], prev=(4, H4), ext=[s57[0], s57[2]]), True))
     c2 = db()
-    try: lw_obs(c2, *h2())
-    except Exception: return False
+    lw_obs(c2, *h2())
     Gp = build([{"kind": "hold", "agent": 9, "name": "bob"},
                 {"kind": "migrate-pending", "agent": 7, "aps": 2, "name": "alice", "seq": 5}], base=E[:2])
     g4 = lw.entry_hash(Gp[3], L)
@@ -803,9 +808,8 @@ def row_lw7_backlink():
     # (tip computed from each): in-span wrong, in-span missing, landing in
     # the span on another agent, 0, and a back-link with no agent: refused.
     c = db()
-    try:
-        lw_obs(c, *h2()); ok = lw_obs(c, *h4())["status"] == "observed"
-    except Exception: return False
+    lw_obs(c, *h2())
+    ok = status(outcome(lambda: lw_obs(c, *h4()))) == "observed"
     def chain(specs):
         X = build(specs, base=E[:2]); return lw.verify_extension(sk(X, 2, 4), L, 2, H2, 4, lw.entry_hash(X[3], L))[0]
     bob = {"kind": "hold", "agent": 9, "name": "bob"}
@@ -823,11 +827,9 @@ def row_lw8_fork():
     # contested record, every mark removed, nothing stored for h4'.
     c = db()
     f4 = lw.entry_hash(F[3], L)
-    try:
-        lw_obs(c, *h2()); lw_obs(c, *h4())
-        r = lw_obs(c, *h4(ext=sk(F, 2, 4), hh=f4))
-    except Exception: return False
-    return (r["status"] == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
+    lw_obs(c, *h2()); lw_obs(c, *h4())
+    r = outcome(lambda: lw_obs(c, *h4(ext=sk(F, 2, 4), hh=f4)))
+    return (status(r) == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
             and [x[0] for x in c.execute("SELECT head_hash FROM legacy_observed_heads WHERE seq=4")] == [H4]
             and typed(wiring.LogContested, lambda: lw_obs(c, *h4(ext=sk(F, 2, 4), hh=f4))))
 
@@ -840,9 +842,7 @@ def row_lw9_replay():
     # skeletons, are refused too.
     def fresh():
         c = db(); lw_obs(c, *h2()); lw_obs(c, *h4()); wiring._MARK_CACHE.clear(); return c
-    try:
-        c = fresh(); good = marks_of(c) == [(2, H2), (4, H4)]
-    except Exception: return False
+    c = fresh(); good = outcome(lambda: marks_of(c)) == [(2, H2), (4, H4)]
     proof = c.execute("SELECT proof FROM legacy_level_marks WHERE tree_size=4").fetchone()[0]
     k = proof.index('"body_sha256": "') + len('"body_sha256": "')
     bad = proof[:k] + ("0" if proof[k] != "0" else "1") + proof[k + 1:]
@@ -854,6 +854,54 @@ def row_lw9_replay():
     return ok and typed(wiring.MarkNotRootProven, lambda: marks_of(c))
 
 
+def _other_pins():
+    """A real parsed pin set for the same log under the same pin signers
+    that does NOT pin the fleet cosigner CK (pins rotated)."""
+    ck2 = SigningKey(hashlib.sha256(b"lw-other-cosigner").digest()).verify_key.encode()
+    body = hl.PIN_MAGIC + LIDB + struct.pack(">QQ", 1, 1_700_000_000) + bytes([1])
+    body += OPL + bytes([hl.CLASS_FLEET, 1]) + ck2 + struct.pack(">QQ", 0, 10 ** 9)
+    pf = body + bytes([2]) + b"".join(bytes([i]) + _PS[i].sign(body).signature for i in (0, 1))
+    return hl.parse_pins(pf, GPUB, sig_ok, tuple(k.verify_key.encode().hex() for k in _PS), 2)
+LWP2 = _other_pins()
+
+
+def row_lw9_warm():
+    # LW-9w (Examiner 888b3b3e #3): tamper with the replay cache WARM. h2
+    # and h4 observed: the insert refreshed the cache, so it holds exactly
+    # the stored rows 2 and 4 (checked) and a read replays nothing (0
+    # verifies, checked). Then, with the cache never cleared:
+    # (i) one byte of the stored row-4 proof changed: the stored rows no
+    # longer match what the cache proved byte for byte, so it must miss and
+    # replay, and the replay refuses: MarkNotRootProven from proven_marks
+    # and from the next observe (h7), nothing written. A cache that hits on
+    # a row count (or on no prefix check at all) serves the tampered row as
+    # proven.
+    # (ii) fresh log, warm under LWP: proven_marks under another real pin
+    # set (cosigner not pinned) and under no pins must miss the cache (the
+    # pins are part of its key) and replay, which refuses: MarkNotRootProven.
+    # A key without the pins serves marks proven under LWP as proven under
+    # pins that never cosigned them. Control: LWP still reads warm.
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare
+    hit = wiring._MARK_CACHE.get(L)
+    if not (hit is not None and list(hit[1]) == [tuple(r) for r in wiring._mark_rows(c, L)]):
+        return False
+    VCALLS[0] = 0
+    if not (marks_of(c) == [(2, H2), (4, H4)] and VCALLS[0] == 0):
+        return False
+    proof = c.execute("SELECT proof FROM legacy_level_marks WHERE tree_size=4").fetchone()[0]
+    k = proof.index('"body_sha256": "') + len('"body_sha256": "')
+    c.execute("UPDATE legacy_level_marks SET proof=? WHERE tree_size=4",
+              (proof[:k] + ("0" if proof[k] != "0" else "1") + proof[k + 1:],))   # cache NOT cleared
+    if not (typed(wiring.MarkNotRootProven, lambda: marks_of(c))
+            and refused_clean(c, wiring.MarkNotRootProven, lambda: lw_obs(c, *h7()), zero=False)):
+        return False
+    wiring._MARK_CACHE.clear()                  # (ii) builds its own warm cache from its own inserts
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare
+    ii = all(typed(wiring.MarkNotRootProven, lambda p=p: wiring.proven_marks(c, L, GPUB, p, vso)) for p in (LWP2, None))
+    VCALLS[0] = 0
+    return ii and marks_of(c) == [(2, H2), (4, H4)] and VCALLS[0] == 0
+
+
 BIG = gen_log("z", 262, base=E[:2])
 def row_lw10_cap():
     # LW-10 (cap 256, Villhaze a73a009e): a 2 -> 259 advance (257 skeletons)
@@ -862,8 +910,7 @@ def row_lw10_cap():
     # the route (0 verifies including the witness ones, no row). 256
     # worst-case skeletons fit the byte cap; the cap is exactly 256.
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     big = sk(BIG, 2, 259); t = lw.entry_hash(BIG[258], L)
     lv = lw_level(259, t, prev=(2, H2), ext=big)
     ok = refused_clean(c, wiring.MalformedLevel, lambda: lw_obs(c, lw_head(259, t), lv, True))
@@ -885,8 +932,7 @@ def row_lw10_bytes():
     # byte cap: 3 entries over the byte cap -> MalformedLevel, 0 hashes,
     # 0 verifies, nothing written; the old "consistency" field is refused.
     c = db()
-    try: lw_obs(c, *h2())
-    except Exception: return False
+    lw_obs(c, *h2())                        # setup: bare (an exception is ERROR)
     fat = [dict(s, kind="x" * (lw.MAX_EXTENSION_BYTES // 2)) for s in sk(E, 2, 4)]
     old = dict(h4()[1]); old["consistency"] = []
     return (refused_clean(c, wiring.MalformedLevel, lambda: lw_obs(c, *h4(ext=fat), count=True))
@@ -900,18 +946,14 @@ def row_fork_order():
     # refused afterwards. Not StaleHead.
     f4 = lw.entry_hash(F[3], L)
     c = db()
-    try:
-        lw_obs(c, *h2()); lw_obs(c, *h4()); lw_obs(c, *h7())
-        r = lw_obs(c, *h4(ext=sk(F, 2, 4), hh=f4))
-    except Exception: return False
-    ok = (r["status"] == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
+    lw_obs(c, *h2()); lw_obs(c, *h4()); lw_obs(c, *h7())       # setup: bare
+    r = outcome(lambda: lw_obs(c, *h4(ext=sk(F, 2, 4), hh=f4)))
+    ok = (status(r) == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
           and typed(wiring.LogContested, lambda: lw_obs(c, *h7())))
     c = db()
-    try:
-        lw_obs(c, lw_head(4, H4), lw_level(4, H4)); lw_obs(c, *h7())
-        r = lw_obs(c, lw_head(4, f4), lw_level(4, f4))
-    except Exception: return False
-    return ok and r["status"] == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
+    lw_obs(c, lw_head(4, H4), lw_level(4, H4)); lw_obs(c, *h7())
+    r = outcome(lambda: lw_obs(c, lw_head(4, f4), lw_level(4, f4)))
+    return ok and status(r) == "contested" and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
 
 
 # ======================= Bulwark 8078a11 BLOCK =======================
@@ -954,8 +996,8 @@ def row_nogrowth_evidence():
     def mark_snap(s):
         return tuple((n, rows) for n, rows in s if n in mark_tables)
     untouched = mark_snap(before) == mark_snap(after)
-    clean = obs(c, *next_head(A, 4, 7))
-    return fields_ok and untouched and clean["status"] == "observed" and count(c, "legacy_refused_heads") == 1
+    clean = outcome(lambda: obs(c, *next_head(A, 4, 7)))
+    return fields_ok and untouched and status(clean) == "observed" and count(c, "legacy_refused_heads") == 1
 
 
 def row_bw_cold_lock():
@@ -982,8 +1024,7 @@ def row_bw_cold_lock():
 def row_bw_contested_cheap():
     # Bulwark BW-2: on a contested log the refusal comes before any verify.
     c = db()
-    try: obs(c, *root_head(A, 4)); obs(c, *root_head(B, 4))
-    except Exception: return False
+    obs(c, *root_head(A, 4)); obs(c, *root_head(B, 4))      # setup: bare
     n = [0]
     def so(*a): n[0] += 1; return sig_ok(*a)
     sb, lb = root_head(B, 4)
@@ -1003,13 +1044,12 @@ def row_bw_replay_free():
     # Bulwark #2: a replay of a stored head (same head_hash at its seq) is
     # already-observed with 0 verifies and nothing written.
     c = db()
-    try: obs(c, *root_head(A, 4))
-    except Exception: return False
+    obs(c, *root_head(A, 4))                # setup: bare
     s0 = snap(c); n = [0]
     def so(*a): n[0] += 1; return sig_ok(*a)
     sa, la = root_head(A, 4)
     vh = wiring.verify_legacy(sa, WSET, LOG, sig_ok)
-    return wiring.observe(c, vh, la, GPUB, None, so)["status"] == "already-observed" and n[0] == 0 and snap(c) == s0
+    return status(outcome(lambda: wiring.observe(c, vh, la, GPUB, None, so))) == "already-observed" and n[0] == 0 and snap(c) == s0
 
 
 def row_bw_warm_after_insert():
@@ -1017,32 +1057,84 @@ def row_bw_warm_after_insert():
     # log, after h2 and h4, observing h7 costs exactly its own 2 verifies
     # (Genesis + one cosign), no replay of the row h4 just wrote.
     c = db()
-    try:
-        lw_obs(c, *h2()); lw_obs(c, *h4())
-        r = lw_obs(c, *h7(), count=True)
-    except Exception: return False
-    return r["status"] == "observed" and VCALLS[0] == 2
+    lw_obs(c, *h2()); lw_obs(c, *h4())      # setup: bare
+    r = outcome(lambda: lw_obs(c, *h7(), count=True))
+    return status(r) == "observed" and VCALLS[0] == 2
 
 
 def row_bw_marks_changed():
     # Bulwark #1: the write happens only if the mark rows are byte-identical
-    # to what was read. Another observe commits A@4 between this observe's
-    # read and its write (B@4 from mark 2): MarksChanged, and this observe
-    # writes nothing (the table is exactly as the other observe left it).
+    # to what was read, and the write is decided on that re-read.
+    # (i) Examiner 888b3b3e #2: another observe commits A@3 (chained from
+    # mark 2) between this observe's read and its write of A@4 (also from
+    # mark 2). Different seq, so no UNIQUE key can collide: the only thing
+    # that refuses it is the re-check. MarksChanged, and this observe writes
+    # nothing (the table is exactly as the other observe left it: marks 2, 3,
+    # nothing at 4). A write decided on the stale first read stores mark 4
+    # over mark 3 and returns "observed" -- this assertion fails, no
+    # IntegrityError involved.
+    # (ii) the same-seq race (B@4 against a committed A@4): MarksChanged.
+    for rival, mine, n4 in ((lambda: next_head(A, 2, 3), lambda: next_head(A, 2, 4), 0),
+                            (lambda: next_head(A, 2, 4), lambda: next_head(B, 2, 4), 1)):
+        c = db()
+        obs(c, *root_head(A, 2))                # setup: bare (an exception is ERROR)
+        calls, after = [0], []
+        @contextlib.contextmanager
+        def oc():
+            calls[0] += 1
+            if calls[0] == 2:                   # the rival commits while this observe is off the lock
+                obs(c, *rival()); after.append(snap(c))
+            yield c
+        sb, lb = mine()
+        vh = wiring.verify_legacy(sb, WSET, LOG, sig_ok)
+        if not (typed(wiring.MarksChanged, lambda: wiring.observe_split(oc, vh, lb, GPUB, None, sig_ok))
+                and calls[0] == 2 and after and snap(c) == after[0] and count(c, "legacy_contested_heads") == 0
+                and count(c, "legacy_level_marks", "tree_size=4") == n4):
+            return False
+    return True
+
+
+class HeldConn:
+    """The connection observe_split gets from open_conn, logging every data
+    write with whether open_conn's lock was held at that moment."""
+    def __init__(self, c, held): self.c, self.held, self.writes = c, held, []
+    def execute(self, sql, *a):
+        if sql.lstrip().split(None, 1)[0].upper() in ("INSERT", "UPDATE", "DELETE", "REPLACE"):
+            self.writes.append((self.held[0], " ".join(sql.split()[:3])))
+        return self.c.execute(sql, *a)
+
+
+def row_bw_lock_write():
+    # Bulwark #1 / Examiner 888b3b3e #1: the re-check and the write are ONE
+    # locked section. open_conn is the lock (held while its context is
+    # open). This observe writes A@4 from mark 2; the moment it releases the
+    # lock after its re-check section, a rival observe takes the lock and
+    # tries A@3 from mark 2 (a writer landing between the re-check and the
+    # write if they were split). Correct: every write of this observe is
+    # made with the lock held, the rival then sees mark 4 and is StaleHead,
+    # and the marks replay as exactly 2, 4. With the write moved outside the
+    # lock, the rival gets in first (observed at 3) and this observe writes
+    # mark 4 over it unlocked: the held-lock and rival assertions fail.
     c = db()
-    try: obs(c, *root_head(A, 2))
-    except Exception: return False
-    calls, after = [0], []
+    obs(c, *root_head(A, 2))                    # setup: bare
+    held, entries, rival = [False], [0], []
+    hc = HeldConn(c, held)
     @contextlib.contextmanager
     def oc():
-        calls[0] += 1
-        if calls[0] == 2:
-            obs(c, *next_head(A, 2, 4)); after.append(snap(c))
-        yield c
-    sb, lb = next_head(B, 2, 4)
-    vh = wiring.verify_legacy(sb, WSET, LOG, sig_ok)
-    ok = typed(wiring.MarksChanged, lambda: wiring.observe_split(oc, vh, lb, GPUB, None, sig_ok))
-    return ok and calls[0] == 2 and after and snap(c) == after[0] and count(c, "legacy_contested_heads") == 0
+        entries[0] += 1; held[0] = True
+        try: yield hc
+        finally: held[0] = False
+        if entries[0] == 2 and not rival:       # lock released after the re-check section
+            rival.append(outcome(lambda: obs(c, *next_head(A, 2, 3))))
+    s4, l4 = next_head(A, 2, 4)
+    vh = wiring.verify_legacy(s4, WSET, LOG, sig_ok)
+    r = outcome(lambda: wiring.observe_split(oc, vh, l4, GPUB, None, sig_ok))
+    writes_locked = bool(hc.writes) and all(h for h, _ in hc.writes)
+    rival_stale = len(rival) == 1 and isinstance(rival[0], wiring.StaleHead)
+    marks = outcome(lambda: [(m.size, m.root) for m in wiring.proven_marks(c, LOG, GPUB, None, sig_ok)])
+    return (status(r) == "observed" and entries[0] == 2 and writes_locked and rival_stale
+            and marks == [(2, R(A, 2)), (4, R(A, 4))]
+            and [x[0] for x in c.execute("SELECT seq FROM legacy_observed_heads ORDER BY seq")] == [2, 4])
 
 
 def row_bw_rate_isolation():
@@ -1065,7 +1157,8 @@ BW_ROWS = [
     ("(BW-3) more entries than pinned witnesses: TooManyWitnessSigs", row_bw_cap_distinct),
     ("(BW-R) replay of a stored head: already-observed, 0 verifies, nothing written", row_bw_replay_free),
     ("(BW-W) cache refreshed after insert: next head costs only its own verifies", row_bw_warm_after_insert),
-    ("(BW-MC) marks changed between read and write: MarksChanged, nothing written", row_bw_marks_changed),
+    ("(BW-MC) marks changed between read and write (other seq; same seq): MarksChanged, nothing written", row_bw_marks_changed),
+    ("(BW-L) re-check and write in one locked section: every write under the lock; a rival after release is StaleHead", row_bw_lock_write),
     ("(BW-RL) 120 junk requests from one IP do not 429 an honest head from another IP", row_bw_rate_isolation),
 ]
 
@@ -1082,6 +1175,7 @@ LW_ROWS = [
     ("(LW-7) back-link across the mark accepted; in-span exact, below-mark range, no-agent rule refused", row_lw7_backlink),
     ("(LW-8) fork on the real log: one contested record, marks removed, nothing stored for h4'", row_lw8_fork),
     ("(LW-9) replay re-verifies stored skeletons: corrupted byte / wrong kind / root with skeletons -> MarkNotRootProven", row_lw9_replay),
+    ("(LW-9w) WARM cache: tampered stored row and other pins both miss the cache and replay -> MarkNotRootProven", row_lw9_warm),
     ("(LW-10) cap 256: 257 skeletons refused before any entry_hash, 0 hashes, 0 verifies (observe, lw, route)", row_lw10_cap),
     ("(LW-10b) extension byte cap and own transport field: MalformedLevel, 0 hashes, 0 verifies", row_lw10_bytes),
     ("(LF) Lodestar fork order: marks 2/4/7 then signed B@4 (chained and root) -> contested, marks emptied, log refused", row_fork_order),
@@ -1113,14 +1207,24 @@ ROWS = [
 
 # ------------------------------------------------------------------ mutants
 
+# External mutant runs (a reviewer mutates the module FILE, so an in-file
+# mutant's anchor may be gone): WOK_WIRING_SRC_ANCHOR=0 turns a missing
+# anchor into a no-op in-file mutant (it then shows SURVIVED and fails the
+# file, so this can never pass a real run). Default: the anchor must match.
+SRC_ANCHOR = os.environ.get("WOK_WIRING_SRC_ANCHOR", "1") != "0"
 def src_fn(mod, old, new, fn):
     """Exec a mutated copy of mod; classes rebound to the real ones."""
-    src = open(mod.__file__).read(); assert src.count(old) == 1, (mod.__name__, old)
+    src = open(mod.__file__).read()
+    if not SRC_ANCHOR and src.count(old) != 1:
+        return getattr(mod, fn)
+    assert src.count(old) == 1, (mod.__name__, old)
     ns = {"__name__": mod.__name__ + "_mut", "__file__": mod.__file__}
     exec(compile(src.replace(old, new), "mut", "exec"), ns)
     for k, v in vars(mod).items():
         if isinstance(v, type) and k in ns:
             ns[k] = v
+    if "_MARK_CACHE" in ns and isinstance(getattr(mod, "_MARK_CACHE", None), dict):
+        ns["_MARK_CACHE"] = mod._MARK_CACHE     # one replay cache: the real module's _remember feeds a mutant's replay
     return ns[fn]
 def wmut(old, new, fn="observe"):
     return mock.patch.object(wiring, fn, src_fn(wiring, old, new, fn))
@@ -1254,13 +1358,18 @@ BACKLINK = '''        if a is None:
         elif v is not None and not 1 <= v <= m:
             return False, f"agent back-link out of range at seq {i}"
 '''
+def CACHE_MUT(old, new):
+    """A replay_marks mutant installed as the verifier observe uses AND as
+    wiring.replay_marks, so _decide_and_write still refreshes the cache."""
+    f = src_fn(wiring, old, new, "replay_marks")
+    return [mock.patch.object(wiring, "replay_marks", f), mock.patch.object(wiring, "MARK_VERIFIER", f)]
 EXT_CALL = '''        level_name, new_mark = hl.extend_mark(vmark, blob, level["genesis_sig"], genesis_pub,
                                               level["cosigns"], pins, sig_ok, ext)'''
 LW_MUT = [
     ("(LW-1m) root head with an extension accepted", row_lw1_root, [wmut("        if ext:\n            raise ExtensionRefused", "        if False:\n            raise ExtensionRefused")]),
     ("(LW-2m) extension check always refuses", row_lw2_advance, [mock.patch.object(lw, "verify_extension", lambda *a: (False, "mutant"))]),
     ("(LW-2r) head_hash treated as an RFC 9162 root (consistency path over the skeleton hashes)", row_lw2_advance, [wmut(EXT_CALL, '''        level_name, new_mark = hl.advance_mark(vmark, blob, level["genesis_sig"], genesis_pub,
-                                               level["cosigns"], pins, sig_ok, [bytes.fromhex(lw.entry_hash(e, log_id)) for e in ext])''')]),
+                                               level["cosigns"], pins, sig_ok, [bytes.fromhex(lw.entry_hash(e, hl.log_id_of(genesis_pub).hex())) for e in ext])''')]),
     ("(LW-3m) first skeleton's link to the marked tip not checked", row_lw3_link, [lwx('    if skeletons[0]["prev_hash"] != tip_m:', "    if False:")]),
     ("(LW-3v) signature verify before the extension check", row_lw3_link, [mock.patch.object(hl, "extend_mark", src_fn(hl, "    h = cheap_head(blob, log_id_of(genesis_pub), prev)\n    ok, why",
         "    verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=prev, ruling=ruling)\n    h = cheap_head(blob, log_id_of(genesis_pub), prev)\n    ok, why", "extend_mark"))]),
@@ -1280,6 +1389,9 @@ LW_MUT = [
     ("(LW-8m) fork stores the second head as a mark", row_lw8_fork, [wmut(*FORK_STORE_BOTH)]),
     ("(LW-9m) replay trusts the stored (size, root)", row_lw9_replay, [mock.patch.object(wiring, "MARK_VERIFIER", mv_trust_rows)]),
     ("(LW-9k) replay ignores the stored proof_kind above the root", row_lw9_replay, [mock.patch.object(wiring, "MARK_VERIFIER", src_fn(wiring, "                if kind != PROOF_CHAIN:\n", "                if False:\n", "replay_marks"))]),
+    ("(LW-9wx) Examiner M4: cache prefix check removed", row_lw9_warm, CACHE_MUT(" and rows[:len(hit[1])] == hit[1]:", ":")),
+    ("(LW-9wc) Examiner M4c: cache prefix check replaced by a row count", row_lw9_warm, CACHE_MUT(" and rows[:len(hit[1])] == hit[1]:", " and len(rows) >= len(hit[1]):")),
+    ("(LW-9wp) Examiner M4b: pins dropped from the cache key", row_lw9_warm, [mock.patch.object(wiring, "_cache_key", src_fn(wiring, "    return (genesis_pub, repr(pins), sig_ok)", "    return (genesis_pub, sig_ok)", "_cache_key"))]),
     ("(LW-9r) replay allows skeletons on the root row", row_lw9_replay, [mock.patch.object(wiring, "MARK_VERIFIER", src_fn(wiring, "                if kind != PROOF_ROOT or ext != []:", "                if kind != PROOF_ROOT:", "replay_marks"))]),
     ("(LW-10w) wiring 256-skeleton cap removed", row_lw10_cap, [mock.patch.object(wiring, "_level_shape", src_fn(wiring, "    if len(ext) > lw.MAX_EXTENSION:", "    if False:", "_level_shape"))]),
     ("(LW-10l) lw.verify_extension cap removed", row_lw10_cap, [lwx("    if len(skeletons) > MAX_EXTENSION:\n", "    if False:\n")]),
@@ -1305,36 +1417,45 @@ BW_MUT = [
     ("(BW-Rm) already-observed check only after the verifies", row_bw_replay_free, [wmut('    if head_hash in state["stored"]:        # Bulwark #2: a replay costs no verify\n        return {"status": "already-observed", "log_id": log_id, "seq": seq}\n', '')]),
     ("(BW-Wm) replay cache not refreshed after the insert", row_bw_warm_after_insert, [wmut('    if MARK_VERIFIER is replay_marks:       # Bulwark #2: refresh the cache after the insert\n', '    if False:\n')]),
     ("(BW-MCm) write without the byte-identical re-check", row_bw_marks_changed, [mock.patch.object(wiring, "observe_split", src_fn(wiring, '        if fresh["rows"] != state["rows"]:\n', '        if False:\n', "observe_split"))]),
+    ("(BW-MCs) Examiner M3b: write decided on the stale first read (fresh = state)", row_bw_marks_changed, [mock.patch.object(wiring, "observe_split", src_fn(wiring, '        fresh = _read_state(conn, log_id, seq)\n', '        fresh = state\n', "observe_split"))]),
+    ("(BW-Lm) Examiner M3: write moved outside the lock (after the re-check section)", row_bw_lock_write, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        '            raise LogContested("log has a contested seq; no mark moves until ruled")\n        return _decide_and_write(',
+        '            raise LogContested("log has a contested seq; no mark moves until ruled")\n    if True:\n        return _decide_and_write(', "observe_split"))]),
     ("(BW-RLm) junk charged to the per-log/global budget before the pre-check", row_bw_rate_isolation, [mock.patch.object(rlw, "charge_observe_source", lambda src: (ORIG_CSRC(src), rlw.charge_observe_scoped(LOG)))]),
 ]
 
-R_ = []
-for label, fn in ROWS:
-    try:
-        with bounded(): ok = bool(fn())
-    except (Exception, RowTimeout) as e: ok = False; label += f" [ERROR {type(e).__name__}: {e}]"
-    R_.append((label, ok)); print(f"  {'ok  ' if ok else 'FAIL'} {label}")
-table = []
-for name, row, patches in MUT + LW_MUT + BW_MUT:
-    try:
-        with bounded(): real = bool(row())
-    except (Exception, RowTimeout) as e:
-        real = False; name += f" [real ERROR {type(e).__name__}: {e}]"
-    CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
-    try:
-        for p in patches: p.start()
+def main():
+    R_ = []
+    for label, fn in ROWS:
         try:
-            with bounded(): res = "SURVIVED" if row() else "KILLED"
-        finally:
-            for p in reversed(patches): p.stop()
-    except (Exception, RowTimeout) as e:
-        res = f"ERROR({type(e).__name__}: {e})"
-    CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
-    table.append((name, row.__name__, real, res))
-    ok = real and res == "KILLED"; R_.append((f"MUTANT {name}", ok))
-    print(f"  {'ok  ' if ok else 'FAIL'} MUTANT {name}: real passes and named row fails")
-print("mutant table (kill = named row fails its own assertion; exceptions are ERROR):\n  mutant | row | real passes | result")
-for n, r, a, b in table: print(f"  {n} | {r} | {a} | {b}")
-fails = sum(1 for _, ok in R_ if not ok)
-print(f"wok_wiring: {len(R_) - fails} passed, {fails} failed ({time.time() - T0:.1f}s)")
-raise SystemExit(1 if fails else 0)
+            with bounded(): ok = bool(fn())
+        except (Exception, RowTimeout) as e: ok = False; label += f" [ERROR {type(e).__name__}: {e}]"
+        R_.append((label, ok)); print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+    table = []
+    for name, row, patches in MUT + LW_MUT + BW_MUT:
+        try:
+            with bounded(): real = bool(row())
+        except (Exception, RowTimeout) as e:
+            real = False; name += f" [real ERROR {type(e).__name__}: {e}]"
+        CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
+        try:
+            for p in patches: p.start()
+            try:
+                with bounded(): res = "SURVIVED" if row() else "KILLED"
+            finally:
+                for p in reversed(patches): p.stop()
+        except (Exception, RowTimeout) as e:
+            res = f"ERROR({type(e).__name__}: {e})"
+        CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
+        table.append((name, row.__name__, real, res))
+        ok = real and res == "KILLED"; R_.append((f"MUTANT {name}", ok))
+        print(f"  {'ok  ' if ok else 'FAIL'} MUTANT {name}: real passes and named row fails")
+    print("mutant table (kill = named row fails its own assertion; exceptions are ERROR):\n  mutant | row | real passes | result")
+    for n, r, a, b in table: print(f"  {n} | {r} | {a} | {b}")
+    fails = sum(1 for _, ok in R_ if not ok)
+    print(f"wok_wiring: {len(R_) - fails} passed, {fails} failed ({time.time() - T0:.1f}s)")
+    raise SystemExit(1 if fails else 0)
+
+
+if __name__ == "__main__":
+    main()
