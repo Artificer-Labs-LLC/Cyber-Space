@@ -395,6 +395,7 @@ for tag, via in (("G", "gossip"), ("R", "route")):
 #   S  serve   GET /names/N/reach              frozen -> 404          live -> 200
 #   P  reaper  _reap_expired_reach_descriptors frozen -> row deleted  live -> kept
 #   I  ingest  fresh A descriptor              frozen -> not stored   live -> replaced
+#   N  names_resolve GET /names/N              frozen -> 404          live -> 200
 # Variants: u issued_at unparseable; f issued_at 1h in the future; c lifetime 366d (over cap);
 # controls CZ / CP parseable live stamps in 'Z' and '+00:00' spellings.
 REACH = [{"kind": "https", "url": "https://bw-rp1.example"}]
@@ -437,6 +438,9 @@ for var, frozen, iss, exp in RP1_VARIANTS:
     row(f"RP1-I{var}", True,
         (o not in ("inserted", "replaced") and left is None) if frozen else (o == "replaced"),
         f"reach ingest: {d}; fresh A descriptor -> {o}; stored={'none' if left is None else 'yes'}")
+    n = f"rp1-n-{var.lower()}"; A = key(); rp1_seed(n, A, iss, exp)
+    st = C.get(f"/api/v1/names/{n}").status_code
+    row(f"RP1-N{var}", True, st == (404 if frozen else 200), f"names_resolve: {d}; GET name -> HTTP {st}")
 
 fails = [r for r, a, ok in RESULTS if a and not ok]
 print("---\nSUMMARY: %d asserted rows, %d failed%s" % (sum(1 for _, a, _ in RESULTS if a), len(fails),

@@ -1416,11 +1416,9 @@ def names_resolve(request: Request, name: str):
         raise HTTPException(status_code=404, detail="No such name.")
     # Floor fix 5 (v0.6.3): both timestamps must parse as canonical UTC —
     # an unparseable row reads as absent, never live.
-    try:
-        live = _parse_claim_time(row[3]) > datetime.now(timezone.utc)
-        _parse_claim_time(row[2])
-    except ValueError:
-        live = False
+    # BW-RP1: resolve_cyberspace's full predicate (also not-yet-issued
+    # and the lifetime cap), shared via _binding_stamps_live.
+    live = _binding_stamps_live(row[2], row[3])
     if not live:
         raise HTTPException(status_code=404, detail="No such name.")
     # String-length gate, twin of names_reach (ea05299): this seat

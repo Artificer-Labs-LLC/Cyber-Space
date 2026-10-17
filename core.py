@@ -1034,7 +1034,8 @@ def _binding_stamps_live(issued_at, expires_at, now=None) -> bool:
     expires_at > now, issued_at <= now (not-yet-issued reads absent) and
     expires - issued <= NAME_EXPIRY_DAYS (lifetime cap). Any failure,
     including a non-string stamp, reads as not live. Callers: resolve_cyberspace,
-    names_reach, _reap_expired_reach_descriptors, ingest_reach_descriptor."""
+    names_resolve, names_reach, _reap_expired_reach_descriptors,
+    ingest_reach_descriptor."""
     try:
         now = now or datetime.now(timezone.utc)
         expires_dt = _parse_claim_time(expires_at)
