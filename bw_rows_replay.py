@@ -387,6 +387,61 @@ for tag, via in (("G", "gossip"), ("R", "route")):
     row(f"R-C1bGCP{tag}", True, o_new in GC_LANDED and not left,
         f"{via}: 2 parseable expired rows (Z, +00:00); unrelated new claim -> {o_new}; survivors={left}")
 
+# ---------------- BW-RP1 (ART-37, Villhaze c707d344; Examiner/chair spec): every node-side seat
+# that decides a STORED binding is live uses resolve_cyberspace's predicate (core.py step 4,
+# now _binding_stamps_live): both stamps parse, expires_at > now, issued_at <= now, and
+# expires - issued <= NAME_EXPIRY_DAYS.  Seed: A claims N, a valid A-signed reach descriptor is
+# ingested, then the stored binding's stamps are forced (throwaway DB) to the variant.  Seats:
+#   S  serve   GET /names/N/reach              frozen -> 404          live -> 200
+#   P  reaper  _reap_expired_reach_descriptors frozen -> row deleted  live -> kept
+#   I  ingest  fresh A descriptor              frozen -> not stored   live -> replaced
+#   N  names_resolve GET /names/N              frozen -> 404          live -> 200
+# Variants: u issued_at unparseable; f issued_at 1h in the future; c lifetime 366d (over cap);
+# controls CZ / CP parseable live stamps in 'Z' and '+00:00' spellings.
+REACH = [{"kind": "https", "url": "https://bw-rp1.example"}]
+_iso_p = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S") + "+00:00"
+_cap = core.NAME_EXPIRY_DAYS
+RP1_VARIANTS = (
+    ("u", True, BAD, EXP),
+    ("f", True, iso(NOW + timedelta(hours=1)), EXP),
+    ("c", True, T(days=1), iso(NOW - timedelta(days=1) + timedelta(days=_cap + 1))),
+    ("CZ", False, T(minutes=3), EXP),
+    ("CP", False, _iso_p(NOW - timedelta(minutes=3)), _iso_p(NOW + timedelta(days=30))),
+)
+def reach_desc(k, name, iss):
+    return core._reach_mint(bytes(k).hex(), pub(k), name, REACH, iss, EXP)
+def reach_row(name):
+    with core._db_lock, core._db() as conn:
+        x = conn.execute("SELECT node_pubkey, issued_at FROM reach_descriptors WHERE name=?",
+                         (name,)).fetchone()
+    return tuple(x) if x else None
+def rp1_seed(name, A, iss, exp):
+    assert C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=3))).status_code == 200
+    o = core.ingest_reach_descriptor(reach_desc(A, name, T(minutes=2)))
+    assert o == "inserted", o
+    with core._db_lock, core._db() as conn:
+        conn.execute("UPDATE name_bindings SET issued_at=?, expires_at=? WHERE name=?", (iss, exp, name))
+for var, frozen, iss, exp in RP1_VARIANTS:
+    d = f"binding iss={iss!r} exp={exp!r}"
+    n = f"rp1-s-{var.lower()}"; A = key(); rp1_seed(n, A, iss, exp)
+    st = C.get(f"/api/v1/names/{n}/reach").status_code
+    row(f"RP1-S{var}", True, st == (404 if frozen else 200), f"reach serve: {d}; GET reach -> HTTP {st}")
+    n = f"rp1-p-{var.lower()}"; A = key(); rp1_seed(n, A, iss, exp)
+    with core._db_lock, core._db() as conn:
+        reaped = core._reap_expired_reach_descriptors(conn)
+    left = reach_row(n)
+    row(f"RP1-P{var}", True, (left is None) == frozen,
+        f"reaper: {d}; reaped={reaped}; descriptor {'gone' if left is None else 'kept'}")
+    n = f"rp1-i-{var.lower()}"; A = key(); rp1_seed(n, A, iss, exp)
+    o = core.ingest_reach_descriptor(reach_desc(A, n, T(seconds=0)))
+    left = reach_row(n)
+    row(f"RP1-I{var}", True,
+        (o not in ("inserted", "replaced") and left is None) if frozen else (o == "replaced"),
+        f"reach ingest: {d}; fresh A descriptor -> {o}; stored={'none' if left is None else 'yes'}")
+    n = f"rp1-n-{var.lower()}"; A = key(); rp1_seed(n, A, iss, exp)
+    st = C.get(f"/api/v1/names/{n}").status_code
+    row(f"RP1-N{var}", True, st == (404 if frozen else 200), f"names_resolve: {d}; GET name -> HTTP {st}")
+
 fails = [r for r, a, ok in RESULTS if a and not ok]
 print("---\nSUMMARY: %d asserted rows, %d failed%s" % (sum(1 for _, a, _ in RESULTS if a), len(fails),
       (": " + " ".join(fails)) if fails else ""))

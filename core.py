@@ -1027,6 +1027,25 @@ def _reach_mint(privkey_hex: str, node_pubkey: str, name: str, reach,
             "signature": sig}
 
 
+def _binding_stamps_live(issued_at, expires_at, now=None) -> bool:
+    """BW-RP1 (ART-37): the ONE liveness predicate for a stored or served
+    name binding's stamps — resolve_cyberspace step 4 is canonical.
+    Live iff both stamps parse as canonical UTC (_parse_claim_time),
+    expires_at > now, issued_at <= now (not-yet-issued reads absent) and
+    expires - issued <= NAME_EXPIRY_DAYS (lifetime cap). Any failure,
+    including a non-string stamp, reads as not live. Callers: resolve_cyberspace,
+    names_resolve, names_reach, _reap_expired_reach_descriptors,
+    ingest_reach_descriptor."""
+    try:
+        now = now or datetime.now(timezone.utc)
+        expires_dt = _parse_claim_time(expires_at)
+        issued_dt = _parse_claim_time(issued_at)
+    except ValueError:
+        return False
+    return (expires_dt > now and issued_dt <= now
+            and (expires_dt - issued_dt) <= timedelta(days=NAME_EXPIRY_DAYS))
+
+
 def _reach_descriptor_verify(desc) -> bool:
     """Fail-closed reach-descriptor verification, mirroring the name
     binding contract: canonical form excluding `signature` must verify
@@ -1916,25 +1935,12 @@ def resolve_cyberspace(address: str, mirror_url: str) -> dict | None:
         # Chronological, not lexicographic: see _parse_claim_time.
         # Floor fix 5 (v0.6.3): issued_at must parse too — an unparseable
         # row reads as absent, never live.
-        try:
-            now_utc = datetime.now(timezone.utc)
-            expires_dt = _parse_claim_time(expires_at)
-            issued_dt = _parse_claim_time(issued_at)
-            live = expires_dt > now_utc
-            # Not-yet-issued reads as absent too (verify_name's
-            # "binding is not yet issued"): a future-dated issued_at
-            # is a valid signature over a claim that has not begun.
-            issued_ok = issued_dt <= now_utc
-            # Lifetime cap, twin of _name_binding_admission_ok: the
-            # cap is intrinsic (expires - issued), so a mirror serving
-            # an over-cap binding (valid signature, live expiry) reads
-            # as absent here just as admission refuses it — a name must
-            # not stay bound for years on one signature.
-            lifetime_ok = (expires_dt - issued_dt) <= timedelta(
-                days=NAME_EXPIRY_DAYS)
-        except ValueError:
-            return None
-        if not live or not issued_ok or not lifetime_ok:
+        # Not-yet-issued reads as absent too (verify_name's "binding is
+        # not yet issued"), and the lifetime cap is intrinsic (expires -
+        # issued, twin of _name_binding_admission_ok). BW-RP1: this is the
+        # canonical predicate, shared via _binding_stamps_live with every
+        # node-side seat that decides a stored binding is live.
+        if not _binding_stamps_live(issued_at, expires_at):
             return None
 
         # Step 5: key -> address. The descriptor (reach) half first: a
@@ -2467,14 +2473,12 @@ def _reap_expired_reach_descriptors(conn) -> int:
                 dead = True
             if not dead:
                 bind = conn.execute(
-                    "SELECT node_pubkey, expires_at FROM name_bindings"
+                    "SELECT node_pubkey, issued_at, expires_at FROM name_bindings"
                     " WHERE name=?", (rname,)).fetchone()
-                try:
-                    binding_live = (bind is not None
-                                    and bind[0].lower() == str(node_pubkey).lower()
-                                    and _parse_claim_time(bind[1]) > now)
-                except ValueError:
-                    binding_live = False
+                # BW-RP1: resolve's full predicate (_binding_stamps_live).
+                binding_live = (bind is not None
+                                and bind[0].lower() == str(node_pubkey).lower()
+                                and _binding_stamps_live(bind[1], bind[2], now))
                 dead = not binding_live
             if dead:
                 conn.execute("DELETE FROM reach_descriptors WHERE name=?", (rname,))
@@ -2542,16 +2546,14 @@ def ingest_reach_descriptor(desc: dict) -> str:
         with _db_lock, _db() as conn:
             _reap_expired_reach_descriptors(conn)
             row = conn.execute(
-                "SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?",
+                "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
                 (name,)).fetchone()
             if row is None:
                 return "dropped-unbound"
             if row[0].lower() != node_pubkey:
                 return "dropped-key-mismatch"
-            try:
-                binding_live = _parse_claim_time(row[1]) > datetime.now(timezone.utc)
-            except ValueError:
-                binding_live = False
+            # BW-RP1: resolve's full predicate (_binding_stamps_live).
+            binding_live = _binding_stamps_live(row[1], row[2])
             if not binding_live:
                 return "dropped-unbound"
             reach_json = json.dumps(desc["reach"], sort_keys=True,
