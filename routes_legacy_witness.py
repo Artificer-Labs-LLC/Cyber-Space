@@ -292,12 +292,22 @@ def legacy_log_witnessed(request: Request):
         contested = conn.execute(
             "SELECT log_id, seq, head_hash_a, head_hash_b, seen_at FROM legacy_contested_heads"
             " ORDER BY seen_at, seq").fetchall()
+        refused = conn.execute(
+            "SELECT log_id, presented_head_hash, claimed_size, presenter, seen_at,"
+            " contested_head_hash, reason FROM legacy_refused_heads"
+            " ORDER BY id").fetchall()
     bad = {(r[0], r[1]) for r in contested}
     # A contested (log_id, seq) is shown once, as evidence, never as marks.
+    # Refused-heads (NoGrowthRootChange) are append-only evidence only —
+    # never marks, never consulted for verification (Villhaze ec88c2fe (b)).
     return {"marks": [{"log_id": r[0], "seq": r[1], "head_hash": r[2], "seen_at": r[3]}
                       for r in rows if (r[0], r[1]) not in bad],
             "contested": [{"log_id": r[0], "seq": r[1], "head_hashes": [r[2], r[3]], "seen_at": r[4]}
-                          for r in contested]}
+                          for r in contested],
+            "refused_heads": [{"log_id": r[0], "presented_head_hash": r[1],
+                               "claimed_size": r[2], "presenter": r[3], "seen_at": r[4],
+                               "contested_head_hash": r[5], "reason": r[6]}
+                              for r in refused]}
 
 
 @contextlib.contextmanager

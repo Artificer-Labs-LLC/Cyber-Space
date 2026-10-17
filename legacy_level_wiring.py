@@ -59,14 +59,15 @@ head_hash is already stored at its seq is a no-op (Bulwark #2); after an
 insert the replay cache is extended with the new row, so the next observe
 does not replay it.
 
-OPEN for Villhaze (current behaviour kept, not decided here):
-  1. Tampered DB vs trusted marks: MARK_VERIFIER = replay_marks re-verifies
-     every stored mark from the root (defends against a tampered mark
-     table); Loom's alternative trusts the stored marks (or a per-mark
-     verified flag). Replay stays the default until she rules.
-  2. NoGrowthRootChange (same tree_size, different root): refused in
-     hl.cheap_head before any verify and leaves NO record (no observed row,
-     no contested row). Whether it should leave evidence is open.
+Tampered-database (Villhaze ART-42 ec88c2fe (a)): MARK_VERIFIER =
+replay_marks stays the default — stored marks are re-checked from the root,
+never trusted as stored. Loom's trust variant is rejected for this cut.
+
+NoGrowthRootChange (Villhaze ART-42 ec88c2fe (b)): refused in hl.cheap_head
+before any verify, AND recorded as refused-heads evidence (presented
+head_hash, claimed size, presenter identity, time, stored head contested).
+Append-only; read-only to consumers; NEVER feeds marks, levels, or
+verification — evidence about an attempt, not trust in it.
 """
 from __future__ import annotations
 
@@ -107,6 +108,18 @@ SCHEMA = (
         head_hash_b TEXT NOT NULL,
         seen_at INTEGER NOT NULL,
         PRIMARY KEY (log_id, seq))""",
+    # Append-only refused-heads evidence (Villhaze ART-42 ec88c2fe (b)).
+    # Never read by observe for marks/levels/verification — write on
+    # NoGrowthRootChange only; consumers may read via /witnessed.
+    """CREATE TABLE IF NOT EXISTS legacy_refused_heads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        log_id TEXT NOT NULL,
+        presented_head_hash TEXT NOT NULL,
+        claimed_size INTEGER NOT NULL,
+        presenter TEXT NOT NULL,
+        seen_at INTEGER NOT NULL,
+        contested_head_hash TEXT NOT NULL,
+        reason TEXT NOT NULL)""",
 )
 
 
@@ -336,6 +349,19 @@ def _mark_contested(conn, log_id, seq, hash_a, hash_b, now):
                  (log_id, seq, hash_a, hash_b, now))
 
 
+def _record_refused_nogrowth(conn, log_id, presented_head_hash, claimed_size,
+                             presenter, contested_head_hash, now):
+    """Append-only evidence for a NoGrowthRootChange refusal. Never consulted
+    by observe, proven_marks, or any mark/level/verify path."""
+    init_schema(conn)
+    conn.execute(
+        "INSERT INTO legacy_refused_heads"
+        " (log_id, presented_head_hash, claimed_size, presenter, seen_at,"
+        " contested_head_hash, reason) VALUES (?,?,?,?,?,?,?)",
+        (log_id, presented_head_hash, claimed_size, presenter, now,
+         contested_head_hash, "NoGrowthRootChange"))
+
+
 def _read_state(conn, log_id, seq) -> dict:
     """Everything observe needs from the DB, in one short read."""
     init_schema(conn)
@@ -345,6 +371,22 @@ def _read_state(conn, log_id, seq) -> dict:
             "stored": [r[0] for r in conn.execute(
                 "SELECT head_hash FROM legacy_observed_heads WHERE log_id=? AND seq=? ORDER BY seen_at, head_hash",
                 (log_id, seq)).fetchall()]}
+
+
+
+def _verify_level_mark(vmark, blob, ext, level, genesis_pub, pins, sig_ok):
+    """Root or chain-extension verify for one observe. Body lines keep the
+    historical observe_split indentation so named mutants still match."""
+    if vmark is None:                       # cheap_head: FirstContactRefused unless the root
+        hl.cheap_head(blob, hl.log_id_of(genesis_pub), None)    # FirstContactRefused first, no verify
+        if ext:
+            raise ExtensionRefused("a root head carries no chain extension")
+        level_name, new_mark = hl.root_mark(blob, level["genesis_sig"], genesis_pub,
+                                            level["cosigns"], pins, sig_ok)
+    else:
+        level_name, new_mark = hl.extend_mark(vmark, blob, level["genesis_sig"], genesis_pub,
+                                              level["cosigns"], pins, sig_ok, ext)
+    return level_name, new_mark
 
 
 def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
@@ -364,6 +406,7 @@ def observe_split(open_conn, vhead, level, genesis_pub, pins, sig_ok, now=None) 
     if not isinstance(genesis_pub, str) or len(genesis_pub) != 64 \
             or hl.log_id_of(genesis_pub).hex() != log_id:
         raise LevelNotBound("pinned log_id is not SHA-256 of the pinned Genesis key")
+    now = int(time.time()) if now is None else now
     with open_conn() as conn:               # short lock: read only, no verify
         state = _read_state(conn, log_id, seq)
     if state["contested"]:
@@ -375,15 +418,18 @@ def observe_split(open_conn, vhead, level, genesis_pub, pins, sig_ok, now=None) 
     vmark = None
     if claimed != (0, hl.ZERO32):
         vmark = next((m for m in marks if (m.size, m.root) == claimed), None)
-    if vmark is None:                       # cheap_head: FirstContactRefused unless the root
-        hl.cheap_head(blob, hl.log_id_of(genesis_pub), None)    # FirstContactRefused first, no verify
-        if ext:
-            raise ExtensionRefused("a root head carries no chain extension")
-        level_name, new_mark = hl.root_mark(blob, level["genesis_sig"], genesis_pub,
-                                            level["cosigns"], pins, sig_ok)
-    else:
-        level_name, new_mark = hl.extend_mark(vmark, blob, level["genesis_sig"], genesis_pub,
-                                              level["cosigns"], pins, sig_ok, ext)
+    try:
+        level_name, new_mark = _verify_level_mark(
+            vmark, blob, ext, level, genesis_pub, pins, sig_ok)
+    except hl.NoGrowthRootChange:
+        # Villhaze ART-42 ec88c2fe (b): refuse AND record evidence. The
+        # evidence write never feeds marks/levels/verification.
+        contested = (vmark.root.hex() if vmark is not None
+                     else claimed[1].hex())
+        with open_conn() as conn:
+            _record_refused_nogrowth(conn, log_id, head_hash, seq, genesis_pub,
+                                     contested, now)
+        raise
     if new_mark.size != seq:
         raise MappingMismatch("legacy seq is not head_level tree_size")
     if new_mark.root.hex() != head_hash:

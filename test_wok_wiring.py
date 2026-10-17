@@ -359,7 +359,8 @@ def _count_cv(*a, **k): VERIFIES[0] += 1; return _cv(*a, **k)
 def reset_route_db():
     with core._db_lock, core._db() as conn:
         wiring.init_schema(conn)
-        for t in ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads"):
+        for t in ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads",
+                  "legacy_refused_heads"):
             conn.execute(f"DELETE FROM {t}")
     core._hits.clear() if hasattr(core, "_hits") else None
 def route_rows():
@@ -924,6 +925,39 @@ class LockSpy:
     def release(self): self.depth -= 1; return self.real.release()
 
 
+
+def row_nogrowth_evidence():
+    # Villhaze ART-42 ec88c2fe (b): a NoGrowthRootChange attempt leaves
+    # exactly one refused-heads evidence record; marks / observed /
+    # contested are untouched; the record never feeds verification.
+    c = db()
+    assert obs(c, *root_head(A, 2))["status"] == "observed"
+    assert obs(c, *next_head(A, 2, 4))["status"] == "observed"
+    before = snap(c)
+    bad_root = R(B, 4)
+    assert bad_root != R(A, 4)
+    signed = legacy(4, bad_root)
+    lv = level(4, bad_root, prev=(4, R(A, 4)), ext=[])
+    if not typed(hl.NoGrowthRootChange, lambda: obs(c, signed, lv)):
+        return False
+    after = snap(c)
+    ev = c.execute("SELECT log_id, presented_head_hash, claimed_size, presenter,"
+                   " contested_head_hash, reason FROM legacy_refused_heads").fetchall()
+    if len(ev) != 1:
+        return False
+    log_id, presented, size, presenter, contested, reason = ev[0]
+    fields_ok = (log_id == LOG and presented == bad_root.hex() and size == 4
+                 and presenter == GPUB and contested == R(A, 4).hex()
+                 and reason == "NoGrowthRootChange")
+    # Evidence + sqlite_sequence (AUTOINCREMENT) may change; mark tables must not.
+    mark_tables = ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads")
+    def mark_snap(s):
+        return tuple((n, rows) for n, rows in s if n in mark_tables)
+    untouched = mark_snap(before) == mark_snap(after)
+    clean = obs(c, *next_head(A, 4, 7))
+    return fields_ok and untouched and clean["status"] == "observed" and count(c, "legacy_refused_heads") == 1
+
+
 def row_bw_cold_lock():
     # Bulwark #1 (HIGH): a COLD observe (replay cache empty, e.g. after a
     # restart) over 12 stored marks does no more than 2 verifies while
@@ -1051,6 +1085,7 @@ LW_ROWS = [
     ("(LW-10) cap 256: 257 skeletons refused before any entry_hash, 0 hashes, 0 verifies (observe, lw, route)", row_lw10_cap),
     ("(LW-10b) extension byte cap and own transport field: MalformedLevel, 0 hashes, 0 verifies", row_lw10_bytes),
     ("(LF) Lodestar fork order: marks 2/4/7 then signed B@4 (chained and root) -> contested, marks emptied, log refused", row_fork_order),
+    ("(NG-E) NoGrowthRootChange leaves exactly one refused-heads evidence record; marks untouched (Villhaze ec88c2fe (b))", row_nogrowth_evidence),
 ]
 
 
@@ -1251,6 +1286,10 @@ LW_MUT = [
     ("(LW-10r) route runs the witness verify before the level caps", row_lw10_cap, [mock.patch.object(wiring, "precheck_level", lambda level: None)]),
     ("(LW-10b) extension byte cap removed", row_lw10_bytes, [mock.patch.object(wiring, "_level_shape", src_fn(wiring, "    if len(json.dumps(ext).encode()) > lw.MAX_EXTENSION_BYTES:", "    if False:", "_level_shape"))]),
     ("(LF-m) current order: StaleHead raised before the stored-hash fork check", row_fork_order, [wmut("    latest = marks[-1] if marks else None\n", "    latest = marks[-1] if marks else None\n    if latest is not None and seq < latest.size:\n        raise StaleHead(\"mutant: stale first\")\n")]),
+    ("(NG-Em) refused-heads evidence write dropped", row_nogrowth_evidence,
+     [wmut("            _record_refused_nogrowth(conn, log_id, head_hash, seq, genesis_pub,\n"
+           "                                     contested, now)",
+           "            pass  # mutant: drop the refused-heads write")]),
 ]
 
 ORIG_SPLIT = wiring.observe_split
