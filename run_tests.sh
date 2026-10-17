@@ -25,6 +25,7 @@ TESTS=(
   "test_nexus_rehearsal.py"
   "test_rendezvous.py"
   "test_hold_open.py"
+  "bw_rows_replay.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
