@@ -9,12 +9,19 @@ R-A  A->B, recovery B->A, then the holder of retired key B replays the OLD
      R-A1 /names/rotate, R-A2 gossip single `rotation`, R-A3 gossip `rotation_chain`.
 R-B  Record issued_at == stored binding issued_at (equality) must be refused
      (strict >).  Per seat R-B1/2/3.  Kills a `>=` mutant.
-R-C  Loom's T0 case. Original A binding dated T0 < T1 (old A->B record).
-     R-C1 gossip re-import of A@T0 after recovery (stored A@T2): must not lower
-          the stored issued_at (same-key later-wins), so replay stays refused. ASSERTED.
-     R-C2 DB restore of the A@T0 row (operator restores a backup): replay of
-          A->B@T1 > T0.  REPORTED (strict check alone cannot see this).
-     R-C3 lagging mirror that only ever saw A@T0 receives B + A->B@T1. REPORTED.
+R-C  Examiner's two rows (replace the old R-C1).
+     R-C1a stored A@T2; gossip delivers A's own older binding A@T0 (T0<T2).
+           ASSERT not stored (result != replaced) and stored issued_at stays T2.
+           Mutant M-C1a: flip same-key later-wins in _name_claim_beats (`>` -> `<`).
+     R-C1b stored A row with UNPARSEABLE issued_at (expires_at fine) -> reaches the
+           fix-1/4 fallback in _old_binding_beaten (3df1395): same key always beats.
+           Gossip A@T0, then replay old A->B@T1 with a fresh B binding.
+           ASSERT replay refused and A keeps the name.
+     R-C2  DB restore of an old row: OUT OF SCOPE for code rows. Runbook text:
+           "re-sign, don't restore" (after a restore the owner re-signs a fresh
+           binding before re-federating). Not executed.
+     R-C3  lagging mirror that only ever saw A@T0 receives B + A->B@T1.
+           EXPECTED-OPEN evidence row (REPORTED, not asserted).
 R-D  One sender, N stale (replayed) rotation records per seat: count rotation-
      record Ed25519 verifies, binding verifies, max _db_lock hold, and rows written
      to name_bindings / name_rotations / name_conflicts.  ASSERT 0 rotation
@@ -86,11 +93,6 @@ def counts(name):
     with core._db_lock, core._db() as conn:
         return tuple(conn.execute(f"SELECT COUNT(*) FROM {t} WHERE name=?", (name,)).fetchone()[0]
                      for t in ("name_rotations", "name_conflicts"))
-def raw_set(name, k, iss):  # simulate a DB restore of an old row
-    b = bind(k, name, iss)
-    with core._db_lock, core._db() as conn:
-        conn.execute("UPDATE name_bindings SET node_pubkey=?, issued_at=?, expires_at=?, signature=? WHERE name=?",
-                     (b["node_pubkey"], b["issued_at"], b["expires_at"], b["signature"], name))
 def row(rid, asserted, ok, detail):
     RESULTS.append((rid, asserted, ok))
     tag = ("PASS" if ok else "FAIL") if asserted else ("HELD" if ok else "BYPASSED")
@@ -168,26 +170,42 @@ for n, seat in SEATS:
     h = holder(name)[0]
     row(f"CTRL{n}", True, h == pub(B), f"{seat}: legit rotation record > stored -> {out}; holder={'B' if h == pub(B) else 'A'}")
 
-# ---------------- R-C  Loom's T0
-name = "rc-gossip"
+# ---------------- R-C  Examiner's rows
+def raw_issued(name, iss):  # throwaway DB only: force the stored issued_at text
+    with core._db_lock, core._db() as conn:
+        conn.execute("UPDATE name_bindings SET issued_at=? WHERE name=?", (iss, name))
+
+# R-C1a: stored A@T2 (setup's recovery binding, t_a2=4m ago); gossip A@T0 (20m ago)
+name = "rc1a"
 A, B, R1 = setup("single", name, t_a=20)
-a_t0 = bind(A, name, T(minutes=20))  # the original A@T0 binding, re-imported
-out_imp = gossip(a_t0)
-lowered = holder(name)[1] == a_t0["issued_at"]
-out = replay("single", R1, B, name)
-row("R-C1", True, holder(name)[0] == pub(A) and not lowered,
-    f"gossip re-import A@T0 -> {out_imp} (stored issued_at lowered={lowered}); replay -> {out}")
-name = "rc-restore"
+t2 = holder(name)[1]
+out_imp = gossip(bind(A, name, T(minutes=20)))
+h = holder(name)
+row("R-C1a", True, out_imp != "replaced" and h == (pub(A), t2),
+    f"stored A@T2={t2}; gossip A@T0 -> {out_imp}; stored issued_at now {h[1]} (kept T2={h[1] == t2})")
+
+# R-C1b: stored A row with unparseable issued_at; gossip A@T0; replay A->B@T1 + fresh B
+name = "rc1b"
 A, B, R1 = setup("single", name, t_a=20)
-raw_set(name, A, T(minutes=20))  # operator restores pre-recovery backup row A@T0
+raw_issued(name, "not-a-timestamp")
+out_imp = gossip(bind(A, name, T(minutes=20)))
+mid = holder(name)
 out = replay("single", R1, B, name)
-row("R-C2", False, holder(name)[0] == pub(A), f"DB restore A@T0 then replay A->B@T1 -> {out}")
+h = holder(name)[0]
+row("R-C1b", True, h == pub(A) and out != "replaced",
+    f"stored A issued_at unparseable; gossip A@T0 -> {out_imp} (stored now {mid[1]}); "
+    f"replay A->B@T1 -> {out}; holder={'A' if h == pub(A) else 'B'}")
+
+# R-C2: out of scope (runbook: "re-sign, don't restore"); not executed.
+print(f"{'R-C2':6s} {'SCOPE':8s} DB restore -> runbook text \"re-sign, don't restore\"; no code row")
+
+# R-C3: expected-open evidence
 name = "rc-lagging"
 A, B = key(), key()
 gossip(bind(A, name, T(minutes=20)))  # this mirror never saw A->B nor B->A
 R1 = rec(name, A, B, T(minutes=10))
 out = gossip(bind(B, name, T(seconds=1)), r=R1)
-row("R-C3", False, holder(name)[0] == pub(A), f"lagging mirror (only A@T0) gets B + A->B@T1 -> {out}")
+row("R-C3", False, holder(name)[0] == pub(A), f"EXPECTED-OPEN lagging mirror (only A@T0) gets B + A->B@T1 -> {out}")
 
 # ---------------- R-D  cost of N stale records from one sender
 N = int(os.environ.get("BW_N", "5"))
