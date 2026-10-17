@@ -13,10 +13,15 @@ R-C  Examiner's two rows (replace the old R-C1).
      R-C1a stored A@T2; gossip delivers A's own older binding A@T0 (T0<T2).
            ASSERT not stored (result != replaced) and stored issued_at stays T2.
            Mutant M-C1a: flip same-key later-wins in _name_claim_beats (`>` -> `<`).
-     R-C1b stored A row with UNPARSEABLE issued_at (expires_at fine) -> reaches the
-           fix-1/4 fallback in _old_binding_beaten (3df1395): same key always beats.
-           Gossip A@T0, then replay old A->B@T1 with a fresh B binding.
-           ASSERT replay refused and A keeps the name.
+     R-C1b stored A row with UNPARSEABLE issued_at (expires_at fine). Gossip A@T0, then
+           replay old A->B@T1. Option 1 (cd7c35b9 = r5 same-key fallback): EXPECTED-OPEN.
+     R-C1bR  chair's R-C1b-route: replayed A@T0 POSTed to /names/claim. EXPECTED-OPEN (opt1).
+     R-C1bRR same POST then A->B@T1 replay. EXPECTED-OPEN (opt1).
+     R-C1bHG/HR owner's fresh A heals via gossip / route; replay still refused.
+     R-C1bFR foreign claim on the route over a fully unparseable row is refused.
+     R-C1c1/2/3 ruling (c): a fresh rotation over an unparseable row is refused per seat.
+     R-C1b25 a 25h-old A@T0 is dropped-stale at intake; row stays held.
+     (BW_FAILCLOSED=1 asserts the three open rows and expects the heal rows refused.)
      R-C2  DB restore of an old row: OUT OF SCOPE for code rows. Runbook text:
            "re-sign, don't restore" (after a restore the owner re-signs a fresh
            binding before re-federating). Not executed.
@@ -184,17 +189,105 @@ h = holder(name)
 row("R-C1a", True, out_imp != "replaced" and h == (pub(A), t2),
     f"stored A@T2={t2}; gossip A@T0 -> {out_imp}; stored issued_at now {h[1]} (kept T2={h[1] == t2})")
 
-# R-C1b: stored A row with unparseable issued_at; gossip A@T0; replay A->B@T1 + fresh B
+# Option 1 (ART-37 cd7c35b9): an unparseable stored row may be replaced only by a binding
+# signed by that row's own node_pubkey (= the r5 fallback, core.py:1299-1302), on both paths.
+# A replayed A@T0 IS signed by the row's own key, so option 1 cannot tell it from a re-sign.
+# R-C1b / R-C1bR / R-C1bRR are therefore EXPECTED-OPEN under option 1 (reported, not asserted);
+# set BW_FAILCLOSED=1 to assert them (fail-closed-both build, rc1b-failclosed-both.diff).
+BAD = "not-a-timestamp"
+FC = os.environ.get("BW_FAILCLOSED") == "1"
+
+# R-C1b (gossip): gossip A@T0 (<24h, A-signed) over the unparseable row; then A->B@T1 replay.
 name = "rc1b"
 A, B, R1 = setup("single", name, t_a=20)
-raw_issued(name, "not-a-timestamp")
+raw_issued(name, BAD)
 out_imp = gossip(bind(A, name, T(minutes=20)))
 mid = holder(name)
 out = replay("single", R1, B, name)
-h = holder(name)[0]
-row("R-C1b", True, h == pub(A) and out != "replaced",
-    f"stored A issued_at unparseable; gossip A@T0 -> {out_imp} (stored now {mid[1]}); "
-    f"replay A->B@T1 -> {out}; holder={'A' if h == pub(A) else 'B'}")
+h = holder(name)
+row("R-C1b", FC, out_imp != "replaced" and mid == (pub(A), BAD) and out != "replaced" and h == (pub(A), BAD),
+    f"EXPECTED-OPEN(opt1) gossip A@T0 -> {out_imp} (stored {mid[1]}); replay A->B@T1 -> {out}; "
+    f"holder={'A' if h[0] == pub(A) else 'B'} stored={h[1]}")
+
+# R-C1b-route (chair): A's replayed A@T0 POSTed to /names/claim over the unparseable row is refused.
+name = "rc1b-r"
+A, B, R1 = setup("single", name, t_a=20)
+raw_issued(name, BAD)
+r1 = C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=20)))
+mid = holder(name)
+row("R-C1bR", FC, r1.status_code != 200 and mid == (pub(A), BAD),
+    f"EXPECTED-OPEN(opt1) route POST replayed A@T0 -> HTTP {r1.status_code}; stored {mid[1]}")
+
+# R-C1b-route-replay: same POST, then A->B@T1 replayed over gossip.
+name = "rc1b-rr"
+A, B, R1 = setup("single", name, t_a=20)
+raw_issued(name, BAD)
+r1 = C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=20)))
+mid = holder(name)
+out = replay("single", R1, B, name)
+h = holder(name)
+row("R-C1bRR", FC, r1.status_code != 200 and out != "replaced" and h == (pub(A), BAD),
+    f"EXPECTED-OPEN(opt1) route POST A@T0 -> HTTP {r1.status_code} (stored {mid[1]}); replay A->B@T1 -> {out}; "
+    f"holder={'A' if h[0] == pub(A) else 'B'}")
+
+# R-C1b-heal (gossip / route): owner's fresh A (now) over the unparseable row is accepted,
+# stored issued_at becomes parseable (now); then A->B@T1 replay is still refused.
+for tag, via in (("G", "gossip"), ("R", "route")):
+    name = f"rc1b-heal-{via}"
+    A, B, R1 = setup("single", name, t_a=20)
+    raw_issued(name, BAD)
+    fb = bind(A, name, T(seconds=0))
+    o1 = gossip(fb) if via == "gossip" else f"HTTP {C.post('/api/v1/names/claim', data=fb).status_code}"
+    s1 = holder(name)
+    o2 = replay("single", R1, B, name)
+    s2 = holder(name)
+    want = (not FC)  # fail-closed build refuses the heal by design
+    healed = s1 == (pub(A), fb["issued_at"])
+    ok = (healed == want) and o2 != "replaced" and s2[0] == pub(A)
+    row(f"R-C1bH{tag}", True, ok,
+        f"{via}: fresh A(now) -> {o1} (stored {s1[1]}); replay A->B@T1 -> {o2}; holder={'A' if s2[0] == pub(A) else 'B'}")
+
+# R-C1b-foreign-route: foreign fresh claim on /names/claim over a row whose issued_at AND
+# expires_at won't parse (so the :1182 live-foreign guard is skipped and the fallback decides).
+name = "rc1b-foreign"
+A, X = key(), key()
+assert C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=3))).status_code == 200
+with core._db_lock, core._db() as conn:
+    conn.execute("UPDATE name_bindings SET issued_at=?, expires_at=? WHERE name=?", (BAD, BAD, name))
+rX = C.post("/api/v1/names/claim", data=bind(X, name, T(seconds=0)))
+h = holder(name)
+row("R-C1bFR", True, rX.status_code != 200 and h == (pub(A), BAD),
+    f"route: foreign fresh claim over unparseable row -> HTTP {rX.status_code}; holder={'A' if h[0] == pub(A) else 'X'}")
+
+# R-C1c (ruling c): a rotation over an unparseable stored row is refused on every seat,
+# even a FRESH A->B record (issued 2s ago) with a fresh B binding (1s ago).
+for n, seat in SEATS:
+    name = f"rc1c-{seat}"
+    A, B = key(), key()
+    if seat == "route":
+        assert C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=3))).status_code == 200
+    else:
+        assert gossip(bind(A, name, T(minutes=3))) == "inserted"
+    raw_issued(name, BAD)
+    R = rec(name, A, B, T(seconds=2))
+    fresh = bind(B, name, T(seconds=1))
+    if seat == "route": out = f"HTTP {route_rotate(R, fresh).status_code}"
+    elif seat == "single": out = gossip(fresh, r=R)
+    else: out = gossip(fresh, chain=[R])
+    h = holder(name)
+    row(f"R-C1c{n}", True, h == (pub(A), BAD),
+        f"{seat}: fresh A->B over unparseable row -> {out}; holder={'A' if h[0] == pub(A) else 'B'} stored={h[1]}")
+
+# R-C1b-25h (evidence, not asserted): same as R-C1b but A@T0 is 25h old.
+name = "rc1b-25h"
+A, B = key(), key()
+assert gossip(bind(A, name, T(minutes=5))) == "inserted"
+raw_issued(name, "not-a-timestamp")
+o1 = gossip(bind(A, name, T(hours=25)))
+R1 = rec(name, A, B, T(minutes=3))
+o2 = gossip(bind(B, name, T(seconds=1)), r=R1)
+row("R-C1b25", True, o1 != "replaced" and holder(name)[1] == "not-a-timestamp",
+    f"A@T0(25h) -> {o1}; stored {holder(name)[1]}; A->B -> {o2}")
 
 # R-C2: out of scope (runbook: "re-sign, don't restore"); not executed.
 print(f"{'R-C2':6s} {'SCOPE':8s} DB restore -> runbook text \"re-sign, don't restore\"; no code row")
