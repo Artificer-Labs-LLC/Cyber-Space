@@ -1,0 +1,75 @@
+{
+ "source": "generated from window_open.weak_reason at /workspace/wop 34a9a7d, 2026-10-17, by Controller",
+ "vectors": [
+  {
+   "case": "honest",
+   "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b",
+   "reason": null
+  },
+  {
+   "case": "all-zero",
+   "pubkey": "0000000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "identity",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "identity-sign-bit",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000080",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "y-equals-p",
+   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "y-p-plus-1",
+   "pubkey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "minus-one",
+   "pubkey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "small-order"
+  },
+  {
+   "case": "order-8-torsion",
+   "pubkey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+   "reason": "small-order"
+  },
+  {
+   "case": "mixed-order",
+   "pubkey": "77c061890d4fbfa164fe73790450e7e3f61c04aed15409ca8e8982b6ae2cc84f",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "not-on-curve",
+   "pubkey": "0200000000000000000000000000000000000000000000000000000000000000",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "short",
+   "pubkey": "00000000000000000000000000000000000000000000000000000000000000",
+   "reason": "bad-length"
+  },
+  {
+   "case": "long",
+   "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b00",
+   "reason": "bad-length"
+  },
+  {
+   "case": "not-hex",
+   "pubkey": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "reason": "not-hex"
+  },
+  {
+   "case": "odd-hex",
+   "pubkey": "000000000000000000000000000000000000000000000000000000000000000",
+   "reason": "not-hex"
+  }
+ ]
+}

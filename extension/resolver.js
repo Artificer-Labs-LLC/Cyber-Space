@@ -914,6 +914,61 @@ function parseClaimTime(s, field) {
   return t;
 }
 
+// Weak-key refusal, mirroring the node's window_open.weak_reason in the same
+// order: not-hex, bad-length, non-canonical, small-order, mixed-order.
+// WebCrypto gives no promise to refuse small-order or torsioned keys, and an
+// all-zero / small-order node_pubkey lets anyone forge a binding. Shared
+// vectors: hidden_files/weak-key-vectors.json (generated from weak_reason).
+const ED_P = (1n << 255n) - 19n;
+const ED_L = (1n << 252n) + 27742317777372353535851937790883648493n;
+function edMod(a) { const r = a % ED_P; return r < 0n ? r + ED_P : r; }
+function edPow(b, e) { let r = 1n; b = edMod(b); while (e > 0n) { if (e & 1n) r = (r * b) % ED_P; b = (b * b) % ED_P; e >>= 1n; } return r; }
+function edInv(x) { return edPow(x, ED_P - 2n); }
+const ED_D = edMod(-121665n * edInv(121666n));
+const ED_I = edPow(2n, (ED_P - 1n) / 4n);
+function edXrecover(y) {
+  const xx = edMod((y * y - 1n) * edInv(ED_D * y * y + 1n));
+  let x = edPow(xx, (ED_P + 3n) / 8n);
+  if (edMod(x * x - xx) !== 0n) x = edMod(x * ED_I);
+  if (x % 2n !== 0n) x = ED_P - x;
+  return x;
+}
+// Extended coordinates (X, Y, Z, T), a = -1 (RFC 8032 5.1.4).
+function edAdd(P, Q) {
+  const A = edMod((P[1] - P[0]) * (Q[1] - Q[0]));
+  const B = edMod((P[1] + P[0]) * (Q[1] + Q[0]));
+  const C = edMod(2n * P[3] * Q[3] * ED_D);
+  const Dd = edMod(2n * P[2] * Q[2]);
+  const E = B - A, F = Dd - C, G = Dd + C, H = B + A;
+  return [edMod(E * F), edMod(G * H), edMod(F * G), edMod(E * H)];
+}
+function edIsIdentity(P) { return edMod(P[0]) === 0n && edMod(P[1] - P[2]) === 0n; }
+function edMul(P, e) {
+  let R = [0n, 1n, 1n, 0n], Q = P;
+  while (e > 0n) { if (e & 1n) R = edAdd(R, Q); Q = edAdd(Q, Q); e >>= 1n; }
+  return R;
+}
+function weakKeyReason(pubHex) {
+  if (typeof pubHex !== "string" || !/^([0-9a-fA-F]{2})*$/.test(pubHex)) return "not-hex";
+  const raw = bindingHexBytes(pubHex.toLowerCase());
+  if (raw.length !== 32) return "bad-length";
+  let yv = 0n;
+  for (let i = 31; i >= 0; i--) yv = (yv << 8n) | BigInt(raw[i]);
+  const sign = Number(yv >> 255n);
+  const y = yv & ((1n << 255n) - 1n);
+  if (y >= ED_P) return "non-canonical";
+  let x = edXrecover(y);
+  if (x === 0n && sign) return "non-canonical";
+  if (Number(x & 1n) !== sign) x = edMod(ED_P - x);
+  if (edMod(-x * x + y * y - 1n - ED_D * x * x * y * y) !== 0n) return "non-canonical";
+  // Re-encoding check: with y < p and the sign bit matched, the encoding is
+  // reproduced exactly, so it is implied by the checks above.
+  const P = [x, y, 1n, edMod(x * y)];
+  if (edIsIdentity(edAdd(edAdd(edAdd(P, P), edAdd(P, P)), edAdd(edAdd(P, P), edAdd(P, P))))) return "small-order";
+  if (!edIsIdentity(edMul(P, ED_L))) return "mixed-order";
+  return null;
+}
+
 function nameClaimPayload(name, pub, issuedAt, expiresAt) {
   return new TextEncoder().encode(`name-claim|${name}|${pub.toLowerCase()}|${issuedAt}|${expiresAt}`);
 }
@@ -940,6 +995,8 @@ async function verifyNameBinding(binding, label, nowMs = Date.now(), subtle) {
   if (!(issued < expires)) throw new Error(`${BINDING_REFUSED}issued_at is not before expires_at`);
   if (nowMs < issued) throw new Error(`${BINDING_REFUSED}binding is not yet issued`);
   if (nowMs >= expires) throw new Error(`${BINDING_REFUSED}binding has expired`);
+  const weak = weakKeyReason(pub);
+  if (weak) throw new Error(`${BINDING_REFUSED}node_pubkey is a weak key (${weak})`);
   const sub = subtle || (globalThis.crypto && globalThis.crypto.subtle);
   if (!sub) throw new Error(`${BINDING_REFUSED}this browser cannot verify Ed25519 signatures`);
   let ok = false;
