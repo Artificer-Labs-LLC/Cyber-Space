@@ -20,6 +20,7 @@ from core import ANNOUNCE_LINE_MAX, ANNOUNCE_PER_AGENT_CAP, ANNOUNCE_POINTER_MAX
 router = APIRouter()
 
 from routes_social import _social_read_belt
+from core import _binding_stamps_live
 from rotate_name import verify_rotation as _rotation_verify_record
 
 
@@ -1456,16 +1457,14 @@ def names_reach(request: Request, name: str):
             "SELECT node_pubkey, reach, issued_at, expires_at, signature "
             "FROM reach_descriptors WHERE name=?", (label,)).fetchone()
         bind = conn.execute(
-            "SELECT node_pubkey, expires_at FROM name_bindings WHERE name=?",
+            "SELECT node_pubkey, issued_at, expires_at FROM name_bindings WHERE name=?",
             (label,)).fetchone() if row is not None else None
     if row is None:
         raise HTTPException(status_code=404, detail="No such name.")
     if bind is None or bind[0].lower() != row[0].lower():
         raise HTTPException(status_code=404, detail="No such name.")
-    try:
-        live = _parse_claim_time(bind[1]) > datetime.now(timezone.utc)
-    except ValueError:
-        live = False
+    # BW-RP1 (ART-37): resolve's full predicate on the binding half.
+    live = _binding_stamps_live(bind[1], bind[2])
     if not live:
         raise HTTPException(status_code=404, detail="No such name.")
     # The address half has its own expiry: an expired descriptor is
