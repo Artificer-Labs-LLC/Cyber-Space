@@ -301,11 +301,28 @@ LOG_APPENDS = []                 # observed log appends / contested marks (mutan
 def _dup_pair(b):
     good = cos([f1], b)[0]; junk = {"pub": good["pub"], "sig": "00" * 64}
     return [junk, good], [good, junk], [good]
+def _case_pairs(b):
+    # Cipher ART-42 1d612976: one signer, two hex spellings. Valid lowercase
+    # cosign then the same pub in uppercase (junk sig), and the reverse.
+    good = cos([f1], b)[0]; up = {"pub": good["pub"].upper(), "sig": "00" * 64}
+    return [good, up], [up, good]
 def row_dup_cosign():
     b = head(1)
     jv, vj, _ = _dup_pair(b)
+    lu, ul = _case_pairs(b)
     return (refused_as(hl.DuplicateCosign, lambda: ver(b, jv))
-            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj)))
+            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj))
+            and refused_as(hl.DuplicateCosign, lambda: ver(b, lu))
+            and refused_as(hl.DuplicateCosign, lambda: ver(b, ul)))
+def row_pub_case():
+    # select_cosigns matches pins case-insensitively (the same normalization
+    # the F-B2 check uses): a lone valid cosign spelled in uppercase hex rates
+    # the same level as lowercase, with one verify.
+    b = head(1)
+    good = cos([f1], b)[0]; up = {"pub": good["pub"].upper(), "sig": good["sig"]}
+    try: lo, n_lo = ver(b, [good]); hi, n_hi = ver(b, [up])
+    except hl.Refused: return False
+    return lo == hi == "single-operator" and n_lo == n_hi == 1
 def row_dup_then_clean():
     b = head(1)
     jv, vj, clean = _dup_pair(b)
@@ -431,7 +448,8 @@ ROWS = [
     ("(FC2) first contact nonzero prev_size: FirstContactRefused, 0 verifies", row_fc_nonzero_size),
     ("(FC3) first contact true root (0, 00*32) accepted; no TOFU switch/label", row_fc_root),
     ("(F-B1) cosigns ['x']*3 etc: typed MalformedCosign, 0 verifies, never AttributeError", row_cosign_malformed),
-    ("(F-B2) two cosigns on one signer, junk/valid both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
+    ("(F-B2) two cosigns on one signer, junk/valid both orders, and lower/UPPER-hex spellings both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
+    ("(F-B2) a lone valid cosign in uppercase hex rates the same level as lowercase (select_cosigns normalizes)", row_pub_case),
     ("(F-B2) after that refusal the clean head is accepted; no negative cache, no contested mark, 0 log appends", row_dup_then_clean),
     ("(F-B3) oversized pin file: PinFileTooLarge before open; bounded read if it grew", row_pin_oversize),
     ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
@@ -555,6 +573,8 @@ MUT = [
     ("(3) first contact refuses even the true root", row_fc_root, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if True:\n            raise FirstContactRefused'))]),
     ("(5) F-B1 cosign shape check removed", row_cosign_malformed, [mock.patch.object(hl, "verify_head", mut_verify('    if not isinstance(cosigns, list) or not all(', '    if False and not all('))]),
     ("(F-B2a) duplicate-signer check removed", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):', '    if False:'))]),
+    ("(F-B2c) duplicate check is case-sensitive (drop .lower())", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):', '    if len({c["pub"] for c in cosigns}) != len(cosigns):'))]),
+    ("(F-B2d) select_cosigns case-sensitive (drop .lower())", row_pub_case, [mock.patch.object(hl, "select_cosigns", _mut_src('        pub = str(c.get("pub", "")).lower()', '        pub = str(c.get("pub", ""))', "select_cosigns"))]),
     ("(F-B2b1) refusal cached by head hash", row_dup_then_clean, [mock.patch.object(hl, "verify_head", neg_cache)]),
     ("(F-B2b2) parse refusal routed into _mark_contested", row_dup_then_clean, [mock.patch.object(hl, "verify_head", to_contested)]),
     ("(4a) F-B3 size check before read removed", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('    if os.path.getsize(path) > MAX_PIN_BYTES:', '    if False:'))]),
