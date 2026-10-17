@@ -120,7 +120,23 @@ SCHEMA = (
         seen_at INTEGER NOT NULL,
         contested_head_hash TEXT NOT NULL,
         reason TEXT NOT NULL)""",
+    # Bulwark v2: no UNIQUE index on legacy_refused_heads. Dedupe is the
+    # re-check under the decision lock (core._db_lock), so an existing DB
+    # that already holds duplicate rows still opens (no migration step).
+    # Bulwark v2 (ART-42, 1b2ecf8c): ONE fixed-size row per log, never keyed
+    # by presenter. overflow = verified forks after the first
+    # MAX_REFUSED_PER_LOG rows (keep-first: they are counted, not stored);
+    # unverified = NoGrowthRootChange attempts refused by the evidence gate.
+    """CREATE TABLE IF NOT EXISTS legacy_refused_counts (
+        log_id TEXT PRIMARY KEY,
+        overflow INTEGER NOT NULL DEFAULT 0,
+        unverified INTEGER NOT NULL DEFAULT 0,
+        last_seen INTEGER NOT NULL)""",
 )
+
+# Bulwark v2 (ART-42, 1b2ecf8c): keep the FIRST N verified forks per log;
+# later verified forks only increment legacy_refused_counts.overflow.
+MAX_REFUSED_PER_LOG = 64
 
 
 class MalformedLevel(hl.Refused):
@@ -354,12 +370,92 @@ def _record_refused_nogrowth(conn, log_id, presented_head_hash, claimed_size,
     """Append-only evidence for a NoGrowthRootChange refusal. Never consulted
     by observe, proven_marks, or any mark/level/verify path."""
     init_schema(conn)
+    # Step 5 (1b2ecf8c), under the decision lock: re-dedupe, then keep-first.
+    if _refused_seen(conn, log_id, presented_head_hash):
+        return                                  # dedupe: already recorded
+    n = conn.execute("SELECT COUNT(*) FROM legacy_refused_heads WHERE log_id=?",
+                     (log_id,)).fetchone()[0]
+    if n >= MAX_REFUSED_PER_LOG:                # keep-first: count, never evict
+        _bump_refused_count(conn, log_id, "overflow", now)
+        return
     conn.execute(
         "INSERT INTO legacy_refused_heads"
         " (log_id, presented_head_hash, claimed_size, presenter, seen_at,"
         " contested_head_hash, reason) VALUES (?,?,?,?,?,?,?)",
         (log_id, presented_head_hash, claimed_size, presenter, now,
          contested_head_hash, "NoGrowthRootChange"))
+
+
+def _refused_seen(conn, log_id, presented_head_hash) -> bool:
+    return conn.execute("SELECT 1 FROM legacy_refused_heads WHERE log_id=? AND presented_head_hash=?",
+                        (log_id, presented_head_hash)).fetchone() is not None
+
+
+def _bump_refused_count(conn, log_id, col, now) -> None:
+    """The one fixed-size per-log record (never keyed by presenter)."""
+    assert col in ("overflow", "unverified")
+    conn.execute("INSERT INTO legacy_refused_counts (log_id, last_seen) VALUES (?, ?)"
+                 " ON CONFLICT(log_id) DO NOTHING", (log_id, now))
+    conn.execute(f"UPDATE legacy_refused_counts SET {col} = {col} + 1, last_seen = ?"
+                 " WHERE log_id=?", (now, log_id))
+
+
+def _evidence_consistent(blob, vmark, seq, head_hash) -> bool:
+    """Step 1 (1b2ecf8c): the blob parses, maps to the presented legacy head
+    (size == seq, root == head_hash), and is the SAME size as the stored,
+    proven head with a DIFFERENT root. No hash, no verify."""
+    if vmark is None:
+        return False
+    for tag in hl.TAGS.values():
+        if blob.startswith(tag):
+            break
+    else:
+        return False
+    body = blob[len(tag):]
+    if len(body) != hl.BODY.size:
+        return False
+    _mode, _lid, size, root, _ps, _pr, _op, _iss = hl.BODY.unpack(body)
+    return (size == seq and root.hex() == head_hash
+            and size == vmark.size and root != vmark.root)
+
+
+def _evidence_cosigns_ok(blob, cosigns, pins, sig_ok) -> bool:
+    """Step 4 (1b2ecf8c): every pinned cosign verifies; stop at the first
+    failure. Unpinned entries are dropped before any verify, as in
+    hl.verify_head (pins=None means no pinned cosigners)."""
+    try:
+        cs = hl.normalize_cosigns(cosigns)
+    except hl.Refused:
+        return False
+    body = blob[blob.index(b"\n") + 1:]
+    size = hl.BODY.unpack(body)[2]
+    keys = {k: v for k, v in (pins or {"keys": {}})["keys"].items() if v["from"] <= size <= v["to"]}
+    msg = hl.COSIGN_PREFIX + body
+    for pub, sig in hl.select_cosigns(cs, keys):
+        if not sig_ok(pub, msg, sig):
+            return False                        # first failure stops the check
+    return True
+
+
+def _nogrowth_evidence_gate(open_conn, vmark, blob, level, genesis_pub, pins, sig_ok,
+                            log_id, seq, head_hash, now) -> bool:
+    """1b2ecf8c check order, off the lock except two short reads/writes:
+    1 consistency, 2 dedupe, 3 genesis_sig, 4 cosigns (first failure stops).
+    A refusal at 1/3/4 bumps the one per-log unverified counter; a dedupe
+    hit is a no-op. True means: write in the decision lock (step 5)."""
+    ok = _evidence_consistent(blob, vmark, seq, head_hash)
+    if ok:
+        with open_conn() as conn:
+            init_schema(conn)
+            if _refused_seen(conn, log_id, head_hash):
+                return False                    # step 2: no verify for a known fork
+        ok = bool(sig_ok(genesis_pub, blob, level["genesis_sig"])) \
+            and _evidence_cosigns_ok(blob, level["cosigns"], pins, sig_ok)
+    if not ok:
+        with open_conn() as conn:
+            init_schema(conn)
+            _bump_refused_count(conn, log_id, "unverified", now)
+    return ok
 
 
 def _read_state(conn, log_id, seq) -> dict:
@@ -426,6 +522,9 @@ def observe_split(open_conn, vhead, level, genesis_pub, pins, sig_ok, now=None) 
         # evidence write never feeds marks/levels/verification.
         contested = (vmark.root.hex() if vmark is not None
                      else claimed[1].hex())
+        if not _nogrowth_evidence_gate(open_conn, vmark, blob, level, genesis_pub, pins, sig_ok,
+                                       log_id, seq, head_hash, now):
+            raise                               # unverified or already recorded: nothing new stored
         with open_conn() as conn:
             _record_refused_nogrowth(conn, log_id, head_hash, seq, genesis_pub,
                                      contested, now)

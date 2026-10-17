@@ -9,6 +9,11 @@ Check order on every write (import-legacy, observe) is bucket, then
 signature, then weak_reason, then write. The bucket step runs first, so a
 refused request still consumes a token.
 
+observe (Bulwark v2, ART-42): the per-IP bucket runs first. A refusal
+(pre-check or verify) is counted in the refused bucket only; per-log and
+global are charged only for a head that passed verify_legacy and is not
+already observed (observe_split's charge hook).
+
 Buckets are keyed on client_source (ratesrc.source):
 
   head / proof / witnessed     per IP, plus a global ceiling >= 10x
@@ -50,6 +55,9 @@ WITNESSED_GLOBAL = 1200
 OBSERVE_PER_IP = 120
 OBSERVE_PER_LOG = 120
 OBSERVE_GLOBAL = 1200
+# Bulwark v2 (ART-42): refusals only. Counted on the refusal path, never in
+# front of a verify, so it cannot block a head that verifies.
+OBSERVE_REFUSED_GLOBAL = 1200
 IMPORT_PER_SOURCE = 60
 IMPORT_PER_LOG = 60
 IMPORT_GLOBAL = 600
@@ -59,6 +67,7 @@ assert PROOF_GLOBAL >= 10 * PROOF_PER_IP
 assert WITNESSED_GLOBAL >= 10 * WITNESSED_PER_IP
 assert OBSERVE_GLOBAL >= 10 * OBSERVE_PER_IP
 assert OBSERVE_GLOBAL >= 10 * OBSERVE_PER_LOG
+assert OBSERVE_REFUSED_GLOBAL >= 10 * OBSERVE_PER_IP
 assert IMPORT_GLOBAL >= 10 * IMPORT_PER_SOURCE
 assert IMPORT_GLOBAL >= 10 * IMPORT_PER_LOG
 
@@ -88,6 +97,16 @@ def charge_observe_source(src: str) -> None:
 def charge_observe_scoped(log_id: str) -> None:
     core._check_rate(f"legacy-log:observe:log:{log_id}", limit=OBSERVE_PER_LOG)
     core._check_rate("legacy-log:observe:global", limit=OBSERVE_GLOBAL)
+
+
+def refuse_observe(status: int, detail: str):
+    """Bulwark v2: every pre-verify / verify refusal on observe. Counts one
+    hit in the refused bucket; once it is saturated the refusal is answered
+    429 (back off) instead of status. Only ever called on a refusal, so a
+    head that verifies never touches this bucket."""
+    if not core._rate_ok("legacy-log:observe:refused", limit=OBSERVE_REFUSED_GLOBAL):
+        return HTTPException(status_code=429, detail=f"refused-traffic limit: {detail}")
+    return HTTPException(status_code=status, detail=detail)
 
 
 def charge_import_source(src: str) -> None:
@@ -340,25 +359,26 @@ async def legacy_log_observe(request: Request):
             raise HTTPException(status_code=503, detail="legacy observe is not pinned on this node")
         pinned_log, wset = pin
         if log_id != pinned_log:
-            raise HTTPException(status_code=400, detail="head is for another log")
+            raise refuse_observe(400, "head is for another log")
         # Pinned keys passed weak_reason at pin load; the request path runs
         # the typed signatures pre-check, then checkvalid once per witness.
         try:                                # transport caps first: 0 hashes, 0 verifies
             wiring.precheck_level(data.get("level"))
         except hl.Refused as e:
-            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+            raise refuse_observe(400, f"{type(e).__name__}: {e}")
         try:
             wiring.precheck_signatures(signed, wset)
         except lw.WitnessRefused as e:
-            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
-        # Bulwark 8078a11 #3: the per-log and global budgets are charged only
-        # once the typed pre-check passes, so junk from one source (charged
-        # to its own per-IP bucket above) cannot exhaust an honest head's.
-        charge_observe_scoped(log_id)
+            raise refuse_observe(400, f"{type(e).__name__}: {e}")
+        # Bulwark v2 (ART-42, Examiner on MED-3): the per-log and global
+        # budgets are NOT charged here. Junk and replays pay only their own
+        # per-IP bucket (above) and the refused bucket; per-log/global are
+        # charged in write(), after verify_legacy and after the
+        # already-observed return, so only a verified NEW head spends them.
         try:
             vhead = wiring.verify_legacy(signed, wset, pinned_log, sig_ok=lw.checkvalid_ok)
         except lw.WitnessRefused as e:
-            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+            raise refuse_observe(400, f"{type(e).__name__}: {e}")
         data["_head"] = vhead
 
     def write():
@@ -374,6 +394,23 @@ async def legacy_log_observe(request: Request):
                                 lw.checkvalid_ok, os.path.join(core._DB_DIR, "witness-pins.state.json"))
             # Bulwark 8078a11 #1: the lock is held only to read, then to
             # re-check and write; every verify runs between, off the lock.
+            # Bulwark v2: a verified head already stored at its seq is the
+            # same no-op observe_split returns (0 verifies), answered here
+            # BEFORE the per-log/global charge, so replays of public heads
+            # never spend them. Everything else that reaches this line passed
+            # verify_legacy and pays per-log, then global.
+            h = vhead.head
+            with _locked_conn() as conn:
+                wiring.init_schema(conn)
+                contested = conn.execute("SELECT 1 FROM legacy_contested_heads WHERE log_id=?",
+                                         (h["log_id"],)).fetchone()
+                seen = conn.execute("SELECT 1 FROM legacy_observed_heads WHERE log_id=? AND seq=?"
+                                    " AND head_hash=?", (h["log_id"], h["seq"], h["head_hash"])).fetchone()
+            if contested is not None:       # same order as observe_split: contested first, no charge
+                raise wiring.LogContested("log has a contested seq; no mark moves until ruled")
+            if seen is not None:
+                return {"status": "already-observed", "log_id": h["log_id"], "seq": h["seq"]}
+            charge_observe_scoped(log_id)
             return wiring.observe_split(_locked_conn, vhead, data.get("level"), genesis_pub, pins,
                                         lw.checkvalid_ok)
         except wiring.LevelNotBound as e:
