@@ -1169,8 +1169,10 @@ def _incumbent_is_live(old, now_dt):
     """r3 (Bulwark High, ART-29): is the stored row a live incumbent?
 
     Returns True iff the row's expires_at parses and is in the future.
-    An unparseable row is NOT live — Examiner's block handles those
-    (same-key-only overwrite), never the incumbent-protection rule."""
+    An unparseable row is NOT live — _old_binding_beaten's fallback
+    handles those (refused for every key, BW-RC1B fail-closed; cleared
+    by refused-bindings at window-open or the runbook re-sign), never
+    the incumbent-protection rule."""
     try:
         return _parse_claim_time(old["expires_at"]) > now_dt
     except (ValueError, OverflowError):
@@ -1275,11 +1277,12 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
     - Old row expired: beaten (free to any valid claim).
     - Old row live and parseable: beaten iff _name_claim_beats says so
       (deterministic conflict rule).
-    - Old row unparseable: beaten iff the claimant holds the SAME
-      node_pubkey (the owner re-claiming its own row). A foreign key
-      can NEVER overwrite an unparseable row — it is refused, not
-      silently replaced. The row stays until refused-bindings releases
-      it at window-open.
+    - Old row unparseable: NEVER beaten, by any key (BW-RC1B fail-closed,
+      ART-37 R-C1b). A same-key binding cannot heal it: neither the
+      claim route nor gossip proves live key possession, so an old
+      same-key binding (< 24h) replays and lowers the stored issued_at,
+      after which an old A->B record postdates it. The row stays until
+      refused-bindings releases it at window-open (or the runbook re-sign).
     """
     try:
         if old is not None:
@@ -1289,17 +1292,10 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
                 or _parse_claim_time(old["expires_at"]) <= now_dt
                 or _name_claim_beats(binding, old))
     except (ValueError, OverflowError):
-        # Examiner's block: unparseable stored row — same key only.
+        # Unparseable stored row: refused for every key (BW-RC1B).
         # OverflowError joins ValueError (Bulwark low, ART-29): year-9999
-        # stamps parse but overflow on arithmetic — still unparseable for
-        # conflict purposes, never silently beaten by a foreign key.
-        # Only real strings can be the same key: a non-string on either
-        # side (a gossip/DB-carried 123/None/list key) escaped as
-        # AttributeError from .lower() — a crash, not this seat's False.
-        return (old is not None
-                and isinstance(old["node_pubkey"], str)
-                and isinstance(node_pubkey, str)
-                and old["node_pubkey"].lower() == node_pubkey.lower())
+        # stamps parse but overflow on arithmetic — still unparseable.
+        return False  # BW-RC1B
 
 
 def _rotation_postdates_incumbent(record, stored_issued_at) -> bool:

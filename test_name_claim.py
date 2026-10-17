@@ -156,8 +156,8 @@ def old_binding_fallback_pubkey_cases():
         old_intkey = _b("x", bad, "garbage", expires="garbage")
         check(f"non-string stored key {bad!r} reads not-beaten",
               _old_binding_beaten(old_intkey, _b("x", PUB_B, EARLY), PUB_A, now_dt) is False)
-    check("same key (case-insensitive) still beats unparseable row",
-          _old_binding_beaten(old_bad, _b("x", PUB_A, EARLY), PUB_A.upper(), now_dt) is True)
+    check("same key no longer beats unparseable row (BW-RC1B fail-closed)",
+          _old_binding_beaten(old_bad, _b("x", PUB_A, EARLY), PUB_A.upper(), now_dt) is False)
     check("foreign key still refused on unparseable row",
           _old_binding_beaten(old_bad, _b("x", PUB_B, EARLY), PUB_B, now_dt) is False)
 

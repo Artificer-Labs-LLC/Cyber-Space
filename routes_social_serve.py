@@ -1185,7 +1185,7 @@ async def names_claim(request: Request):
                                "live-foreign-incumbent")
             raise HTTPException(status_code=409, detail="Name already claimed — live incumbent held by another key; challenger logged as conflict.")
         # Q1 fix (Examiner's block): _old_binding_beaten decides; an
-        # unparseable stored row is beaten only by the same key.
+        # unparseable stored row is beaten by no key (BW-RC1B fail-closed).
         old_beaten = _old_binding_beaten(old, binding, node_pubkey, now_dt)
         if old_beaten:
             if old is None and not _name_registry_has_room(conn):

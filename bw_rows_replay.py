@@ -21,7 +21,8 @@ R-C  Examiner's two rows (replace the old R-C1).
      R-C1bFR foreign claim on the route over a fully unparseable row is refused.
      R-C1c1/2/3 ruling (c): a fresh rotation over an unparseable row is refused per seat.
      R-C1b25 a 25h-old A@T0 is dropped-stale at intake; row stays held.
-     (BW_FAILCLOSED=1 asserts the three open rows and expects the heal rows refused.)
+     Default (BW-RC1B fail-closed in core.py): the three rows are ASSERTED and the heal rows
+     expect the owner's fresh A refused. BW_FAILCLOSED=0 = option-1 expectations (8f39154).
      R-C2  DB restore of an old row: OUT OF SCOPE for code rows. Runbook text:
            "re-sign, don't restore" (after a restore the owner re-signs a fresh
            binding before re-federating). Not executed.
@@ -193,9 +194,10 @@ row("R-C1a", True, out_imp != "replaced" and h == (pub(A), t2),
 # signed by that row's own node_pubkey (= the r5 fallback, core.py:1299-1302), on both paths.
 # A replayed A@T0 IS signed by the row's own key, so option 1 cannot tell it from a re-sign.
 # R-C1b / R-C1bR / R-C1bRR are therefore EXPECTED-OPEN under option 1 (reported, not asserted);
-# set BW_FAILCLOSED=1 to assert them (fail-closed-both build, rc1b-failclosed-both.diff).
+# This commit carries BW-RC1B (fail-closed both paths), so they are ASSERTED by default;
+# BW_FAILCLOSED=0 reproduces the option-1 run (only meaningful against 8f39154's core.py).
 BAD = "not-a-timestamp"
-FC = os.environ.get("BW_FAILCLOSED") == "1"
+FC = os.environ.get("BW_FAILCLOSED", "1") != "0"  # fail-closed (BW-RC1B) is in core.py on this commit
 
 # R-C1b (gossip): gossip A@T0 (<24h, A-signed) over the unparseable row; then A->B@T1 replay.
 name = "rc1b"
@@ -206,7 +208,7 @@ mid = holder(name)
 out = replay("single", R1, B, name)
 h = holder(name)
 row("R-C1b", FC, out_imp != "replaced" and mid == (pub(A), BAD) and out != "replaced" and h == (pub(A), BAD),
-    f"EXPECTED-OPEN(opt1) gossip A@T0 -> {out_imp} (stored {mid[1]}); replay A->B@T1 -> {out}; "
+    (f"" if FC else "EXPECTED-OPEN(opt1) ") + f"gossip A@T0 -> {out_imp} (stored {mid[1]}); replay A->B@T1 -> {out}; "
     f"holder={'A' if h[0] == pub(A) else 'B'} stored={h[1]}")
 
 # R-C1b-route (chair): A's replayed A@T0 POSTed to /names/claim over the unparseable row is refused.
@@ -216,7 +218,7 @@ raw_issued(name, BAD)
 r1 = C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=20)))
 mid = holder(name)
 row("R-C1bR", FC, r1.status_code != 200 and mid == (pub(A), BAD),
-    f"EXPECTED-OPEN(opt1) route POST replayed A@T0 -> HTTP {r1.status_code}; stored {mid[1]}")
+    (f"" if FC else "EXPECTED-OPEN(opt1) ") + f"route POST replayed A@T0 -> HTTP {r1.status_code}; stored {mid[1]}")
 
 # R-C1b-route-replay: same POST, then A->B@T1 replayed over gossip.
 name = "rc1b-rr"
@@ -227,11 +229,12 @@ mid = holder(name)
 out = replay("single", R1, B, name)
 h = holder(name)
 row("R-C1bRR", FC, r1.status_code != 200 and out != "replaced" and h == (pub(A), BAD),
-    f"EXPECTED-OPEN(opt1) route POST A@T0 -> HTTP {r1.status_code} (stored {mid[1]}); replay A->B@T1 -> {out}; "
+    (f"" if FC else "EXPECTED-OPEN(opt1) ") + f"route POST A@T0 -> HTTP {r1.status_code} (stored {mid[1]}); replay A->B@T1 -> {out}; "
     f"holder={'A' if h[0] == pub(A) else 'B'}")
 
-# R-C1b-heal (gossip / route): owner's fresh A (now) over the unparseable row is accepted,
-# stored issued_at becomes parseable (now); then A->B@T1 replay is still refused.
+# R-C1b-heal (gossip / route): owner's fresh A (now) over the unparseable row. Fail-closed
+# (default here): REFUSED, row stays bad (runbook clears). Option 1: accepted and healed.
+# Either way the A->B@T1 replay afterwards is still refused.
 for tag, via in (("G", "gossip"), ("R", "route")):
     name = f"rc1b-heal-{via}"
     A, B, R1 = setup("single", name, t_a=20)
