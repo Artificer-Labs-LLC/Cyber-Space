@@ -71,19 +71,30 @@ pass=0
 fail=0
 failed_files=()
 
+# Every file is bounded (ART-42: test_wok_wiring once spun >5 min at 100%
+# CPU). A file past TEST_FILE_TIMEOUT seconds is killed and FAILs.
+FILE_TIMEOUT="${TEST_FILE_TIMEOUT:-300}"
+SUITE_T0=$SECONDS
+
 for t in "${TESTS[@]}"; do
-  if "$PY" "$t" >/dev/null 2>&1; then
-    echo "PASS: $t"
+  t0=$SECONDS
+  if timeout -k 5 "$FILE_TIMEOUT" "$PY" "$t" >/dev/null 2>&1; then
+    echo "PASS: $t ($((SECONDS - t0))s)"
     pass=$((pass + 1))
   else
-    echo "FAIL: $t"
+    rc=$?
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "FAIL: $t (TIMEOUT after ${FILE_TIMEOUT}s)"
+    else
+      echo "FAIL: $t ($((SECONDS - t0))s)"
+    fi
     fail=$((fail + 1))
     failed_files+=("$t")
   fi
 done
 
 echo "---"
-echo "SUMMARY: $pass passed, $fail failed out of ${#TESTS[@]} test files"
+echo "SUMMARY: $pass passed, $fail failed out of ${#TESTS[@]} test files ($((SECONDS - SUITE_T0))s)"
 if [ "$fail" -gt 0 ]; then
   echo "Failed: ${failed_files[*]}"
   exit 1

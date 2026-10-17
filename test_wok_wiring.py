@@ -33,8 +33,42 @@ import legacy_witness as lw  # noqa: E402
 import routes_legacy_witness as rlw  # noqa: E402
 import window_open  # noqa: E402
 from fed import ed25519 as _ed  # noqa: E402
+import signal  # noqa: E402
 
 T0 = time.time()
+
+# Speed (the CPU spin on 8d9ecc6): fed.ed25519.checkvalid is pure Python,
+# about 0.25 s per call here, and the rows plus every mutant re-run (real,
+# then mutated) re-verified the same deterministic signatures thousands of
+# times: >10 min at 100% CPU, past any reasonable suite budget. checkvalid
+# is a pure function of (sig, msg, pub) and never raises, so it is memoised
+# here at the module attribute every caller looks up (lw.checkvalid_ok, the
+# hl.verify_head path, the route, and src_fn copies of lw). Every count the
+# rows assert (VCALLS, VERIFIES, BW-1's under/total) sits ABOVE this memo,
+# so counted verifies are unchanged; only repeated scalar-mult work is cut.
+_CV_RAW, _CV_MEMO = _ed.checkvalid, {}
+def _cv_memo(s, m, pk):
+    k = (bytes(s), bytes(m), bytes(pk))
+    r = _CV_MEMO.get(k)
+    if r is None:
+        r = _CV_MEMO[k] = bool(_CV_RAW(*k))
+    return r
+_ed.checkvalid = _cv_memo
+
+# Every row and every mutant run is bounded: ROW_TIMEOUT seconds of wall
+# clock, then TimeoutError (the row ERRORs and fails; the file never spins).
+ROW_TIMEOUT = int(os.environ.get("WOK_WIRING_ROW_TIMEOUT", "60"))
+class RowTimeout(BaseException):
+    """BaseException so no row's own `except Exception` (typed(), the
+    try/except False guards, checkvalid) can swallow it into a fake kill."""
+def _alarm(*_):
+    raise RowTimeout(f"row exceeded {ROW_TIMEOUT}s")
+signal.signal(signal.SIGALRM, _alarm)
+@contextlib.contextmanager
+def bounded():
+    signal.alarm(ROW_TIMEOUT)
+    try: yield
+    finally: signal.alarm(0)
 G = SigningKey(hashlib.sha256(b"wiring-genesis").digest())
 GPUB = G.verify_key.encode().hex()
 LIDB = hl.log_id_of(GPUB); LOG = LIDB.hex()
@@ -1237,19 +1271,24 @@ BW_MUT = [
 
 R_ = []
 for label, fn in ROWS:
-    try: ok = bool(fn())
-    except Exception as e: ok = False; label += f" [ERROR {type(e).__name__}: {e}]"
+    try:
+        with bounded(): ok = bool(fn())
+    except (Exception, RowTimeout) as e: ok = False; label += f" [ERROR {type(e).__name__}: {e}]"
     R_.append((label, ok)); print(f"  {'ok  ' if ok else 'FAIL'} {label}")
 table = []
 for name, row, patches in MUT + LW_MUT + BW_MUT:
-    real = row()
+    try:
+        with bounded(): real = bool(row())
+    except (Exception, RowTimeout) as e:
+        real = False; name += f" [real ERROR {type(e).__name__}: {e}]"
     CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
     try:
         for p in patches: p.start()
-        try: res = "SURVIVED" if row() else "KILLED"
+        try:
+            with bounded(): res = "SURVIVED" if row() else "KILLED"
         finally:
             for p in reversed(patches): p.stop()
-    except Exception as e:
+    except (Exception, RowTimeout) as e:
         res = f"ERROR({type(e).__name__}: {e})"
     CACHE.clear(); rlw._PIN_CACHE.clear(); wiring._MARK_CACHE.clear()
     table.append((name, row.__name__, real, res))
