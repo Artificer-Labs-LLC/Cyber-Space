@@ -119,6 +119,22 @@ def witness_key_admitted(pub_hex: str) -> str | None:
     return window_open.weak_reason(pub_hex)
 
 
+def checkvalid_ok(pub_hex: str, message: bytes, sig_hex: str) -> bool:
+    """Strict checkvalid only, for keys already admitted at pin load
+    (Bulwark/Cipher 8360b0c8: weak_reason runs once per pin, not per
+    request). Fail-closed on any malformation."""
+    try:
+        if not isinstance(pub_hex, str) or not isinstance(sig_hex, str) or not isinstance(message, (bytes, bytearray)):
+            return False
+        if HEX64_RE.fullmatch(pub_hex) is None or HEX128_RE.fullmatch(sig_hex) is None:
+            return False
+        pk = bytes.fromhex(pub_hex)
+        sig = bytes.fromhex(sig_hex)
+    except Exception:
+        return False
+    return bool(_ed.checkvalid(sig, bytes(message), pk))
+
+
 def _sig_ok(pub_hex: str, message: bytes, sig_hex: str) -> bool:
     """Strict checkvalid, then prime-order. Fail-closed on any malformation."""
     try:
@@ -451,12 +467,16 @@ def verify_head(signed: dict, wset, log_id: str, sig_ok=None) -> dict:
     if h["witness_set"] != wset.id:
         raise WitnessRefused("head names a witness set this node does not pin for its seq")
     eligible = eligible_witnesses(wset.pubs)
-    good = set()
+    good, tried = set(), set()
     for s in sigs if isinstance(sigs, list) else []:
         w = s.get("witness") if isinstance(s, dict) else None
         sig = s.get("sig") if isinstance(s, dict) else None
-        if isinstance(w, str) and isinstance(sig, str) and w in eligible and w not in good \
-                and (sig_ok or _sig_ok)(w, msg, sig):
+        if isinstance(w, str) and HEX64_RE.fullmatch(w) is None:
+            raise WitnessRefused("witness pub must be 64 lowercase hex")    # one rule, no normalizing
+        if not (isinstance(w, str) and isinstance(sig, str) and w in eligible) or w in tried:
+            continue
+        tried.add(w)                        # Bulwark 8360b0c8: one verify per witness
+        if (sig_ok or _sig_ok)(w, msg, sig):
             good.add(w)
     if not head_quorum(len(good), len(eligible)) or len(good) < wset.threshold:
         raise WitnessRefused(

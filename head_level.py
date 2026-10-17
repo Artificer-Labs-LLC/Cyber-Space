@@ -10,6 +10,7 @@ Pure module except load_pins()/the pin-version state file.
 import hashlib
 import json
 import os
+import re
 import struct
 
 MODES = ("unwitnessed", "single-operator", "independent")
@@ -18,6 +19,9 @@ COSIGN_PREFIX = b"cyberspace-witness-cosign/v1\n"
 PIN_MAGIC = b"cyberspace-witness-pins/v1\n"
 BODY = struct.Struct(">B32sQ32sQ32s32sQ")      # 153 bytes
 ZERO32 = b"\x00" * 32
+# One rule on every path (Cipher, ART-42): a pubkey is exactly 64 LOWERCASE
+# hex chars. Anything else is refused; nothing is normalized.
+PUB_RE = re.compile(r"[0-9a-f]{64}")
 CLASS_FLEET, CLASS_OUTSIDE = 1, 2
 MAX_OPS, MAX_KEYS = 16, 4
 # Largest well-formed pin file: magic + log_id + version/issued + n_ops,
@@ -70,6 +74,62 @@ class PinFileTooLarge(Refused):
     """F-B3: pin file over MAX_PIN_BYTES; refused before/while bounded read."""
 
 
+class UnverifiedMark(Refused):
+    """Bulwark item 3 / Examiner: a mark that is not a VerifiedMark (a raw
+    tuple, a forged (999999, ...)) is refused before cheap_head runs."""
+
+
+class NoGrowthRootChange(Refused):
+    """Bulwark item 4: tree_size == prev_size with root != prev_root."""
+
+
+class ConsistencyRefused(Refused):
+    """No valid RFC 9162 consistency proof from the prev mark to this head."""
+
+
+class VerifiedMark:
+    """Opaque continuity mark (tree_size, root). Only root_mark() (a head
+    verified at the root: prev_size 0, prev_root ZERO32) and advance_mark()
+    (an earlier VerifiedMark plus a verified head and consistency proof)
+    build one. cheap_head/verify_head refuse anything else."""
+    __slots__ = ("_size", "_root")
+    _token = object()
+
+    def __init__(self, size, root, _t=None):
+        if _t is not VerifiedMark._token:
+            raise UnverifiedMark("VerifiedMark comes from root_mark/advance_mark only")
+        object.__setattr__(self, "_size", size)
+        object.__setattr__(self, "_root", root)
+
+    def __setattr__(self, k, v):
+        raise AttributeError("VerifiedMark is immutable")
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def root(self):
+        return self._root
+
+    def __eq__(self, other):
+        return isinstance(other, VerifiedMark) and (self._size, self._root) == (other._size, other._root)
+
+    def __hash__(self):
+        return hash((self._size, self._root))
+
+    def __reduce__(self):
+        raise TypeError("VerifiedMark does not serialize; rebuild it from the root")
+
+    def __repr__(self):
+        return f"VerifiedMark({self._size}, {self._root.hex()[:16]}...)"
+
+
+def _require_verified(mark):
+    if mark is not None and type(mark) is not VerifiedMark:
+        raise UnverifiedMark("mark is not a VerifiedMark")
+
+
 # ---- FIRST CONTACT (Villhaze ruling, ART-29 4b2e3f59) --------------------
 # With NO continuity mark stored, a head is accepted only at the root:
 # prev_size == 0 AND prev_root empty (all-zero). Anything else is a history
@@ -92,8 +152,9 @@ def pack_head(mode, log_id, tree_size, root, prev_size, prev_root, operator_id, 
 
 
 def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
-    """All checks that need no signature verify. mark = (size, root) of the
-    stored mark, or None when nothing is stored yet."""
+    """All checks that need no signature verify. mark is a VerifiedMark,
+    or None when nothing is stored yet."""
+    _require_verified(mark)
     for m, tag in TAGS.items():
         if blob.startswith(tag):
             break
@@ -113,7 +174,7 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
         raise Refused("single-operator head needs operator_id")
     if lid != log_id:
         raise Refused("log_id")
-    if mark is not None and (psize, proot) != (mark[0], mark[1]):
+    if mark is not None and (psize, proot) != (mark.size, mark.root):
         raise Refused("prev_* does not match the stored mark")
     if mark is None:                        # ART-29 4b2e3f59: root only
         if psize != 0:
@@ -122,6 +183,8 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
             raise FirstContactRefused("first contact with prev_size 0 but non-empty prev_root")
     if psize > size:
         raise Refused("prev_size > tree_size")
+    if psize == size and root != proot:
+        raise NoGrowthRootChange("tree_size == prev_size but root != prev_root")
     return {"mode": mode, "level": m, "body": body, "tree_size": size, "root": root,
             "operator_id": op, "issued_at": issued}
 
@@ -133,7 +196,7 @@ def select_cosigns(cosigns, keys):
     for c in cosigns:
         if len(kept) >= len(keys):
             break
-        pub = str(c.get("pub", "")).lower()
+        pub = c.get("pub", "")
         if pub in keys and pub not in seen:
             seen.add(pub)
             kept.append((pub, c.get("sig", "")))
@@ -146,12 +209,15 @@ def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None
     head at most unwitnessed. Returns (level, cosign_verify_calls)."""
     if pins is None:
         pins = {"keys": {}}
+    _require_verified(mark)                 # Examiner: refused before cheap_head runs
     h = cheap_head(blob, log_id_of(genesis_pub), mark)            # (2) before any verify
     if not isinstance(cosigns, list) or not all(
             isinstance(c, dict) and isinstance(c.get("pub"), str) and isinstance(c.get("sig"), str)
             for c in cosigns):
         raise MalformedCosign("cosign entries must be {pub: str, sig: str}")
-    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):
+    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):
+        raise MalformedCosign("cosign pub must be 64 lowercase hex")
+    if len({c["pub"] for c in cosigns}) != len(cosigns):
         raise DuplicateCosign("at most one cosign per signer")
     keys = {k: v for k, v in pins["keys"].items()
             if v["from"] <= h["tree_size"] <= v["to"]}
@@ -176,6 +242,70 @@ def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None
     if level == "single-operator" and fleet_ops != {h["operator_id"]}:
         raise OperatorMismatch("operator_id is not the cosigning fleet operator")
     return level, calls
+
+
+# ---- continuity marks (Bulwark rule 3, item 3) -------------------------
+
+def _node(left: bytes, right: bytes) -> bytes:
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def verify_consistency(first, second, first_hash, second_hash, proof) -> bool:
+    """RFC 9162 2.1.4.2. first >= 1; first == second needs an empty proof
+    and equal roots."""
+    if type(first) is not int or type(second) is not int or first < 1 or first > second:
+        return False
+    if not isinstance(proof, (list, tuple)) or any(type(p) is not bytes or len(p) != 32 for p in proof):
+        return False
+    if first == second:
+        return len(proof) == 0 and first_hash == second_hash
+    path = list(proof)
+    if first & (first - 1) == 0:
+        path = [first_hash] + path
+    if not path:
+        return False
+    fn, sn = first - 1, second - 1
+    while fn & 1:
+        fn >>= 1
+        sn >>= 1
+    fr = sr = path[0]
+    for c in path[1:]:
+        if sn == 0:
+            return False
+        if fn & 1 or fn == sn:
+            fr = _node(c, fr)
+            sr = _node(c, sr)
+            if not fn & 1:
+                while True:
+                    fn >>= 1
+                    sn >>= 1
+                    if fn & 1 or fn == 0:
+                        break
+        else:
+            sr = _node(sr, c)
+        fn >>= 1
+        sn >>= 1
+    return sn == 0 and fr == first_hash and sr == second_hash
+
+
+def root_mark(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, ruling=RULING):
+    """A head verified at the root (mark None: prev_size 0, prev_root
+    ZERO32) -> (level, VerifiedMark(tree_size, root))."""
+    level, _ = verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None, ruling=ruling)
+    h = cheap_head(blob, log_id_of(genesis_pub), None)
+    return level, VerifiedMark(h["tree_size"], h["root"], VerifiedMark._token)
+
+
+def advance_mark(prev, blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, proof, ruling=RULING):
+    """An earlier VerifiedMark, a head whose prev_* is that mark, and an
+    RFC 9162 consistency proof prev -> head -> (level, VerifiedMark)."""
+    if type(prev) is not VerifiedMark:
+        raise UnverifiedMark("advance_mark needs a VerifiedMark")
+    level, _ = verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=prev, ruling=ruling)
+    h = cheap_head(blob, log_id_of(genesis_pub), prev)
+    if not verify_consistency(prev.size, h["tree_size"], prev.root, h["root"], proof):
+        raise ConsistencyRefused("consistency proof from the prev mark does not verify")
+    return level, VerifiedMark(h["tree_size"], h["root"], VerifiedMark._token)
 
 
 # ---- (3) pin file -------------------------------------------------------

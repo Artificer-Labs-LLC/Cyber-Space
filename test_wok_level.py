@@ -3,7 +3,7 @@
 ruling; head_level.py is parameterized."""
 import hashlib, json, os, struct, tempfile, time
 from unittest import mock
-import ast
+import ast, sys
 from nacl.signing import SigningKey, VerifyKey
 import head_level as hl
 
@@ -53,10 +53,14 @@ def cos(keys, blob):
     body = blob[blob.index(b"\n") + 1:]
     return [{"pub": k.verify_key.encode().hex(), "sig": k.sign(hl.COSIGN_PREFIX + body).signature.hex()} for k in keys]
 def ver(blob, cs, pins=None, **kw):
-    return hl.verify_head(blob, gsig(blob), GEN, cs, PINS if pins is None else pins, sig_ok, mark=MARK, **kw)
+    return hl.verify_head(blob, gsig(blob), GEN, cs, PINS if pins is None else pins, sig_ok, mark=VMARK, **kw)
 def refused(fn):
     try: fn(); return False
     except hl.Refused: return True
+# The stored mark (5, PROOT) as a VerifiedMark, built the only legal way:
+# a Genesis-signed root head (prev 0 / ZERO32) of size 5, root PROOT.
+MARK_ROOT_HEAD = hl.pack_head(0, LID, MARK[0], MARK[1], 0, hl.ZERO32, hl.ZERO32, 1_700_000_000)
+VMARK = hl.root_mark(MARK_ROOT_HEAD, gen.sign(MARK_ROOT_HEAD).signature.hex(), GEN, [], PINS, sig_ok)[1]
 def zero_calls(fn):
     CALLS[0] = 0; r = refused(fn); return r and CALLS[0] == 0
 
@@ -76,7 +80,7 @@ def row_tags():
         for t in range(3):
             if t == a: continue
             relab = hl.TAGS[hl.MODES[t]] + b[len(hl.TAGS[hl.MODES[a]]):]
-            if not refused(lambda: hl.verify_head(relab, gsig(b), GEN, [], PINS, sig_ok, mark=MARK)): return False
+            if not refused(lambda: hl.verify_head(relab, gsig(b), GEN, [], PINS, sig_ok, mark=VMARK)): return False
     return True
 def row_mode_range(): return zero_calls(lambda: ver(hl.TAGS["independent"] + bytes([3]) + head(2)[len(hl.TAGS["independent"]) + 1:], []))
 def row_opzero():
@@ -114,7 +118,7 @@ def malformed(i):
     return head(2)[:-1 - (i % 9)]
 def row_bulwark():
     CALLS[0] = 0
-    n = sum(refused(lambda i=i: hl.verify_head(malformed(i), "00" * 64, GEN, [], PINS, sig_ok, mark=MARK)) for i in range(10000))
+    n = sum(refused(lambda i=i: hl.verify_head(malformed(i), "00" * 64, GEN, [], PINS, sig_ok, mark=VMARK)) for i in range(10000))
     return n == 10000 and CALLS[0] == 0
 def row_prev_mismatch(): return zero_calls(lambda: ver(head(0, mark=(6, PROOT)), []))
 # ---- golden vectors ----
@@ -164,8 +168,8 @@ def row_failclosed():
     pins0 = hl.load_pins(p, GEN, sig_ok, os.path.join(D, "s4"), SIGNERS, 0)
     b0, b1 = head(0), head(1)
     return (pins is None and pins0 is None
-            and hl.verify_head(b0, gsig(b0), GEN, cos([f1, o1], b0), pins, sig_ok, mark=MARK)[0] == "unwitnessed"
-            and refused(lambda: hl.verify_head(b1, gsig(b1), GEN, cos([f1], b1), pins, sig_ok, mark=MARK)))
+            and hl.verify_head(b0, gsig(b0), GEN, cos([f1, o1], b0), pins, sig_ok, mark=VMARK)[0] == "unwitnessed"
+            and refused(lambda: hl.verify_head(b1, gsig(b1), GEN, cos([f1], b1), pins, sig_ok, mark=VMARK)))
 def row_triple():
     return refused(lambda: parse(pinfile(OPS, signer_ks=((0, s0), (0, s0), (0, s0)))))
 def row_oor():
@@ -189,9 +193,9 @@ def row_tag_mode():
     b0 = head(0)
     d = t1 + b0[len(hl.TAGS["unwitnessed"]):]      # Lodestar 2bdecf9c item 3: tag single-operator, mode 0x00
     return (d[len(t1)] == 0x00
-            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(d, gsig(d), GEN, cos([f1], d), PINS, sig_ok, mark=MARK))
-            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(a, gsig(a), GEN, [], PINS, sig_ok, mark=MARK))
-            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(c, gsig(c), GEN, [], PINS, sig_ok, mark=MARK)))
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(d, gsig(d), GEN, cos([f1], d), PINS, sig_ok, mark=VMARK))
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(a, gsig(a), GEN, [], PINS, sig_ok, mark=VMARK))
+            and refused_as(hl.TagModeMismatch, lambda: hl.verify_head(c, gsig(c), GEN, [], PINS, sig_ok, mark=VMARK)))
 OP_F2 = b"\x02" * 32
 f3, F3 = K(6)
 PINS2 = parse(pinfile(sorted([(OP_FLEET, 1, [(F1, 0, 10**9)]), (OP_F2, 1, [(F3, 0, 10**9)]),
@@ -276,7 +280,101 @@ def row_no_tofu_switch():
     clean = not tofu_switch_hits("def f(mark, psize):\n    if mark is None and psize != 0:\n        raise E\n")
     sig = (list(hl.cheap_head.__code__.co_varnames[:hl.cheap_head.__code__.co_argcount]) == ["blob", "log_id", "mark"]
            and "out" not in hl.verify_head.__code__.co_varnames[:hl.verify_head.__code__.co_argcount])
-    return probe and clean and sig and tofu_switch_hits(src, "head_level.py") == []
+    wsrc = _wiring_src()
+    return (probe and clean and sig and tofu_switch_hits(src, "head_level.py") == []
+            and tofu_switch_hits(wsrc, "legacy_level_wiring.py") == []
+            and mark_builder_hits(wsrc) == [] and mark_builder_hits(SEEDING_PROBE) != [])
+import legacy_level_wiring as wiring
+def _wiring_src():
+    return open(wiring.__file__).read()
+MARK_BUILDERS = ("proven_marks", "_mark_rows")
+def mark_builder_hits(src):
+    """Wiring cut (Lodestar seeding rows): the functions that build marks
+    must exist and must not read the observed-heads table (an observed row
+    is only a hint). AST: every string constant / name inside them."""
+    found, hits = set(), []
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.FunctionDef) and n.name in MARK_BUILDERS:
+            found.add(n.name)
+            for m in ast.walk(n):
+                v = (m.value if isinstance(m, ast.Constant) and isinstance(m.value, str)
+                     else m.id if isinstance(m, ast.Name) else m.attr if isinstance(m, ast.Attribute) else "")
+                if "observed" in v.lower():
+                    hits.append(f"{n.name}:{getattr(m, 'lineno', 0)}:{v[:40]}")
+    return hits + [f"missing:{f}" for f in MARK_BUILDERS if f not in found]
+SEEDING_PROBE = ('def _mark_rows(conn, log_id):\n    return conn.execute("SELECT seq FROM legacy_observed_heads")\n'
+                 'def proven_marks(conn, log_id):\n    return []\n')
+# ---- Bulwark 8360b0c8 item 3 / Examiner: VerifiedMark only ----
+class _Duck:
+    size, root = 5, PROOT
+class _Sub(hl.VerifiedMark):
+    def __init__(self): pass
+def _raw_marks():
+    return [(5, PROOT), (999999, ROOT), [5, PROOT], _Duck(), _Sub()]
+CHEAP = [0]
+_CHEAP0 = hl.cheap_head
+def _count_cheap(*a, **k):
+    CHEAP[0] += 1; return _CHEAP0(*a, **k)
+def row_vmark_raw():
+    # A raw tuple, a forged (999999, ...), a duck-typed object or a subclass
+    # is refused (UnverifiedMark) before cheap_head runs, 0 verifies; the
+    # constructor refuses without the token; the real VerifiedMark passes.
+    b = head(0)
+    ok = True
+    with mock.patch.object(hl, "cheap_head", _count_cheap):
+        for m in _raw_marks():
+            CHEAP[0] = 0
+            ok = ok and zero_calls_typed(hl.UnverifiedMark, lambda m=m: hl.verify_head(b, gsig(b), GEN, [], PINS, sig_ok, mark=m)) \
+                and CHEAP[0] == 0
+    ok = ok and all(_refused_typed(hl.UnverifiedMark, lambda m=m: _CHEAP0(b, LID, m)) for m in _raw_marks())
+    ok = ok and _refused_typed(hl.UnverifiedMark, lambda: hl.VerifiedMark(5, PROOT))
+    try: ok = ok and ver(b, [])[0] == "unwitnessed"
+    except Exception: return False
+    return ok
+def zero_calls_typed(cls, fn):
+    CALLS[0] = 0
+    return _refused_typed(cls, fn) and CALLS[0] == 0
+# ---- Bulwark 8360b0c8 item 4 ----
+def row_no_growth():
+    # with a matching mark, tree_size == prev_size and root != prev_root is
+    # refused (NoGrowthRootChange), 0 verifies; same size, same root passes.
+    bad = hl.pack_head(0, LID, MARK[0], ROOT, MARK[0], MARK[1], hl.ZERO32, 1_700_000_100)
+    same = hl.pack_head(0, LID, MARK[0], MARK[1], MARK[0], MARK[1], hl.ZERO32, 1_700_000_100)
+    try: same_ok = ver(same, [])[0] == "unwitnessed"
+    except Exception: return False
+    return zero_calls_typed(hl.NoGrowthRootChange, lambda: ver(bad, [])) and same_ok
+# ---- rule 3: advance_mark needs an RFC 9162 consistency proof ----
+import wok_merkle as wm
+def _gs(b): return gen.sign(b).signature.hex()
+def row_advance_mark():
+    L = wm.leaves("a", 8); r5, r8 = wm.mth(L[:5]), wm.mth(L)
+    b5 = hl.pack_head(0, LID, 5, r5, 0, hl.ZERO32, hl.ZERO32, 1)
+    b8 = hl.pack_head(0, LID, 8, r8, 5, r5, hl.ZERO32, 2)
+    try:
+        _, m5 = hl.root_mark(b5, _gs(b5), GEN, [], PINS, sig_ok)
+        _, m8 = hl.advance_mark(m5, b8, _gs(b8), GEN, [], PINS, sig_ok, wm.proof(5, L))
+    except Exception: return False
+    good = (m8.size, m8.root) == (8, r8)
+    bad_proofs = [[], [b"\x00" * 32] * 3, wm.proof(5, wm.leaves("b", 8)), wm.proof(4, L)]
+    bad = all(_refused_typed(hl.ConsistencyRefused, lambda p=p: hl.advance_mark(m5, b8, _gs(b8), GEN, [], PINS, sig_ok, p))
+              for p in bad_proofs)
+    raw = _refused_typed(hl.UnverifiedMark, lambda: hl.advance_mark((5, r5), b8, _gs(b8), GEN, [], PINS, sig_ok, wm.proof(5, L)))
+    return good and bad and raw
+def row_consistency_vectors():
+    # RFC 9162 2.1.4.2 verifier against RFC 9162 PROOF for every 1<=m<=n<=16;
+    # tampered element, wrong first/second hash, wrong sizes all fail.
+    L = wm.leaves("a", 16)
+    for n in range(1, 17):
+        for m in range(1, n + 1):
+            p, f, g = wm.proof(m, L[:n]), wm.mth(L[:m]), wm.mth(L[:n])
+            if not hl.verify_consistency(m, n, f, g, p): return False
+            if hl.verify_consistency(m, n, b"\x00" * 32, g, p): return False
+            if hl.verify_consistency(m, n, f, b"\x00" * 32, p): return False
+            for i in range(len(p)):
+                q = list(p); q[i] = bytes([q[i][0] ^ 1]) + q[i][1:]
+                if hl.verify_consistency(m, n, f, g, q): return False
+            if m < n and hl.verify_consistency(n, m, g, f, p): return False
+    return not hl.verify_consistency(0, 3, b"", wm.mth(L[:3]), [])
 # ---- first contact: ROOT ONLY (Villhaze ART-29 4b2e3f59) ----
 def row_fc_nonzero_root():
     # (1) prev_size 0 but prev_root nonzero: FirstContactRefused, 0 verifies
@@ -309,20 +407,28 @@ def _case_pairs(b):
 def row_dup_cosign():
     b = head(1)
     jv, vj, _ = _dup_pair(b)
-    lu, ul = _case_pairs(b)
     return (refused_as(hl.DuplicateCosign, lambda: ver(b, jv))
-            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj))
-            and refused_as(hl.DuplicateCosign, lambda: ver(b, lu))
-            and refused_as(hl.DuplicateCosign, lambda: ver(b, ul)))
+            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj)))
+def _exactly(cls, fn):
+    try: fn(); return False
+    except Exception as e: return type(e) is cls
 def row_pub_case():
-    # select_cosigns matches pins case-insensitively (the same normalization
-    # the F-B2 check uses): a lone valid cosign spelled in uppercase hex rates
-    # the same level as lowercase, with one verify.
+    # Cipher (ART-42): one rule on every path, lowercase 64-hex only, no
+    # normalizing. An uppercase-hex pub is refused as a signer (exactly
+    # MalformedCosign, 0 verifies): alone with a valid sig, and in both
+    # lower/UPPER duplicate orders. Lowercase control passes.
     b = head(1)
     good = cos([f1], b)[0]; up = {"pub": good["pub"].upper(), "sig": good["sig"]}
-    try: lo, n_lo = ver(b, [good]); hi, n_hi = ver(b, [up])
-    except hl.Refused: return False
-    return lo == hi == "single-operator" and n_lo == n_hi == 1
+    mixed = {"pub": good["pub"][:63] + good["pub"][63].upper(), "sig": good["sig"]}
+    lu, ul = _case_pairs(b)
+    refused = all(zero_calls_typed_exact(hl.MalformedCosign, lambda c=c: ver(b, c))
+                  for c in ([up], [mixed], lu, ul, [{"pub": " " + good["pub"], "sig": good["sig"]}]))
+    try: lo = ver(b, [good])[0]
+    except Exception: return False
+    return refused and lo == "single-operator"
+def zero_calls_typed_exact(cls, fn):
+    CALLS[0] = 0
+    return _exactly(cls, fn) and CALLS[0] == 0
 def row_dup_then_clean():
     b = head(1)
     jv, vj, clean = _dup_pair(b)
@@ -448,11 +554,15 @@ ROWS = [
     ("(FC2) first contact nonzero prev_size: FirstContactRefused, 0 verifies", row_fc_nonzero_size),
     ("(FC3) first contact true root (0, 00*32) accepted; no TOFU switch/label", row_fc_root),
     ("(F-B1) cosigns ['x']*3 etc: typed MalformedCosign, 0 verifies, never AttributeError", row_cosign_malformed),
-    ("(F-B2) two cosigns on one signer, junk/valid both orders, and lower/UPPER-hex spellings both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
-    ("(F-B2) a lone valid cosign in uppercase hex rates the same level as lowercase (select_cosigns normalizes)", row_pub_case),
+    ("(F-B2) two cosigns on one signer, junk/valid both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
+    ("(LC) uppercase/mixed-case/padded pub refused as a signer (MalformedCosign, 0 verifies), alone and in lower/UPPER duplicate pairs; lowercase only, no normalizing", row_pub_case),
     ("(F-B2) after that refusal the clean head is accepted; no negative cache, no contested mark, 0 log appends", row_dup_then_clean),
     ("(F-B3) oversized pin file: PinFileTooLarge before open; bounded read if it grew", row_pin_oversize),
     ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
+    ("(VM) raw/forged/duck/subclass marks refused (UnverifiedMark) before cheap_head runs, 0 verifies (Bulwark 8360b0c8 #3, Examiner)", row_vmark_raw),
+    ("(NG) tree_size == prev_size with root != prev_root refused (NoGrowthRootChange), 0 verifies (Bulwark 8360b0c8 #4)", row_no_growth),
+    ("(AM) advance_mark needs an RFC 9162 consistency proof from a VerifiedMark (Bulwark rule 3)", row_advance_mark),
+    ("(CV) RFC 9162 consistency verifier: all 1<=m<=n<=16 verify; tampered proofs/hashes/sizes fail", row_consistency_vectors),
 ]
 # sha256 of tag||body for head(m): Genesis seed sha256("wok-level-0"), size 7,
 # root ab*32, prev (5, cd*32), operator 01*32 in mode 1, issued 1700000100.
@@ -481,7 +591,7 @@ def _mut_src(old, new, fn):
     helpers are redefined for mutants."""
     src = open(hl.__file__).read(); assert src.count(old) == 1, old
     ns = {"__name__": "head_level_mut"}; exec(compile(src.replace(old, new), "mut", "exec"), ns)
-    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge"):
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge", "UnverifiedMark", "NoGrowthRootChange", "ConsistencyRefused", "VerifiedMark"):
         ns[n] = getattr(hl, n)
     return ns[fn]
 def mut_parse(old, new):
@@ -496,6 +606,17 @@ def src_mutant(old, new):
     src = open(hl.__file__).read(); assert src.count(old) == 1, old
     p = os.path.join(D, "head_level_mut_%d.py" % time.time_ns()); open(p, "w").write(src.replace(old, new))
     return mock.patch.object(hl, "__file__", p)
+def wiring_src_mutant(old, new):
+    """Wiring-source mutant in a temp file; wiring.__file__ points at it."""
+    src = open(wiring.__file__).read(); assert src.count(old) == 1, old
+    p = os.path.join(D, "wiring_mut_%d.py" % time.time_ns()); open(p, "w").write(src.replace(old, new))
+    return mock.patch.object(wiring, "__file__", p)
+def _mut_route_cheap(old, new, fn):
+    """Like _mut_src, but the mutant's cheap_head is the module attribute
+    (so a cheap_head spy sees the mutant's calls)."""
+    f = _mut_src(old, new, fn)
+    f.__globals__["cheap_head"] = lambda *a, **k: hl.cheap_head(*a, **k)
+    return f
 NEG = set()
 def neg_cache(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
     """Mutant: a refusal is cached as negative under the head hash."""
@@ -520,7 +641,7 @@ def _thr_after():
     assert src.count(chk) == 1 and src.count(tail) == 1
     src = src.replace(chk, "").replace(tail, chk + tail)
     ns = {"__name__": "head_level_mut"}; exec(compile(src, "mut", "exec"), ns)
-    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge"):
+    for n in ("Refused", "TagModeMismatch", "OperatorMismatch", "SignerIndexOutOfRange", "TooFewSignatures", "FirstContactRefused", "MalformedCosign", "DuplicateCosign", "PinFileTooLarge", "UnverifiedMark", "NoGrowthRootChange", "ConsistencyRefused", "VerifiedMark"):
         ns[n] = getattr(hl, n)
     f = ns["parse_pins"]
     return lambda data, gp, so, signers=None, threshold=None: f(data, gp, so, signers, threshold)
@@ -572,13 +693,21 @@ MUT = [
     ("(2) first-contact prev_size check removed", row_fc_nonzero_size, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused'))]),
     ("(3) first contact refuses even the true root", row_fc_root, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if True:\n            raise FirstContactRefused'))]),
     ("(5) F-B1 cosign shape check removed", row_cosign_malformed, [mock.patch.object(hl, "verify_head", mut_verify('    if not isinstance(cosigns, list) or not all(', '    if False and not all('))]),
-    ("(F-B2a) duplicate-signer check removed", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):', '    if False:'))]),
-    ("(F-B2c) duplicate check is case-sensitive (drop .lower())", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):', '    if len({c["pub"] for c in cosigns}) != len(cosigns):'))]),
-    ("(F-B2d) select_cosigns case-sensitive (drop .lower())", row_pub_case, [mock.patch.object(hl, "select_cosigns", _mut_src('        pub = str(c.get("pub", "")).lower()', '        pub = str(c.get("pub", ""))', "select_cosigns"))]),
+    ("(F-B2a) duplicate-signer check removed", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"] for c in cosigns}) != len(cosigns):', '    if False:'))]),
+    ("(F-B2c) case-insensitive acceptance restored (lowercase rule dropped, .lower() normalization back)", row_pub_case, [mock.patch.object(hl, "verify_head", mut_verify('    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):\n        raise MalformedCosign("cosign pub must be 64 lowercase hex")\n    if len({c["pub"] for c in cosigns}) != len(cosigns):', '    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):')), mock.patch.object(hl, "select_cosigns", _mut_src('        pub = c.get("pub", "")\n', '        pub = str(c.get("pub", "")).lower()\n', "select_cosigns"))]),
+    ("(F-B2d) lowercase rule dropped (no normalization)", row_pub_case, [mock.patch.object(hl, "verify_head", mut_verify('    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):', '    if False:'))]),
     ("(F-B2b1) refusal cached by head hash", row_dup_then_clean, [mock.patch.object(hl, "verify_head", neg_cache)]),
     ("(F-B2b2) parse refusal routed into _mark_contested", row_dup_then_clean, [mock.patch.object(hl, "verify_head", to_contested)]),
     ("(4a) F-B3 size check before read removed", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('    if os.path.getsize(path) > MAX_PIN_BYTES:', '    if False:'))]),
     ("(4b) F-B3 unbounded read", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('f.read(MAX_PIN_BYTES + 1)', 'f.read()'))]),
+    ("(FC-S4) TOFU switch reintroduced in the wiring module", row_no_tofu_switch, [wiring_src_mutant('PROOF_ROOT = "root"', 'PROOF_ROOT = "root"\nTOFU_OK = False')]),
+    ("(FC-S5) mark builder reads legacy_observed_heads (seeding)", row_no_tofu_switch, [wiring_src_mutant('        " FROM legacy_level_marks WHERE log_id=? ORDER BY tree_size", (log_id,)).fetchall()', '        " FROM legacy_level_marks WHERE log_id=? UNION SELECT seq FROM legacy_observed_heads", (log_id,)).fetchall()')]),
+    ("(VM-a) raw marks accepted (VerifiedMark guard removed)", row_vmark_raw, [mock.patch.object(hl, "_require_verified", lambda mark: None)]),
+    ("(VM-b) verify_head guard dropped (cheap_head runs on a raw mark first)", row_vmark_raw, [mock.patch.object(hl, "verify_head", _mut_route_cheap('    _require_verified(mark)                 # Examiner: refused before cheap_head runs\n', '', "verify_head"))]),
+    ("(VM-c) cheap_head guard dropped", row_vmark_raw, [mock.patch.object(hl, "cheap_head", _mut_src('    or None when nothing is stored yet."""\n    _require_verified(mark)\n', '    or None when nothing is stored yet."""\n', "cheap_head")), mock.patch.object(sys.modules[__name__], "_CHEAP0", _mut_src('    or None when nothing is stored yet."""\n    _require_verified(mark)\n', '    or None when nothing is stored yet."""\n', "cheap_head"))]),
+    ("(NG-m) size == prev_size / root comparison dropped", row_no_growth, [mock.patch.object(hl, "cheap_head", _mut_src('    if psize == size and root != proot:', '    if False:', "cheap_head"))]),
+    ("(AM-m) advance_mark skips the consistency proof", row_advance_mark, [mock.patch.object(hl, "advance_mark", _mut_src('    if not verify_consistency(prev.size, h["tree_size"], prev.root, h["root"], proof):', '    if False:', "advance_mark"))]),
+    ("(CV-m) consistency verifier ignores first_hash", row_consistency_vectors, [mock.patch.object(hl, "verify_consistency", _mut_src('    return sn == 0 and fr == first_hash and sr == second_hash', '    return sn == 0 and sr == second_hash', "verify_consistency"))]),
     ("operator_id check removed", row_single_wrong_op, [mock.patch.object(hl, "verify_head", mut_verify('    if level == "single-operator" and fleet_ops != {h["operator_id"]}:', '    if False:'))]),
 ]
 table = []

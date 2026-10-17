@@ -29,7 +29,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
 
 import core
+import head_level as hl
 import hop_certs
+import legacy_level_wiring as wiring
 import legacy_witness as lw
 import ratesrc
 import window_open
@@ -126,6 +128,30 @@ def charge_import_scoped(log_id: str) -> None:
     core._check_rate("import-legacy:global", limit=IMPORT_GLOBAL)
 
 
+class WeakPinnedWitness(ValueError):
+    """A pinned witness key fails weak_reason: the whole pin is refused."""
+
+
+# Bulwark/Cipher 8360b0c8 item 1(a): weak_reason runs once per pin config
+# (raw keys, log_id, threshold) at load, against wset.pubs, never per
+# request entry. A refused config is cached as refused (None).
+_PIN_CACHE: dict = {}
+
+
+def _load_pin(raw: str, log_id: str, threshold):
+    key = (raw, log_id, threshold)
+    if key not in _PIN_CACHE:
+        try:
+            wset = lw.load_witness_set(raw, threshold)
+            for pub in wset.pubs:
+                if lw.witness_key_admitted(pub):
+                    raise WeakPinnedWitness(pub)
+            _PIN_CACHE[key] = (log_id, wset)
+        except (TypeError, ValueError):
+            _PIN_CACHE[key] = None
+    return _PIN_CACHE[key]
+
+
 def pinned():
     """(log_id, WitnessSet) from the environment, or None when unset.
 
@@ -136,13 +162,23 @@ def pinned():
     log_id = os.environ.get("CYBERNET_GENESIS_LOG_ID", "").strip().lower()
     if not raw or len(log_id) != 64:
         return None
-    try:
-        # No default: an unset/invalid threshold, a duplicate key or the
-        # Genesis node key in the set is refused at load (fail closed, 503).
-        return log_id, lw.load_witness_set(
-            raw, os.environ.get("CYBERNET_GENESIS_WITNESS_THRESHOLD"))
-    except (TypeError, ValueError):
+    # No default: an unset/invalid threshold, a duplicate key, the Genesis
+    # node key in the set or a weak pinned key is refused at load (fail
+    # closed, 503).
+    return _load_pin(raw, log_id, os.environ.get("CYBERNET_GENESIS_WITNESS_THRESHOLD"))
+
+
+_GENESIS_OK: dict = {}
+
+
+def genesis_level_pub():
+    """The pinned Genesis key for head_level, weak_reason checked once."""
+    pub = lw.genesis_node_pub()
+    if pub is None:
         return None
+    if pub not in _GENESIS_OK:
+        _GENESIS_OK[pub] = lw.HEX64_RE.fullmatch(pub) is not None and lw.witness_key_admitted(pub) is None
+    return pub if _GENESIS_OK[pub] else None
 
 
 def witnessed_inception_ok(ident: dict, pub: str) -> bool:
@@ -251,7 +287,16 @@ def legacy_log_witnessed(request: Request):
         rows = conn.execute(
             "SELECT log_id, seq, head_hash, seen_at FROM legacy_observed_heads ORDER BY seen_at, seq"
         ).fetchall()
-    return {"marks": [{"log_id": r[0], "seq": r[1], "head_hash": r[2], "seen_at": r[3]} for r in rows]}
+        wiring.init_schema(conn)
+        contested = conn.execute(
+            "SELECT log_id, seq, head_hash_a, head_hash_b, seen_at FROM legacy_contested_heads"
+            " ORDER BY seen_at, seq").fetchall()
+    bad = {(r[0], r[1]) for r in contested}
+    # A contested (log_id, seq) is shown once, as evidence, never as marks.
+    return {"marks": [{"log_id": r[0], "seq": r[1], "head_hash": r[2], "seen_at": r[3]}
+                      for r in rows if (r[0], r[1]) not in bad],
+            "contested": [{"log_id": r[0], "seq": r[1], "head_hashes": [r[2], r[3]], "seen_at": r[4]}
+                          for r in contested]}
 
 
 @router.post("/api/v1/legacy-log/observe")
@@ -281,30 +326,34 @@ async def legacy_log_observe(request: Request):
         pinned_log, wset = pin
         if log_id != pinned_log:
             raise HTTPException(status_code=400, detail="head is for another log")
+        # Pinned keys passed weak_reason at pin load; the request path runs
+        # the typed signatures pre-check, then checkvalid once per witness.
         try:
-            h = lw.verify_head(signed, wset, pinned_log)
+            vhead = wiring.verify_legacy(signed, wset, pinned_log, sig_ok=lw.checkvalid_ok)
         except lw.WitnessRefused as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        for s in signed.get("signatures") or []:
-            w = s.get("witness") if isinstance(s, dict) else None
-            if not isinstance(w, str):
-                continue
-            why = lw.witness_key_admitted(w)
-            if why:
-                raise HTTPException(status_code=400, detail=f"Refused (weak key): {why}.")
-        data["_head"] = h
+            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        data["_head"] = vhead
 
     def write():
-        h = data.get("_head")
-        if not h:
+        # ART-42 wiring cut: every head_level check (mark rebuilt from the
+        # root, cheap_head, cosigns, mapping, consistency, fork) runs in
+        # legacy_level_wiring.observe before any row is written.
+        vhead = data.get("_head")
+        if vhead is None:
             return {"status": "unwritten"}
-        with core._db_lock, core._db() as conn:
-            window_open.init_schema(conn)
-            conn.execute(
-                """INSERT OR IGNORE INTO legacy_observed_heads
-                   (log_id, seq, head_hash, seen_at) VALUES (?,?,?,?)""",
-                (h["log_id"], h["seq"], h["head_hash"], int(time.time())))
-        return {"status": "observed", "log_id": h["log_id"], "seq": h["seq"]}
+        genesis_pub = genesis_level_pub()
+        try:
+            pins = hl.load_pins(os.environ.get("CYBERNET_WITNESS_PINS", ""), genesis_pub or "",
+                                lw.checkvalid_ok, os.path.join(core._DB_DIR, "witness-pins.state.json"))
+            with core._db_lock, core._db() as conn:
+                window_open.init_schema(conn)
+                return wiring.observe(conn, vhead, data.get("level"), genesis_pub, pins, lw.checkvalid_ok)
+        except wiring.LevelNotBound as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except wiring.LogContested as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except hl.Refused as e:
+            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 
     return await admit(verify, write)
 

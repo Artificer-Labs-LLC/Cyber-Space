@@ -479,7 +479,10 @@ os.environ["CYBERNET_GENESIS_WITNESSES"] = wpub
 os.environ["CYBERNET_GENESIS_LOG_ID"] = olog
 observer = client_at("203.0.113.90")
 r = observer.post("/api/v1/legacy-log/observe", json={"head": signed})
-check("(e) observe of a mixed-order witness head is 400", r.status_code == 400, (r.status_code, r.text[:240]))
+# Bulwark/Cipher 8360b0c8 item 1(a): weak_reason runs once at pin load;
+# a pin holding a mixed-order key is refused whole (503), not per request.
+check("(e) observe against a pin holding a mixed-order witness key is 503 (pin refused at load)",
+      r.status_code == 503 and rlw.pinned() is None, (r.status_code, r.text[:240]))
 check("(e) refused head wrote no observe mark", observed(olog) == 0, observed(olog))
 
 ident_pub = _ed._encodepoint(_ed._IDENT).hex()
@@ -494,8 +497,8 @@ try:
 except lw.WitnessRefused:
     small_refused = True
 r = observer.post("/api/v1/legacy-log/observe", json={"head": signed_small})
-check("(e) pure small-order witness head fails on the observe route",
-      small_refused and r.status_code == 400 and observed(olog) == 0,
+check("(e) pure small-order witness pin is refused on the observe route",
+      small_refused and r.status_code == 503 and observed(olog) == 0,
       (small_refused, r.status_code, observed(olog)))
 
 # item 8 still stands
@@ -694,6 +697,7 @@ os.environ["CYBERNET_GENESIS_WITNESSES"] = wpub
 os.environ["CYBERNET_GENESIS_LOG_ID"] = olog
 real_admit_key = lw.witness_key_admitted
 lw.witness_key_admitted = lambda pub: None
+rlw._PIN_CACHE.clear()
 try:
     try:
         lw.verify_head(signed, OW, olog)
@@ -701,9 +705,13 @@ try:
     except lw.WitnessRefused:
         mutant_verify = False
     r = observer.post("/api/v1/legacy-log/observe", json={"head": signed})
-    mutant_route = r.status_code == 200 and observed(olog) == 1
+    # weak_reason now gates at pin load: the mutant admits the pin and the
+    # mixed-order head passes the legacy verify (it then stops at the
+    # level binding, which this belt does not configure).
+    mutant_route = rlw.pinned() is not None and "not pinned" not in r.text
 finally:
     lw.witness_key_admitted = real_admit_key
+    rlw._PIN_CACHE.clear()
 record_mutant("checkvalid only (no small-order component check)",
               "mixed-order witness head is refused",
               True, mutant_verify and mutant_route)
