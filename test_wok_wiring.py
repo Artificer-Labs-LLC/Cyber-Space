@@ -3,6 +3,7 @@
 Research Board room; Bulwark 8360b0c8 items 1-4 folded in per Villhaze
 ART-42 4fb5eb94). Every row has at least one named mutant it kills; a kill
 is the named row failing its own assertion (exceptions are ERROR)."""
+import json
 import hashlib, os, sqlite3, sys, tempfile, time
 from unittest import mock
 
@@ -329,20 +330,110 @@ def row_cost_dup_witness():
     return r.status_code == 400 and "DuplicateWitness" in r.text and VERIFIES[0] == 0 and WEAK[0] == 0 and route_rows() == 0
 
 
-def row_witness_case():
-    # Cipher (ART-42): lowercase 64-hex only on every path, no normalizing.
-    # A pinned witness spelled in uppercase is refused by the filter
-    # (MalformedWitnessSig, 0 verifies) and by lw.verify_head itself.
+def _mx(p):
+    return "".join(ch.upper() if k % 2 else ch for k, ch in enumerate(p))
+TABLES3 = ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads")
+
+
+def row_ndup_cosign_wired():
+    # N-DUP(a) through the wiring: a case-variant cosign pair (lower/UPPER,
+    # UPPER/lower, lower/mixed) is DuplicateCosign before any verify, and
+    # nothing is written to any of the three tables.
+    c = db()
+    sa, la = root_head(A, 4)
+    P, sg = WP[0], "ab" * 64
+    pairs = [[{"pub": P, "sig": sg}, {"pub": P.upper(), "sig": sg}], [{"pub": P.upper(), "sig": sg}, {"pub": P, "sig": sg}],
+             [{"pub": P, "sig": sg}, {"pub": _mx(P), "sig": sg}]]
+    before = [count(c, t) for t in TABLES3]; s0 = snap(c)
+    n = [0]
+    def so(pub, msg, sig): n[0] += 1; return sig_ok(pub, msg, sig)
+    vh = wiring.verify_legacy(sa, WSET, LOG, sig_ok)
+    ok = True
+    for pr in pairs:
+        n[0] = 0
+        ok = ok and typed(hl.DuplicateCosign, lambda: wiring.observe(c, vh, dict(la, cosigns=pr), GPUB, None, so)) and n[0] == 0
+    return ok and [count(c, t) for t in TABLES3] == before and snap(c) == s0
+
+
+def row_ndup_witness():
+    # N-DUP(b): witness W spelled lower/UPPER, both orders: the filter refuses
+    # DuplicateWitness with 0 verifies and no row; lw.verify_head called
+    # directly makes at most 1 verify for W (tried keyed on the normalised w).
+    sa, la = root_head(A, 4)
+    s0, s1 = sa["signatures"]
+    W = s1["witness"]
+    ok = True
+    for pair in ([s1, dict(s1, witness=W.upper())], [dict(s1, witness=W.upper()), s1]):
+        reset_route_db()
+        r, _ = post({"head": dict(sa, signatures=pair), "level": la})
+        ok = ok and r.status_code == 400 and "DuplicateWitness" in r.text and VERIFIES[0] == 0 and route_rows() == 0
+        per = {}
+        def so(pub, msg, sig):
+            per[pub] = per.get(pub, 0) + 1; return sig_ok(pub, msg, sig)
+        try: lw.verify_head(dict(sa, signatures=[s0] + pair), WSET, LOG, sig_ok=so)
+        except Exception: pass
+        ok = ok and per.get(W, 0) == 1 and max(per.values()) <= 1
+    return ok
+
+
+def row_norm_accept_witness():
+    # N-DUP(c) for witnesses: UPPER / mixed-case pinned witnesses are accepted
+    # exactly as the lowercase baseline (status, level, verify count), by the
+    # filter + route and by lw.verify_head directly.
     reset_route_db()
     sa, la = root_head(A, 4)
-    up = dict(sa["signatures"][1], witness=sa["signatures"][1]["witness"].upper())
-    body = dict(sa, signatures=[sa["signatures"][0], up])
+    s0, s1 = sa["signatures"]
+    body = dict(sa, signatures=[dict(s0, witness=_mx(s0["witness"])), dict(s1, witness=s1["witness"].upper())])
+    r, _ = post({"head": sa, "level": la})
+    base = (r.status_code, r.json().get("status"), r.json().get("level"), VERIFIES[0])
+    reset_route_db()
     r, _ = post({"head": body, "level": la})
-    route = r.status_code == 400 and "MalformedWitnessSig" in r.text and VERIFIES[0] == 0 and route_rows() == 0
-    direct = typed(lw.WitnessRefused, lambda: lw.verify_head(body, WSET, LOG, sig_ok=sig_ok))
-    try: ctl = lw.verify_head(sa, WSET, LOG, sig_ok=sig_ok)["seq"] == 4
+    same = base[1] == "observed" and (r.status_code, r.json().get("status"), r.json().get("level"), VERIFIES[0]) == base
+    try: direct = lw.verify_head(body, WSET, LOG, sig_ok=sig_ok)["seq"] == 4
     except Exception: return False
-    return route and direct and ctl and "lowercase" in _why(lambda: lw.verify_head(body, WSET, LOG, sig_ok=sig_ok))
+    return same and direct
+
+
+def row_norm_strict_witness():
+    # N-DUP(d) for witnesses: trailing newline (lower/upper), padding, non-hex,
+    # short: the filter refuses MalformedWitnessSig with 0 verifies and no row;
+    # lw.verify_head refuses them even when two valid signatures would
+    # otherwise make quorum.
+    sa, la = root_head(A, 4)
+    s0, s1 = sa["signatures"]
+    W, X = s1["witness"], WP[2]
+    ok = True
+    for bad in (W + "\n", W.upper() + "\n", " " + W, W + " ", W[:63], "g" + W[1:]):
+        reset_route_db()
+        r, _ = post({"head": dict(sa, signatures=[s0, dict(s1, witness=bad)]), "level": la})
+        ok = ok and r.status_code == 400 and "MalformedWitnessSig" in r.text and VERIFIES[0] == 0 and route_rows() == 0
+    for bad in (X + "\n", X.upper() + "\n", " " + X, X[:63]):
+        ok = ok and typed(lw.WitnessRefused, lambda b=bad: lw.verify_head(
+            dict(sa, signatures=[s0, s1, {"witness": b, "sig": "00" * 64}]), WSET, LOG, sig_ok=sig_ok))
+    try: ok = ok and lw.verify_head(dict(sa, signatures=[s0, s1, {"witness": X.upper(), "sig": "00" * 64}]),
+                                    WSET, LOG, sig_ok=sig_ok)["seq"] == 4
+    except Exception: return False
+    return ok
+
+
+def row_stored_lower():
+    # Every stored pub is lowercase: a head observed with upper/mixed-case
+    # cosign pubs and witness pubs stores only lowercase 64-hex pubs.
+    reset_route_db()
+    sa, la = root_head(A, 4)
+    sigs = [dict(e, witness=e["witness"].upper()) for e in sa["signatures"]]
+    lv = dict(la, cosigns=[{"pub": WP[2].upper(), "sig": "00" * 64},
+                           {"pub": "".join(ch.upper() if k % 2 else ch for k, ch in enumerate(WP[0])), "sig": "11" * 64}])
+    r, _ = post({"head": dict(sa, signatures=sigs), "level": lv})
+    if r.status_code != 200 or r.json().get("status") != "observed":
+        return False
+    with core._db_lock, core._db() as conn:
+        rows = conn.execute("SELECT cosigns FROM legacy_level_marks").fetchall()
+        cells = [str(v) for t in ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads")
+                 for row in conn.execute(f"SELECT * FROM {t}").fetchall() for v in row]
+    pubs = [c["pub"] for (js,) in rows for c in json.loads(js)]
+    no_upper = all(w.upper() not in cell for w in WP for cell in cells if w.upper() != w)
+    return len(rows) == 1 and len(pubs) == 2 and all(hl.PUB_RE.fullmatch(p) for p in pubs) and no_upper
 
 
 def _why(fn):
@@ -410,7 +501,11 @@ ROWS = [
     ("(W-C1) 2-of-3 + 400 junk entries: refused, 0 verifies, 0 weak_reason, < 1 s", row_cost_oversize),
     ("(W-C2) 2-of-3 + unpinned entry: UnpinnedWitness, 0 verifies, 0 weak_reason", row_cost_unpinned),
     ("(W-C3) duplicate witness: DuplicateWitness, 0 verifies", row_cost_dup_witness),
-    ("(W-LC) uppercase pinned witness refused by the filter (MalformedWitnessSig, 0 verifies) and by lw.verify_head; no normalizing", row_witness_case),
+    ("(W-N a) case-variant cosign pair through the wiring: DuplicateCosign, 0 verifies, nothing written to the three tables", row_ndup_cosign_wired),
+    ("(W-N b) witness lower/UPPER pair, both orders: DuplicateWitness, 0 verifies, no row; lw.verify_head <= 1 verify for W", row_ndup_witness),
+    ("(W-N c) UPPER/mixed pinned witnesses accepted exactly as lowercase (route + lw.verify_head)", row_norm_accept_witness),
+    ("(W-N d) trailing newline/padded/non-hex/short witness: MalformedWitnessSig, 0 verifies; lw.verify_head refuses", row_norm_strict_witness),
+    ("(W-LS) every stored pub is lowercase (cosigns observed in upper/mixed case)", row_stored_lower),
     ("(W-C4) lw.verify_head: one pinned key reused with bad sigs -> at most 1 verify for it", row_tried_once),
     ("(W-C5) weak pinned key refuses the whole pin at load (503); weak_reason not rerun per request", row_pin_weak),
     ("(W-F2) fork through the route: /witnessed shows contested evidence, no mark for that seq", row_route_fork),
@@ -501,8 +596,15 @@ MUT = [
     ("(W-C2) unpinned-witness check removed", row_cost_unpinned, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, "        if w not in pubs:\n            raise UnpinnedWitness", "        if False:\n            raise UnpinnedWitness", "precheck_signatures"))]),
     ("(W-C2b) weak_reason back in the request loop", row_cost_unpinned, [mock.patch.object(wiring, "verify_legacy", vl_weak_loop)]),
     ("(W-C3) duplicate-witness check removed", row_cost_dup_witness, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, "        if w in seen:\n            raise DuplicateWitness", "        if False:\n            raise DuplicateWitness", "precheck_signatures"))]),
-    ("(W-LC1) filter lowercases witness pubs again (case-insensitive acceptance)", row_witness_case, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, "        w = e[\"witness\"]\n        if lw.HEX64_RE.fullmatch(w) is None:", "        w = e[\"witness\"].lower()\n        if lw.HEX64_RE.fullmatch(w) is None:", "precheck_signatures"))]),
-    ("(W-LC2) lw.verify_head skips non-lowercase witnesses silently", row_witness_case, [mock.patch.object(lw, "verify_head", src_fn(lw, "        if isinstance(w, str) and HEX64_RE.fullmatch(w) is None:\n            raise WitnessRefused", "        if False:\n            raise WitnessRefused", "verify_head"))]),
+    ("(M-N1w) hl duplicate set over the raw pub, normalised afterwards", row_ndup_cosign_wired, [mock.patch.object(hl, "normalize_cosigns", src_fn(hl, '    if len({c["pub"] for c in out}) != len(out):\n        raise DuplicateCosign("at most one cosign per signer")\n', '    if len({c["pub"] for c in cosigns}) != len(cosigns):\n        raise DuplicateCosign("at most one cosign per signer")\n', "normalize_cosigns"))]),
+    ("(M-N2) filter `seen` keyed on the raw witness, membership on the normalised one", row_ndup_witness, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, '        if w in seen:\n            raise DuplicateWitness("at most one signature per witness")\n        seen.add(w)', '        if e["witness"] in seen:\n            raise DuplicateWitness("at most one signature per witness")\n        seen.add(e["witness"])', "precheck_signatures"))]),
+    ("(M-N3) lw.verify_head `tried` keyed on the raw witness", row_ndup_witness, [mock.patch.object(lw, "verify_head", src_fn(lw, "w in eligible) or w in tried:\n            continue\n        tried.add(w)", "w in eligible) or s.get(\"witness\") in tried:\n            continue\n        tried.add(s.get(\"witness\"))", "verify_head"))]),
+    ("(M-N5f) filter normalising dropped (uppercase witness refused)", row_norm_accept_witness, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, '        w = e["witness"].lower()', '        w = e["witness"]', "precheck_signatures"))]),
+    ("(M-N5l) lw.verify_head normalising dropped (uppercase witness refused)", row_norm_accept_witness, [mock.patch.object(lw, "verify_head", src_fn(lw, "            w = w.lower()\n", "            pass\n", "verify_head"))]),
+    ("(M-N6f) filter fullmatch swapped for match", row_norm_strict_witness, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, '        if lw.HEX64_RE.fullmatch(w) is None:      # strict check', '        if lw.HEX64_RE.match(w) is None:      # strict check', "precheck_signatures"))]),
+    ("(M-N6l) lw.verify_head fullmatch swapped for match", row_norm_strict_witness, [mock.patch.object(lw, "verify_head", src_fn(lw, "            if HEX64_RE.fullmatch(w) is None:\n                raise WitnessRefused", "            if HEX64_RE.match(w) is None:\n                raise WitnessRefused", "verify_head"))]),
+    ("(M-N7f) filter strict check skipped", row_norm_strict_witness, [mock.patch.object(wiring, "precheck_signatures", src_fn(wiring, '        if lw.HEX64_RE.fullmatch(w) is None:      # strict check', '        if False:      # strict check', "precheck_signatures"))]),
+    ("(W-LS1) raw-case cosigns stored", row_stored_lower, [wmut('json.dumps(hl.normalize_cosigns(level["cosigns"]))', 'json.dumps(level["cosigns"])')]),
     ("(W-C4) lw.verify_head marks a witness only on success", row_tried_once, [mock.patch.object(lw, "verify_head", src_fn(lw, '''        if not (isinstance(w, str) and isinstance(sig, str) and w in eligible) or w in tried:
             continue
         tried.add(w)                        # Bulwark 8360b0c8: one verify per witness

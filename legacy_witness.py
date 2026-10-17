@@ -471,8 +471,10 @@ def verify_head(signed: dict, wset, log_id: str, sig_ok=None) -> dict:
     for s in sigs if isinstance(sigs, list) else []:
         w = s.get("witness") if isinstance(s, dict) else None
         sig = s.get("sig") if isinstance(s, dict) else None
-        if isinstance(w, str) and HEX64_RE.fullmatch(w) is None:
-            raise WitnessRefused("witness pub must be 64 lowercase hex")    # one rule, no normalizing
+        if isinstance(w, str):              # Villhaze ART-37 4b97c85b: normalize, then strict
+            w = w.lower()
+            if HEX64_RE.fullmatch(w) is None:
+                raise WitnessRefused("witness pub must be 64 hex chars")
         if not (isinstance(w, str) and isinstance(sig, str) and w in eligible) or w in tried:
             continue
         tried.add(w)                        # Bulwark 8360b0c8: one verify per witness

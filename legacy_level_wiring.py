@@ -116,15 +116,15 @@ class TooManyWitnessSigs(lw.WitnessRefused):
 
 
 class MalformedWitnessSig(lw.WitnessRefused):
-    """A signatures entry that is not {witness: 64 lowercase hex, sig: str}."""
+    """A signatures entry that is not {witness: 64 hex, sig: str}."""
 
 
 class UnpinnedWitness(lw.WitnessRefused):
-    """A signatures entry whose witness is not pinned."""
+    """A signatures entry whose (lowercased) witness is not pinned."""
 
 
 class DuplicateWitness(lw.WitnessRefused):
-    """Two signatures entries for one witness."""
+    """Two signatures entries for one (lowercased) witness."""
 
 
 def precheck_signatures(signed, wset) -> None:
@@ -144,9 +144,9 @@ def precheck_signatures(signed, wset) -> None:
         if not isinstance(e, dict) or not isinstance(e.get("witness"), str) \
                 or not isinstance(e.get("sig"), str):
             raise MalformedWitnessSig("signatures entry must be {witness: str, sig: str}")
-        w = e["witness"]
-        if lw.HEX64_RE.fullmatch(w) is None:     # lowercase only, never normalized
-            raise MalformedWitnessSig("witness pub must be 64 lowercase hex")
+        w = e["witness"].lower()                  # normalize at admission (ART-37 4b97c85b)
+        if lw.HEX64_RE.fullmatch(w) is None:      # strict check on the normalized value
+            raise MalformedWitnessSig("witness pub must be 64 hex chars")
         if w not in pubs:
             raise UnpinnedWitness("signature from a witness this node does not pin")
         if w in seen:
@@ -314,6 +314,6 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
         "INSERT INTO legacy_level_marks (log_id, tree_size, root, proof_kind, blob, genesis_sig,"
         " cosigns, proof, set_at) VALUES (?,?,?,?,?,?,?,?,?)",
         (log_id, new_mark.size, new_mark.root.hex(), PROOF_ROOT if vmark is None else PROOF_CONSISTENCY,
-         level["blob"], level["genesis_sig"], json.dumps(level["cosigns"]),
+         level["blob"], level["genesis_sig"], json.dumps(hl.normalize_cosigns(level["cosigns"])),
          json.dumps([p.hex() for p in path]), now))
     return {"status": "observed", "log_id": log_id, "seq": seq, "level": level_name}

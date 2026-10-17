@@ -399,33 +399,51 @@ LOG_APPENDS = []                 # observed log appends / contested marks (mutan
 def _dup_pair(b):
     good = cos([f1], b)[0]; junk = {"pub": good["pub"], "sig": "00" * 64}
     return [junk, good], [good, junk], [good]
+def _mixed(p):
+    return "".join(ch.upper() if k % 2 else ch for k, ch in enumerate(p))
 def _case_pairs(b):
-    # Cipher ART-42 1d612976: one signer, two hex spellings. Valid lowercase
-    # cosign then the same pub in uppercase (junk sig), and the reverse.
-    good = cos([f1], b)[0]; up = {"pub": good["pub"].upper(), "sig": "00" * 64}
-    return [good, up], [up, good]
+    # Cipher ART-42 9c460b37 N-DUP(a): pinned key P with a valid cosign sig s,
+    # spelled twice: lower/UPPER, UPPER/lower, lower/mixed (and junk-sig
+    # variants of the second spelling).
+    good = cos([f1], b)[0]; P, sg = good["pub"], good["sig"]
+    lo, up, mx = {"pub": P, "sig": sg}, {"pub": P.upper(), "sig": sg}, {"pub": _mixed(P), "sig": sg}
+    upj = {"pub": P.upper(), "sig": "00" * 64}
+    return [[lo, up], [up, lo], [lo, mx], [mx, lo], [lo, upj], [upj, lo]]
 def row_dup_cosign():
+    # F-B2: one cosign per signer, junk/valid both orders.
     b = head(1)
     jv, vj, _ = _dup_pair(b)
-    return (refused_as(hl.DuplicateCosign, lambda: ver(b, jv))
-            and refused_as(hl.DuplicateCosign, lambda: ver(b, vj)))
+    return all(zero_calls_typed_exact(hl.DuplicateCosign, lambda c=c: ver(b, c)) for c in (jv, vj))
+def row_ndup_cosign():
+    # N-DUP(a) (Villhaze ART-37 4b97c85b / ART-42 7e9eb9b5 #5): normalise,
+    # strict check, THEN duplicates on the normalised pub. A case-variant pair
+    # is one signer: exactly DuplicateCosign, 0 verifies, every order.
+    b = head(1)
+    return all(zero_calls_typed_exact(hl.DuplicateCosign, lambda c=c: ver(b, c)) for c in _case_pairs(b))
 def _exactly(cls, fn):
     try: fn(); return False
     except Exception as e: return type(e) is cls
-def row_pub_case():
-    # Cipher (ART-42): one rule on every path, lowercase 64-hex only, no
-    # normalizing. An uppercase-hex pub is refused as a signer (exactly
-    # MalformedCosign, 0 verifies): alone with a valid sig, and in both
-    # lower/UPPER duplicate orders. Lowercase control passes.
+def row_norm_accept():
+    # N-DUP(c), the control: a single valid cosign spelled UPPER or mixed is
+    # accepted at the same level as lowercase with 1 verify, and the
+    # normalised entries (what callers use and store) hold P.lower().
     b = head(1)
-    good = cos([f1], b)[0]; up = {"pub": good["pub"].upper(), "sig": good["sig"]}
-    mixed = {"pub": good["pub"][:63] + good["pub"][63].upper(), "sig": good["sig"]}
-    lu, ul = _case_pairs(b)
-    refused = all(zero_calls_typed_exact(hl.MalformedCosign, lambda c=c: ver(b, c))
-                  for c in ([up], [mixed], lu, ul, [{"pub": " " + good["pub"], "sig": good["sig"]}]))
-    try: lo = ver(b, [good])[0]
+    good = cos([f1], b)[0]
+    try:
+        res = [ver(b, [{"pub": p, "sig": good["sig"]}]) for p in (good["pub"], good["pub"].upper(), _mixed(good["pub"]))]
     except Exception: return False
-    return refused and lo == "single-operator"
+    norm = hl.normalize_cosigns([{"pub": good["pub"].upper(), "sig": good["sig"]},
+                                 {"pub": _mixed(f2.verify_key.encode().hex()), "sig": "00"}])
+    return (all(r == ("single-operator", 1) for r in res)
+            and [c["pub"] for c in norm] == [good["pub"], f2.verify_key.encode().hex()]
+            and all(hl.PUB_RE.fullmatch(c["pub"]) for c in norm))
+def row_norm_strict():
+    # N-DUP(d): normalising opens no hole. Trailing newline (lower or upper),
+    # padding, non-hex, 0x prefix, short: exactly MalformedCosign, 0 verifies.
+    b = head(1)
+    good = cos([f1], b)[0]; P = good["pub"]
+    bad = [P + "\n", P.upper() + "\n", " " + P, P + " ", P[:63], "g" + P[1:], "0x" + P[2:], P + "0"]
+    return all(zero_calls_typed_exact(hl.MalformedCosign, lambda p=p: ver(b, [{"pub": p, "sig": good["sig"]}])) for p in bad)
 def zero_calls_typed_exact(cls, fn):
     CALLS[0] = 0
     return _exactly(cls, fn) and CALLS[0] == 0
@@ -555,7 +573,9 @@ ROWS = [
     ("(FC3) first contact true root (0, 00*32) accepted; no TOFU switch/label", row_fc_root),
     ("(F-B1) cosigns ['x']*3 etc: typed MalformedCosign, 0 verifies, never AttributeError", row_cosign_malformed),
     ("(F-B2) two cosigns on one signer, junk/valid both orders: DuplicateCosign, 0 verifies", row_dup_cosign),
-    ("(LC) uppercase/mixed-case/padded pub refused as a signer (MalformedCosign, 0 verifies), alone and in lower/UPPER duplicate pairs; lowercase only, no normalizing", row_pub_case),
+    ("(N-DUP a) case-variant cosign pair (lower/UPPER, UPPER/lower, lower/mixed) is one signer: DuplicateCosign, 0 verifies", row_ndup_cosign),
+    ("(N-DUP c) single UPPER/mixed valid cosign accepted at the same level, 1 verify; normalised pubs are lowercase", row_norm_accept),
+    ("(N-DUP d) trailing newline (lower/upper), padded, non-hex, short pub: MalformedCosign, 0 verifies", row_norm_strict),
     ("(F-B2) after that refusal the clean head is accepted; no negative cache, no contested mark, 0 log appends", row_dup_then_clean),
     ("(F-B3) oversized pin file: PinFileTooLarge before open; bounded read if it grew", row_pin_oversize),
     ("(C3) no production caller overrides parse_pins/load_pins signers/threshold (AST scan)", row_no_prod_override),
@@ -617,6 +637,44 @@ def _mut_route_cheap(old, new, fn):
     f = _mut_src(old, new, fn)
     f.__globals__["cheap_head"] = lambda *a, **k: hl.cheap_head(*a, **k)
     return f
+def _dup_first():
+    """Mutant: duplicates checked on the raw pubs, then normalized (the
+    post-normalization check removed)."""
+    src = open(hl.__file__).read()
+    a = '    out = []\n    for c in cosigns:\n        pub = normalize_pub(c["pub"])'
+    b = '    if len({c["pub"] for c in out}) != len(out):\n        raise DuplicateCosign("at most one cosign per signer")\n'
+    assert src.count(a) == 1 and src.count(b) == 1
+    src = src.replace(b, "").replace(a, '    if len({c["pub"] for c in cosigns}) != len(cosigns):\n'
+                                         '        raise DuplicateCosign("at most one cosign per signer")\n' + a)
+    ns = {"__name__": "head_level_mut"}; exec(compile(src, "mut", "exec"), ns)
+    for n in dir(hl):
+        if isinstance(getattr(hl, n), type) and n in ns: ns[n] = getattr(hl, n)
+    f = ns["verify_head"]
+    return lambda *a, **k: f(*a, **k)
+def _multi_mut(pairs):
+    src = open(hl.__file__).read()
+    for a, b in pairs:
+        assert src.count(a) == 1, a
+        src = src.replace(a, b)
+    ns = {"__name__": "head_level_mut"}; exec(compile(src, "mut", "exec"), ns)
+    for n in dir(hl):
+        if isinstance(getattr(hl, n), type) and n in ns: ns[n] = getattr(hl, n)
+    f = ns["verify_head"]
+    return lambda *a, **k: f(*a, **k)
+def _select_raw():
+    """M-N4: the normalised duplicate check is gone and verify_head hands the
+    RAW entries to select_cosigns, which matches pins on pub.lower() but
+    de-duplicates on the raw pub."""
+    return _multi_mut([
+        ('    if len({c["pub"] for c in out}) != len(out):\n        raise DuplicateCosign("at most one cosign per signer")\n', ''),
+        ('    cosigns = normalize_cosigns(cosigns)\n', '    raw = cosigns; normalize_cosigns(cosigns); cosigns = raw\n'),
+        ('        pub = c.get("pub", "")\n        if pub in keys and pub not in seen:\n            seen.add(pub)\n            kept.append((pub, c.get("sig", "")))',
+         '        pub = c.get("pub", "")\n        if pub.lower() in keys and pub not in seen:\n            seen.add(pub)\n            kept.append((pub.lower(), c.get("sig", "")))'),
+    ])
+def _dollar_match():
+    """M-N6b: PUB_RE written as [0-9a-f]{64}$ and applied with re.match."""
+    return _multi_mut([('PUB_RE = re.compile(r"[0-9a-f]{64}")', 'PUB_RE = re.compile(r"[0-9a-f]{64}$")'),
+                       ('    return p if PUB_RE.fullmatch(p) else None', '    return p if PUB_RE.match(p) else None')])
 NEG = set()
 def neg_cache(blob, gs, gp, cs, pins, so, mark=None, ruling=hl.RULING):
     """Mutant: a refusal is cached as negative under the head hash."""
@@ -693,9 +751,14 @@ MUT = [
     ("(2) first-contact prev_size check removed", row_fc_nonzero_size, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if False:\n            raise FirstContactRefused'))]),
     ("(3) first contact refuses even the true root", row_fc_root, [mock.patch.object(hl, "cheap_head", mut_cheap('        if psize != 0:\n            raise FirstContactRefused', '        if True:\n            raise FirstContactRefused'))]),
     ("(5) F-B1 cosign shape check removed", row_cosign_malformed, [mock.patch.object(hl, "verify_head", mut_verify('    if not isinstance(cosigns, list) or not all(', '    if False and not all('))]),
-    ("(F-B2a) duplicate-signer check removed", row_dup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"] for c in cosigns}) != len(cosigns):', '    if False:'))]),
-    ("(F-B2c) case-insensitive acceptance restored (lowercase rule dropped, .lower() normalization back)", row_pub_case, [mock.patch.object(hl, "verify_head", mut_verify('    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):\n        raise MalformedCosign("cosign pub must be 64 lowercase hex")\n    if len({c["pub"] for c in cosigns}) != len(cosigns):', '    if len({c["pub"].lower() for c in cosigns}) != len(cosigns):')), mock.patch.object(hl, "select_cosigns", _mut_src('        pub = c.get("pub", "")\n', '        pub = str(c.get("pub", "")).lower()\n', "select_cosigns"))]),
-    ("(F-B2d) lowercase rule dropped (no normalization)", row_pub_case, [mock.patch.object(hl, "verify_head", mut_verify('    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):', '    if False:'))]),
+    ("(F-B2a) duplicate-signer check removed", row_ndup_cosign, [mock.patch.object(hl, "verify_head", mut_verify('    if len({c["pub"] for c in out}) != len(out):', '    if False:'))]),
+    ("(M-N1) hl duplicate set built over the raw pub, normalised afterwards", row_ndup_cosign, [mock.patch.object(hl, "verify_head", _dup_first())]),
+    ("(M-N4) select_cosigns de-duplicates on the raw pub (normalised dup check gone)", row_ndup_cosign, [mock.patch.object(hl, "verify_head", _select_raw())]),
+    ("(M-N5) normalising dropped (uppercase refused)", row_norm_accept, [mock.patch.object(hl, "verify_head", mut_verify('    p = pub.lower()\n', '    p = pub\n'))]),
+    ("(M-N5b) normalised list discarded (uppercase misses its pin)", row_norm_accept, [mock.patch.object(hl, "verify_head", mut_verify('    cosigns = normalize_cosigns(cosigns)\n', '    normalize_cosigns(cosigns)\n'))]),
+    ("(M-N6) fullmatch swapped for match", row_norm_strict, [mock.patch.object(hl, "verify_head", mut_verify('    return p if PUB_RE.fullmatch(p) else None', '    return p if PUB_RE.match(p) else None'))]),
+    ("(M-N6b) pattern written with $ and used with re.match", row_norm_strict, [mock.patch.object(hl, "verify_head", _dollar_match())]),
+    ("(M-N7) strict check skipped (padded/non-hex admitted)", row_norm_strict, [mock.patch.object(hl, "verify_head", mut_verify('        if pub is None:\n            raise MalformedCosign', '        if False:\n            raise MalformedCosign'))]),
     ("(F-B2b1) refusal cached by head hash", row_dup_then_clean, [mock.patch.object(hl, "verify_head", neg_cache)]),
     ("(F-B2b2) parse refusal routed into _mark_contested", row_dup_then_clean, [mock.patch.object(hl, "verify_head", to_contested)]),
     ("(4a) F-B3 size check before read removed", row_pin_oversize, [mock.patch.object(hl, "load_pins", mut_load('    if os.path.getsize(path) > MAX_PIN_BYTES:', '    if False:'))]),

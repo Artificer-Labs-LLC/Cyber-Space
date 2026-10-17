@@ -19,9 +19,16 @@ COSIGN_PREFIX = b"cyberspace-witness-cosign/v1\n"
 PIN_MAGIC = b"cyberspace-witness-pins/v1\n"
 BODY = struct.Struct(">B32sQ32sQ32s32sQ")      # 153 bytes
 ZERO32 = b"\x00" * 32
-# One rule on every path (Cipher, ART-42): a pubkey is exactly 64 LOWERCASE
-# hex chars. Anything else is refused; nothing is normalized.
+# One rule on every path (Villhaze ART-37 4b97c85b): a pubkey is lowercased
+# at admission, the strict PUB_RE runs on the normalized value, and it is
+# compared and stored lowercase from then on. Padded / non-hex is refused.
 PUB_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def normalize_pub(pub: str):
+    """Lowercased pub if it is then exactly 64 hex chars, else None."""
+    p = pub.lower()
+    return p if PUB_RE.fullmatch(p) else None
 CLASS_FLEET, CLASS_OUTSIDE = 1, 2
 MAX_OPS, MAX_KEYS = 16, 4
 # Largest well-formed pin file: magic + log_id + version/issued + n_ops,
@@ -189,6 +196,26 @@ def cheap_head(blob: bytes, log_id: bytes, mark=None) -> dict:
             "operator_id": op, "issued_at": issued}
 
 
+def normalize_cosigns(cosigns):
+    """F-B1/F-B2 at admission: shape, then every pub lowercased and strictly
+    checked (MalformedCosign), then duplicates on the NORMALIZED pub
+    (DuplicateCosign: A and A-upper are one signer). Returns new entries
+    {pub: lowercase, sig}; callers use and store only these."""
+    if not isinstance(cosigns, list) or not all(
+            isinstance(c, dict) and isinstance(c.get("pub"), str) and isinstance(c.get("sig"), str)
+            for c in cosigns):
+        raise MalformedCosign("cosign entries must be {pub: str, sig: str}")
+    out = []
+    for c in cosigns:
+        pub = normalize_pub(c["pub"])
+        if pub is None:
+            raise MalformedCosign("cosign pub must be 64 hex chars")
+        out.append({"pub": pub, "sig": c["sig"]})
+    if len({c["pub"] for c in out}) != len(out):
+        raise DuplicateCosign("at most one cosign per signer")
+    return out
+
+
 def select_cosigns(cosigns, keys):
     """Unpinned keys dropped before any verify; one per pinned key; capped
     at the pin-list size."""
@@ -211,14 +238,7 @@ def verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=None
         pins = {"keys": {}}
     _require_verified(mark)                 # Examiner: refused before cheap_head runs
     h = cheap_head(blob, log_id_of(genesis_pub), mark)            # (2) before any verify
-    if not isinstance(cosigns, list) or not all(
-            isinstance(c, dict) and isinstance(c.get("pub"), str) and isinstance(c.get("sig"), str)
-            for c in cosigns):
-        raise MalformedCosign("cosign entries must be {pub: str, sig: str}")
-    if not all(PUB_RE.fullmatch(c["pub"]) for c in cosigns):
-        raise MalformedCosign("cosign pub must be 64 lowercase hex")
-    if len({c["pub"] for c in cosigns}) != len(cosigns):
-        raise DuplicateCosign("at most one cosign per signer")
+    cosigns = normalize_cosigns(cosigns)
     keys = {k: v for k, v in pins["keys"].items()
             if v["from"] <= h["tree_size"] <= v["to"]}
     if not sig_ok(genesis_pub, blob, genesis_sig):
