@@ -17,7 +17,22 @@ write in one locked section; kills M3), BW-MC (i) (a concurrent mark at a
 different seq, so only the re-check can refuse it; kills M3b with no UNIQUE
 key involved) and LW-9w (tamper with the replay cache warm; kills M4, M4b,
 M4c). No row catches a broad Exception any more: see VERDICTS / typed() /
-outcome() for how a row scores a typed refusal versus an error."""
+outcome() for how a row scores a typed refusal versus an error.
+
+Lodestar ART-42 2abb437a (BLOCK on 2d301e9, test gap only): row LK-ABA. The
+re-check of fresh["contested"] after the re-lock is the only guard when the
+mark rows go [] -> [] across the verify window (a rival root plus a fork
+land in between, and the fork DELETEs the marks). In-file mutants LK-ABAm
+(that re-check removed; Lodestar LK1 / Cipher E15) and LK-ABAs (Cipher E16:
+also deciding on the first read) must die on LK-ABA's own assertion.
+Folded from the sibling commit 3995d075 (oracle/wiring-cut-test-hardening):
+BW-SR (decide from the re-read; kills Cipher E11 and M3b), LW-9p (equivalent
+re-issued pins cost a full replay), NG-L (evidence written under the lock),
+NG-V (validly signed NoGrowthRootChange blob: exactly one evidence row), NG-E
+no longer asserts the presenter column (pending Villhaze ART-42 1b2ecf8c),
+and two strict expected-fail rows NG-X0 / NG-XN on the same ruling. Plus
+LW-9c (Lodestar LK17): only the root column of a stored mark tampered, the
+read must refuse."""
 import contextlib
 import json
 import hashlib, os, sqlite3, sys, tempfile, time
@@ -597,11 +612,15 @@ assert L == LOG
 CK = SigningKey(hashlib.sha256(b"lw-fleet-cosigner").digest()); CKP = CK.verify_key.encode().hex()
 OPL = b"\x07" * 32
 _PS = [SigningKey(hashlib.sha256(b"lw-pin-signer-%d" % i).digest()) for i in range(3)]
-def _pinfile():
-    body = hl.PIN_MAGIC + LIDB + struct.pack(">QQ", 1, 1_700_000_000) + bytes([1])
+def _pinfile(version=1):
+    body = hl.PIN_MAGIC + LIDB + struct.pack(">QQ", version, 1_700_000_000) + bytes([1])
     body += OPL + bytes([hl.CLASS_FLEET, 1]) + bytes.fromhex(CKP) + struct.pack(">QQ", 0, 10 ** 9)
     return body + bytes([2]) + b"".join(bytes([i]) + _PS[i].sign(body).signature for i in (0, 1))
 LWP = hl.parse_pins(_pinfile(), GPUB, sig_ok, tuple(k.verify_key.encode().hex() for k in _PS), 2)
+# the same cosigner under a re-issued pin file (version 2): an EQUIVALENT but
+# different pin set (Cipher E12 / Examiner M4b; row LW-9p, from 3995d075)
+LWP_V2 = hl.parse_pins(_pinfile(2), GPUB, sig_ok, tuple(k.verify_key.encode().hex() for k in _PS), 2)
+assert repr(LWP_V2) != repr(LWP)
 
 E = build([{"kind": "window-open"},
            {"kind": "hold", "agent": 7, "name": "alice"},
@@ -902,6 +921,34 @@ def row_lw9_warm():
     return ii and marks_of(c) == [(2, H2), (4, H4)] and VCALLS[0] == 0
 
 
+def row_lw9_pins_change():
+    # Cipher E12 / Examiner M4b (from 3995d075): pins change between two
+    # observes. h2, h4 observed under LWP (cache warm); h7 observed under
+    # LWP_V2 (same cosigner, re-issued pin file) must replay every stored
+    # mark under the new pins: 2 + 2 replay verifies (Genesis + cosign per
+    # mark) + 2 for h7 = 6, not the warm 2.
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare, warm under LWP
+    vh = wiring.verify_legacy(h7()[0], WSET, L, sig_ok)
+    VCALLS[0] = 0
+    r = outcome(lambda: wiring.observe(c, vh, h7()[1], GPUB, LWP_V2, vso))
+    return status(r) == "observed" and VCALLS[0] == 6
+
+
+def row_lw9_root_column():
+    # Lodestar LK17 (2abb437a): only the root COLUMN of stored mark 4 is
+    # changed (blob, signatures and skeletons untouched, so the replay itself
+    # succeeds). replay_marks promises MarkNotRootProven when the replayed
+    # mark differs from the stored (tree_size, root): a read must refuse, and
+    # so must the next observe, nothing written.
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare
+    if marks_of(c) != [(2, H2), (4, H4)]:
+        return False
+    c.execute("UPDATE legacy_level_marks SET root=? WHERE tree_size=4", (H[3],))
+    wiring._MARK_CACHE.clear()
+    return (typed(wiring.MarkNotRootProven, lambda: marks_of(c))
+            and refused_clean(c, wiring.MarkNotRootProven, lambda: lw_obs(c, *h7()), zero=False))
+
+
 BIG = gen_log("z", 262, base=E[:2])
 def row_lw10_cap():
     # LW-10 (cap 256, Villhaze a73a009e): a 2 -> 259 advance (257 skeletons)
@@ -987,10 +1034,12 @@ def row_nogrowth_evidence():
                    " contested_head_hash, reason FROM legacy_refused_heads").fetchall()
     if len(ev) != 1:
         return False
-    log_id, presented, size, presenter, contested, reason = ev[0]
+    log_id, presented, size, _presenter, contested, reason = ev[0]
+    # presenter is NOT asserted (Cipher 81b908ae / Examiner d56d2d94: the
+    # code stores the log's own key there, not the presenter; what it should
+    # hold is pending Villhaze's ruling, ART-42 1b2ecf8c). From 3995d075.
     fields_ok = (log_id == LOG and presented == bad_root.hex() and size == 4
-                 and presenter == GPUB and contested == R(A, 4).hex()
-                 and reason == "NoGrowthRootChange")
+                 and contested == R(A, 4).hex() and reason == "NoGrowthRootChange")
     # Evidence + sqlite_sequence (AUTOINCREMENT) may change; mark tables must not.
     mark_tables = ("legacy_observed_heads", "legacy_level_marks", "legacy_contested_heads")
     def mark_snap(s):
@@ -998,6 +1047,90 @@ def row_nogrowth_evidence():
     untouched = mark_snap(before) == mark_snap(after)
     clean = outcome(lambda: obs(c, *next_head(A, 4, 7)))
     return fields_ok and untouched and status(clean) == "observed" and count(c, "legacy_refused_heads") == 1
+
+
+# ---- folded from 3995d075: NoGrowthRootChange evidence rows ----
+XFAIL_RULING = "verify-first pending Villhaze ruling ART-42 1b2ecf8c"
+
+
+def xfail_strict(reason):
+    """Strict expected-fail: the row must FAIL on its own assertion and then
+    scores as a pass; if it PASSES, that is an XPASS and the row fails the
+    suite. An exception is still ERROR (it propagates)."""
+    def deco(fn):
+        def run():
+            if fn():
+                print(f"  XPASS {fn.__name__}: strict expected-fail passed; update the row [{reason}]")
+                return False
+            print(f"  xfail {fn.__name__} [{reason}]")
+            return True
+        run.__name__ = fn.__name__; run.xfail = reason
+        return run
+    return deco
+
+
+@xfail_strict(XFAIL_RULING)
+def row_ng_junk_zero():
+    # One junk blob at the stored mark's size with a different root and a
+    # BAD genesis_sig (all zeros, no cosigns), under a witnessed head for
+    # that root: still refused NoGrowthRootChange, and 0 refused-heads rows.
+    # The code writes the row before any signature check (Cipher 81b908ae,
+    # Examiner d56d2d94), so this is expected to fail until Villhaze rules;
+    # the production code is not reordered here.
+    c = db(); obs(c, *root_head(A, 2)); obs(c, *next_head(A, 2, 4))          # setup: bare
+    junk = dict(level(4, R(B, 4), prev=(4, R(A, 4))), genesis_sig="00" * 64)
+    if not typed(hl.NoGrowthRootChange, lambda: obs(c, legacy(4, R(B, 4)), junk)):
+        return False
+    return count(c, "legacy_refused_heads") == 0
+
+
+@xfail_strict(XFAIL_RULING)
+def row_ng_dedupe_count():
+    # N = 3 distinct, validly signed NoGrowthRootChange blobs (size 4, roots
+    # X1..X3 != H4, Genesis signature + the fleet cosign) plus one repeat of
+    # X1 (N+1 sends): exactly N rows, each presented head_hash once. The code
+    # has no dedupe (one row per send), so this is expected to fail until
+    # Villhaze rules.
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare
+    xs = [hashlib.sha256(b"ng-dedupe-%d" % i).hexdigest() for i in range(3)]
+    for x in xs + xs[:1]:
+        if not typed(hl.NoGrowthRootChange, lambda x=x: lw_obs(c, lw_head(4, x), lw_level(4, x, prev=(4, H4)))):
+            return False
+    rows = c.execute("SELECT presented_head_hash, COUNT(*) FROM legacy_refused_heads GROUP BY presented_head_hash").fetchall()
+    return count(c, "legacy_refused_heads") == len(xs) and sorted(rows) == sorted((x, 1) for x in xs)
+
+
+def row_ng_in_lock():
+    # Examiner d56d2d94 (survivor "evidence written outside the lock"): the
+    # refused-heads row is written while open_conn's lock is held. Same
+    # write-recording connection as BW-L; a valid NoGrowthRootChange pair.
+    c = db(); obs(c, *root_head(A, 2)); obs(c, *next_head(A, 2, 4))          # setup: bare
+    held = [False]; hc = HeldConn(c, held)
+    @contextlib.contextmanager
+    def oc():
+        held[0] = True
+        try: yield hc
+        finally: held[0] = False
+    vh = wiring.verify_legacy(legacy(4, R(B, 4)), WSET, LOG, sig_ok)
+    if not typed(hl.NoGrowthRootChange, lambda: wiring.observe_split(oc, vh, level(4, R(B, 4), prev=(4, R(A, 4))),
+                                                                     GPUB, None, sig_ok)):
+        return False
+    ev = [h for h, w in hc.writes if "legacy_refused_heads" in w]
+    return len(ev) == 1 and all(ev) and count(c, "legacy_refused_heads") == 1
+
+
+def row_ng_valid_one():
+    # A VALIDLY signed blob (Genesis signature + the fleet cosign, under LWP)
+    # at the stored mark's size with a different root (4, F4 vs mark
+    # (4, H4)): refused NoGrowthRootChange, exactly 1 refused-heads row naming
+    # F4 / H4, size 4; no contested row and the marks untouched.
+    c = db(); lw_obs(c, *h2()); lw_obs(c, *h4())          # setup: bare
+    f4 = lw.entry_hash(F[3], L)
+    before = [count(c, t) for t in TABLES3]
+    if not typed(hl.NoGrowthRootChange, lambda: lw_obs(c, lw_head(4, f4), lw_level(4, f4, prev=(4, H4)))):
+        return False
+    ev = c.execute("SELECT presented_head_hash, claimed_size, contested_head_hash FROM legacy_refused_heads").fetchall()
+    return ev == [(f4, 4, H4)] and [count(c, t) for t in TABLES3] == before
 
 
 def row_bw_cold_lock():
@@ -1137,6 +1270,69 @@ def row_bw_lock_write():
             and [x[0] for x in c.execute("SELECT seq FROM legacy_observed_heads ORDER BY seq")] == [2, 4])
 
 
+def row_bw_stale_decide():
+    # Cipher E11 / Examiner M3b (from 3995d075): the write section must
+    # DECIDE from its own re-read. Between the two reads a head A@4 is stored
+    # at the target seq as an observed row only (a pre-cut hint, as in W-S),
+    # so the MARK rows stay byte-identical and the rows re-check passes. B@4
+    # (from mark 2) is then a fork at a stored seq: status contested, one
+    # contested record, marks emptied, no B@4 observed row. Deciding from the
+    # first read instead (stored = []) stores B@4 as a mark: observed.
+    c = db(); obs(c, *root_head(A, 2))                    # setup: bare
+    calls = [0]
+    @contextlib.contextmanager
+    def oc():
+        calls[0] += 1
+        if calls[0] == 2:
+            c.execute("INSERT INTO legacy_observed_heads VALUES (?,?,?,?)", (LOG, 4, R(A, 4).hex(), 5))
+        yield c
+    sb, lb = next_head(B, 2, 4)
+    vh = wiring.verify_legacy(sb, WSET, LOG, sig_ok)
+    r = outcome(lambda: wiring.observe_split(oc, vh, lb, GPUB, None, sig_ok))
+    return (status(r) == "contested" and calls[0] == 2
+            and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
+            and [x[0] for x in c.execute("SELECT head_hash FROM legacy_observed_heads WHERE seq=4")] == [R(A, 4).hex()])
+
+
+def row_lk_aba():
+    # Lodestar ART-42 2abb437a (LK1 / Cipher E15, E16): the ABA race. An
+    # observe of root A@6 reads a log with no marks and no contest. While it
+    # verifies off the lock (inside MARK_VERIFIER), a rival observes root
+    # A@4 and then a fork B@4 is recorded, which DELETEs the marks: the mark
+    # rows are [] again at the re-lock, so the byte-identical rows re-check
+    # passes, and only the re-check of fresh["contested"] is left. Correct:
+    # LogContested, exactly one contested record, 0 marks, no observed row
+    # for seq 6 (seq 4 holds only the rival A@4). Without that re-check the
+    # observe writes mark 6 on a contested log.
+    # The hook goes into wiring AND the observe_split namespace actually in
+    # use (a src_fn mutant has its own MARK_VERIFIER global; patching wiring
+    # alone never fires there and gives a false SURVIVED -- Lodestar's note).
+    c = db(); fired = [0]
+    ns = wiring.observe_split.__globals__
+    real_mv = ns["MARK_VERIFIER"]
+    def put(f):
+        wiring.MARK_VERIFIER = f; ns["MARK_VERIFIER"] = f
+    def mv(rows, *a, **k):
+        if not fired[0]:
+            fired[0] = 1
+            put(real_mv)
+            try:
+                rival, fork = obs(c, *root_head(A, 4)), obs(c, *root_head(B, 4))   # setup: bare
+                fired.append((status(rival), status(fork)))
+            finally:
+                put(mv)
+        return real_mv(rows, *a, **k)
+    put(mv)
+    try:
+        refused = typed(wiring.LogContested, lambda: obs(c, *root_head(A, 6)))
+    finally:
+        put(real_mv)
+    return (refused and fired == [1, ("observed", "contested")]
+            and count(c, "legacy_contested_heads") == 1 and count(c, "legacy_level_marks") == 0
+            and count(c, "legacy_observed_heads", "seq=6") == 0
+            and [x[0] for x in c.execute("SELECT head_hash FROM legacy_observed_heads ORDER BY seq")] == [R(A, 4).hex()])
+
+
 def row_bw_rate_isolation():
     # Bulwark #3: 120 junk requests from one IP (pinned log_id, refused by the
     # typed pre-check) charge only that IP's bucket: an honest head from a
@@ -1159,6 +1355,8 @@ BW_ROWS = [
     ("(BW-W) cache refreshed after insert: next head costs only its own verifies", row_bw_warm_after_insert),
     ("(BW-MC) marks changed between read and write (other seq; same seq): MarksChanged, nothing written", row_bw_marks_changed),
     ("(BW-L) re-check and write in one locked section: every write under the lock; a rival after release is StaleHead", row_bw_lock_write),
+    ("(BW-SR) head stored at the seq between the reads (marks identical): decided from the re-read -> contested", row_bw_stale_decide),
+    ("(LK-ABA) marks [] -> [] across the window, rival root + fork landed in between: LogContested, 0 marks, no seq-6 row", row_lk_aba),
     ("(BW-RL) 120 junk requests from one IP do not 429 an honest head from another IP", row_bw_rate_isolation),
 ]
 
@@ -1176,10 +1374,16 @@ LW_ROWS = [
     ("(LW-8) fork on the real log: one contested record, marks removed, nothing stored for h4'", row_lw8_fork),
     ("(LW-9) replay re-verifies stored skeletons: corrupted byte / wrong kind / root with skeletons -> MarkNotRootProven", row_lw9_replay),
     ("(LW-9w) WARM cache: tampered stored row and other pins both miss the cache and replay -> MarkNotRootProven", row_lw9_warm),
+    ("(LW-9p) pins changed between observes (re-issued pin file): full replay under the new pins (6 verifies, not 2)", row_lw9_pins_change),
+    ("(LW-9c) only the stored root column changed: read and next observe -> MarkNotRootProven, nothing written", row_lw9_root_column),
     ("(LW-10) cap 256: 257 skeletons refused before any entry_hash, 0 hashes, 0 verifies (observe, lw, route)", row_lw10_cap),
     ("(LW-10b) extension byte cap and own transport field: MalformedLevel, 0 hashes, 0 verifies", row_lw10_bytes),
     ("(LF) Lodestar fork order: marks 2/4/7 then signed B@4 (chained and root) -> contested, marks emptied, log refused", row_fork_order),
     ("(NG-E) NoGrowthRootChange leaves exactly one refused-heads evidence record; marks untouched (Villhaze ec88c2fe (b))", row_nogrowth_evidence),
+    ("(NG-L) NoGrowthRootChange evidence row written with the lock held", row_ng_in_lock),
+    ("(NG-V) signed blob (Genesis sig + cosign), stored size, other root: exactly 1 refused-heads row, no contested row", row_ng_valid_one),
+    ("(NG-X0) [strict xfail: ART-42 1b2ecf8c] junk blob, stored size, other root, bad genesis_sig: 0 refused-heads rows", row_ng_junk_zero),
+    ("(NG-XN) [strict xfail: ART-42 1b2ecf8c] N+1 sends of N verified blobs: N rows, each hash counted once", row_ng_dedupe_count),
 ]
 
 
@@ -1402,6 +1606,13 @@ LW_MUT = [
      [wmut("            _record_refused_nogrowth(conn, log_id, head_hash, seq, genesis_pub,\n"
            "                                     contested, now)",
            "            pass  # mutant: drop the refused-heads write")]),
+    ("(NG-Lm) evidence write moved outside the lock", row_ng_in_lock, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        "        with open_conn() as conn:\n            _record_refused_nogrowth(",
+        "        with open_conn() as conn:\n            pass\n        if True:\n            _record_refused_nogrowth(", "observe_split"))]),
+    ("(NG-Vm) Cipher E14: evidence write made a no-op", row_ng_valid_one,
+     [mock.patch.object(wiring, "_record_refused_nogrowth", lambda *a, **k: None)]),
+    ("(LW-9pk) Cipher E12: pins dropped from the replay-cache key", row_lw9_pins_change, [mock.patch.object(wiring, "_cache_key", src_fn(wiring, "    return (genesis_pub, repr(pins), sig_ok)", "    return (genesis_pub, sig_ok)", "_cache_key"))]),
+    ("(LW-9cm) Lodestar LK17: replayed-vs-stored (size, root) compare dropped", row_lw9_root_column, [mock.patch.object(wiring, "MARK_VERIFIER", src_fn(wiring, "        if (m.size, m.root.hex()) != (size, root):\n            raise", "        if False:\n            raise", "replay_marks"))]),
 ]
 
 ORIG_SPLIT = wiring.observe_split
@@ -1421,6 +1632,15 @@ BW_MUT = [
     ("(BW-Lm) Examiner M3: write moved outside the lock (after the re-check section)", row_bw_lock_write, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
         '            raise LogContested("log has a contested seq; no mark moves until ruled")\n        return _decide_and_write(',
         '            raise LogContested("log has a contested seq; no mark moves until ruled")\n    if True:\n        return _decide_and_write(', "observe_split"))]),
+    ("(BW-SRe) Cipher E11: _decide_and_write handed the first read, not the re-read", row_bw_stale_decide, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        "        return _decide_and_write(conn, fresh, marks,", "        return _decide_and_write(conn, state, marks,", "observe_split"))]),
+    ("(BW-SRb) Examiner M3b: write section decides on the stale first read (fresh = state)", row_bw_stale_decide, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        "        fresh = _read_state(conn, log_id, seq)\n", "        fresh = state\n", "observe_split"))]),
+    ("(LK-ABAm) Lodestar LK1 / Cipher E15: re-check of fresh[\"contested\"] after the re-lock removed", row_lk_aba, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        '        if fresh["contested"]:\n            raise LogContested', '        if False:\n            raise LogContested', "observe_split"))]),
+    ("(LK-ABAs) Cipher E16: that re-check removed AND the decision made on the first read", row_lk_aba, [mock.patch.object(wiring, "observe_split", src_fn(wiring,
+        '        if fresh["contested"]:\n            raise LogContested("log has a contested seq; no mark moves until ruled")\n        return _decide_and_write(conn, fresh, marks,',
+        '        if False:\n            raise LogContested("log has a contested seq; no mark moves until ruled")\n        return _decide_and_write(conn, state, marks,', "observe_split"))]),
     ("(BW-RLm) junk charged to the per-log/global budget before the pre-check", row_bw_rate_isolation, [mock.patch.object(rlw, "charge_observe_source", lambda src: (ORIG_CSRC(src), rlw.charge_observe_scoped(LOG)))]),
 ]
 
