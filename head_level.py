@@ -476,3 +476,165 @@ def load_pins(path: str, genesis_pub: str, sig_ok, state_path: str, signers=None
             os.fsync(f.fileno())
         os.replace(tmp, state_path)
     return pins
+
+
+# ---- (3') pin file format r2 (Loom, ART-42 bdba9b29; folds Villhaze 1e762099)
+# file  = PIN_MAGIC_V2 || log_id(32) || n_entries u32 BE || entry*
+# entry = ENTRY_HEAD || ruling_ref_len u8 || ruling_ref || n_sigs u8 || (idx u8 || sig 64)*
+# Append-only, hash-chained; no delete op. Retire closes a key's range.
+
+PIN_MAGIC_V2 = b"cyberspace-witness-pins/v2\n"
+ENTRY_HEAD = struct.Struct(">Q32sB32sB32sQQ")  # seq prev op operator_id class pubkey size issued
+OP_ADD_OPERATOR, OP_ADD_KEY, OP_RETIRE_KEY = 1, 2, 3
+MAX_ENTRIES = 256
+U64_MAX = (1 << 64) - 1
+
+
+def _entry_hash(b: bytes) -> bytes:
+    return hashlib.sha256(b).digest()
+
+
+def parse_pins_v2(data: bytes, genesis_pub: str, sig_ok, signers=None, threshold=None,
+                  prefix=(0, None)):
+    """Every cheap check (structure, chain, rules, sig indices/count, upgrade
+    prefix) runs over the whole file BEFORE any signature verify. prefix is
+    (entry_seq, entry_hash) of the last accepted entry, (0, None) if none."""
+    signers = PIN_SIGNERS if signers is None else signers
+    threshold = PIN_THRESHOLD if threshold is None else threshold
+    if placeholder(signers, threshold):
+        raise Refused("pin signers are a placeholder until Villhaze rules")
+    if not data.startswith(PIN_MAGIC_V2):
+        raise Refused("pin magic")
+    p = len(PIN_MAGIC_V2)
+
+    def take(n):
+        nonlocal p
+        if p + n > len(data):
+            raise Refused("pin file truncated")
+        b = data[p:p + n]
+        p += n
+        return b
+    lid = take(32)
+    (n_entries,) = struct.unpack(">I", take(4))
+    if n_entries > MAX_ENTRIES:                     # before parsing any entry
+        raise Refused("too many entries")
+    if lid != log_id_of(genesis_pub):
+        raise Refused("pin log_id")
+    gen = bytes.fromhex(genesis_pub)
+    ops, keys, owner, retired = {}, {}, {}, set()
+    prev, hashes, pending = ZERO32, [], []
+    for want_seq in range(1, n_entries + 1):
+        start = p
+        seq, prv, op, oid, cls, pub, size, issued = ENTRY_HEAD.unpack(take(ENTRY_HEAD.size))
+        rlen = take(1)[0]
+        if rlen < 1 or rlen > 64:
+            raise Refused("ruling_ref length")
+        ref = take(rlen)
+        if any(c < 0x21 or c > 0x7e for c in ref):
+            raise Refused("ruling_ref not printable ASCII")
+        signed = PIN_MAGIC_V2 + data[start:p]
+        n_sigs = take(1)[0]
+        sigs = [(take(1)[0], take(64)) for _ in range(n_sigs)]
+        if seq != want_seq:
+            raise Refused("entry_seq")
+        if prv != prev:
+            raise Refused("prev_entry_hash")
+        if op == OP_ADD_OPERATOR:
+            if cls not in (CLASS_FLEET, CLASS_OUTSIDE):
+                raise Refused("operator class")
+            if pub != ZERO32 or size != 0:
+                raise Refused("add-operator carries no key")
+            if oid in ops:
+                raise Refused("operator already added")
+            if len(ops) >= MAX_OPS:
+                raise Refused("too many operators")
+            ops[oid] = cls
+        elif op in (OP_ADD_KEY, OP_RETIRE_KEY):
+            if cls != 0:
+                raise Refused("class must be 0x00 off add-operator")
+            if oid not in ops:
+                raise Refused("key entry before add-operator")
+            if op == OP_ADD_KEY:
+                if pub == gen:
+                    raise Refused("Genesis key in pin file")
+                if pub in retired:
+                    raise Refused("retired key re-added")
+                if pub in owner:
+                    raise Refused("pubkey already pinned")
+                if sum(1 for k in keys.values() if k["op"] == oid and k["to"] == U64_MAX) >= MAX_KEYS:
+                    raise Refused("too many live keys for operator")
+                if not _key_ok(pub):
+                    raise Refused("weak key in pin file")
+                owner[pub] = oid
+                keys[pub.hex()] = {"op": oid, "class": ops[oid], "from": size, "to": U64_MAX}
+            else:
+                if owner.get(pub) != oid or pub in retired:
+                    raise Refused("retire of a key not live for this operator")
+                if size < keys[pub.hex()]["from"]:
+                    raise Refused("validity range")
+                retired.add(pub)
+                keys[pub.hex()]["to"] = size        # close the range; never delete
+        else:
+            raise Refused("unknown op")
+        idx = [i for i, _ in sigs]
+        if idx != sorted(set(idx)):
+            raise Refused("signer indices unsorted or duplicate")
+        if any(i >= len(signers) for i in idx):
+            raise SignerIndexOutOfRange("signer index out of range")
+        if len(sigs) < threshold:
+            raise TooFewSignatures("too few pin signatures")
+        prev = _entry_hash(data[start:p])
+        hashes.append(prev)
+        pending.append((signed, sigs[:threshold]))  # at most threshold-many verifies
+    if p != len(data):                           # r2
+        raise Refused("trailing bytes")
+    pseq, phash = prefix
+    if pseq:                                         # upgrade: extend the stored chain exactly
+        if n_entries < pseq or hashes[pseq - 1] != phash:
+            raise Refused("pin file does not extend the accepted chain (rollback)")
+    signer_map = dict(enumerate(signers))
+    for _, use in pending:
+        for i, _ in use:
+            if signer_map.get(i) is None or not _key_ok(bytes.fromhex(signer_map[i])):
+                raise Refused("weak or unknown pin-signer key")
+    for signed, use in pending:
+        for i, s in use:
+            pub = signer_map.get(i)
+            if pub is None:
+                raise Refused("unknown pin signer")
+            if not sig_ok(pub, signed, s.hex()):
+                raise Refused("pin file signature")
+    last = (n_entries, hashes[-1]) if hashes else (0, None)
+    return {"log_id": lid, "keys": keys, "ops": ops, "last": last}
+
+
+def load_pins_v2(path: str, genesis_pub: str, sig_ok, state_path: str, signers=None, threshold=None):
+    """Local path only, never a network response. Stores (entry_seq,
+    entry_hash) of the last accepted entry; a new file must extend it."""
+    if placeholder(signers, threshold):
+        return None                                  # fail closed
+    if "://" in str(path):
+        raise Refused("pin file loads from a local path only")
+    prefix = (0, None)
+    if os.path.exists(state_path):
+        with open(state_path) as f:
+            st = json.load(f)
+        prefix = (st["entry_seq"], bytes.fromhex(st["entry_hash"]) if st["entry_hash"] else None)
+    with open(path, "rb") as f:
+        pins = parse_pins_v2(f.read(), genesis_pub, sig_ok, signers, threshold, prefix)
+    seq, h = pins["last"]
+    if seq > prefix[0]:
+        tmp = state_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"entry_seq": seq, "entry_hash": h.hex()}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, state_path)
+    return pins
+
+
+def verify_head_response(resp: dict, genesis_pub, pins, sig_ok, mark=None, ruling=RULING):
+    """A /head response's own pin file / pin list (resp["pins"]) is ignored:
+    only the locally loaded pins are used."""
+    return verify_head(resp["head"], resp["genesis_sig"], genesis_pub, resp.get("cosigns", []),
+                       pins, sig_ok, mark, ruling)

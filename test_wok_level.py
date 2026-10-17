@@ -485,7 +485,7 @@ def row_pin_oversize():
 def override_calls(src, fname="<src>"):
     """Calls to parse_pins/load_pins that pass signers/threshold (keyword or
     extra positional). Production code must have none (Cipher 5157a264)."""
-    base = {"parse_pins": 3, "load_pins": 4}
+    base = {"parse_pins": 3, "load_pins": 4, "parse_pins_v2": 3, "load_pins_v2": 4}
     hits = []
     for n in ast.walk(ast.parse(src, fname)):
         if isinstance(n, ast.Call):
@@ -518,7 +518,7 @@ def row_no_prod_override():
             warnings.simplefilter("ignore")
             try: hits += override_calls(open(p).read(), p)
             except SyntaxError: hits.append(p + ":unparseable")
-    # inside head_level, only load_pins -> parse_pins forwards them
+    # inside head_level, only load_pins -> parse_pins and load_pins_v2 -> parse_pins_v2 forward them
     hl_hits = override_calls(open(hl.__file__).read(), "head_level.py")
     # self-check: the scanner flags each override shape
     probe = all(override_calls(s_) for s_ in ("hl.parse_pins(d, g, s, ('aa',), 1)",
@@ -526,7 +526,7 @@ def row_no_prod_override():
                                              "hl.load_pins(p, g, s, st, signers=x)",
                                              "hl.load_pins(p, g, s, st, **kw)"))
     clean = not override_calls("hl.parse_pins(d, g, s); hl.load_pins(p, g, s, st)")
-    return len(production_files()) > 0 and hits == [] and len(hl_hits) == 1 and probe and clean
+    return len(production_files()) > 0 and hits == [] and len(hl_hits) == 2 and probe and clean
 def row_sig_calls():
     CALLS[0] = 0; parse(pinfile(OPS, signer_ks=((0, s0), (1, s1), (2, s2)))); return CALLS[0] <= THR
 
