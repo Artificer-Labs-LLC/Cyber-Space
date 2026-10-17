@@ -44,9 +44,33 @@ check has passed (Bulwark gate row):
 
 There is no refusal cache of any kind (a609764 F-B2): a refused encoding
 is forgotten, so a clean encoding of the same head is judged on its own.
+
+Locking (Bulwark 8078a11 BLOCK #1). observe_split(open_conn, ...) never
+verifies a signature while holding the DB lock: it reads the mark rows, the
+contested flag and the stored hashes at this seq under one short lock,
+proves the marks and verifies the new head OFF the lock, then re-takes the
+lock and writes only if the mark rows are byte-identical to what it read
+(otherwise MarksChanged, nothing written; the caller may retry). How stored
+rows become VerifiedMarks is MARK_VERIFIER: Bulwark's replay from the root
+is the default; Loom's alternative (trust stored marks, or a per-mark
+verified flag) can replace it there once Villhaze rules, without touching
+observe. Before any verify, a contested log is refused and a head whose
+head_hash is already stored at its seq is a no-op (Bulwark #2); after an
+insert the replay cache is extended with the new row, so the next observe
+does not replay it.
+
+OPEN for Villhaze (current behaviour kept, not decided here):
+  1. Tampered DB vs trusted marks: MARK_VERIFIER = replay_marks re-verifies
+     every stored mark from the root (defends against a tampered mark
+     table); Loom's alternative trusts the stored marks (or a per-mark
+     verified flag). Replay stays the default until she rules.
+  2. NoGrowthRootChange (same tree_size, different root): refused in
+     hl.cheap_head before any verify and leaves NO record (no observed row,
+     no contested row). Whether it should leave evidence is open.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import time
@@ -116,6 +140,11 @@ class StaleHead(hl.Refused):
 
 class LogContested(hl.Refused):
     """The log has a contested (forked) seq; no mark moves until ruled."""
+
+
+class MarksChanged(hl.Refused):
+    """The stored marks changed between the read and the write (another
+    observe wrote first); nothing written, retry."""
 
 
 # ---- legacy signatures pre-check (Bulwark/Cipher 8360b0c8 item 1) -------
@@ -199,14 +228,20 @@ def _mark_rows(conn, log_id: str):
 _MARK_CACHE: dict = {}
 
 
-def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
-    """Every stored mark for the log as hl.VerifiedMark, replayed from the
-    root: the lowest row through hl.root_mark, each later row through
-    hl.extend_mark (re-verifying its stored skeletons) from the one below it. Any refusal, or a replayed mark
-    that differs from the stored (tree_size, root), refuses the whole set
-    (MarkNotRootProven). Reads the mark table only."""
-    rows = [tuple(r) for r in _mark_rows(conn, log_id)]
-    key = (genesis_pub, repr(pins), sig_ok)
+def _cache_key(genesis_pub, pins, sig_ok):
+    return (genesis_pub, repr(pins), sig_ok)
+
+
+def replay_marks(rows, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
+    """Bulwark's mark verifier (the default MARK_VERIFIER): every stored mark
+    row for the log as hl.VerifiedMark, replayed from the root: the lowest
+    row through hl.root_mark, each later row through hl.extend_mark
+    (re-verifying its stored skeletons) from the one below it. Any refusal,
+    or a replayed mark that differs from the stored (tree_size, root),
+    refuses the whole set (MarkNotRootProven). Pure: takes the rows, holds
+    no lock, reads nothing."""
+    rows = [tuple(r) for r in rows]
+    key = _cache_key(genesis_pub, pins, sig_ok)
     hit = _MARK_CACHE.get(log_id)
     out, prev, start = [], None, 0
     if hit is not None and hit[0] == key and rows[:len(hit[1])] == hit[1]:
@@ -235,6 +270,24 @@ def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
         out.append(m)
     _MARK_CACHE[log_id] = (key, rows, tuple(out))
     return out
+
+
+def _remember(log_id, genesis_pub, pins, sig_ok, rows, marks) -> None:
+    """Bulwark #2: after an insert, the cache holds the rows as now stored and
+    their marks, so the next observe replays nothing it already proved."""
+    _MARK_CACHE[log_id] = (_cache_key(genesis_pub, pins, sig_ok), [tuple(r) for r in rows], tuple(marks))
+
+
+# The mark-verification policy: rows -> [hl.VerifiedMark]. Runs off the DB
+# lock. Bulwark (default, safe): replay_marks. Loom's alternative (trust the
+# stored marks, or a per-mark verified flag) goes here if Villhaze picks it.
+MARK_VERIFIER = replay_marks
+
+
+def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
+    """Every stored mark for the log as hl.VerifiedMark (MARK_VERIFIER over
+    the mark table). Reads the mark table only."""
+    return MARK_VERIFIER(_mark_rows(conn, log_id), log_id, genesis_pub, pins, sig_ok)
 
 
 # ---- observe ------------------------------------------------------------
@@ -283,19 +336,41 @@ def _mark_contested(conn, log_id, seq, hash_a, hash_b, now):
                  (log_id, seq, hash_a, hash_b, now))
 
 
+def _read_state(conn, log_id, seq) -> dict:
+    """Everything observe needs from the DB, in one short read."""
+    init_schema(conn)
+    return {"rows": [tuple(r) for r in _mark_rows(conn, log_id)],
+            "contested": conn.execute("SELECT 1 FROM legacy_contested_heads WHERE log_id=?",
+                                      (log_id,)).fetchone() is not None,
+            "stored": [r[0] for r in conn.execute(
+                "SELECT head_hash FROM legacy_observed_heads WHERE log_id=? AND seq=? ORDER BY seen_at, head_hash",
+                (log_id, seq)).fetchall()]}
+
+
 def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
+    """observe_split over one connection the caller already holds."""
+    return observe_split(lambda: contextlib.nullcontext(conn), vhead, level, genesis_pub, pins, sig_ok, now)
+
+
+def observe_split(open_conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
+    """open_conn() is a context manager yielding a connection under the DB
+    lock. It is entered twice, briefly: read, then (after every verify, off
+    the lock) re-check and write."""
     if not isinstance(vhead, VerifiedLegacyHead):
         raise TypeError("observe takes a VerifiedLegacyHead")
     h = vhead.head
     log_id, seq, head_hash = h["log_id"], h["seq"], h["head_hash"]
-    init_schema(conn)
     blob, ext = _level_shape(level)
     if not isinstance(genesis_pub, str) or len(genesis_pub) != 64 \
             or hl.log_id_of(genesis_pub).hex() != log_id:
         raise LevelNotBound("pinned log_id is not SHA-256 of the pinned Genesis key")
-    if conn.execute("SELECT 1 FROM legacy_contested_heads WHERE log_id=?", (log_id,)).fetchone():
+    with open_conn() as conn:               # short lock: read only, no verify
+        state = _read_state(conn, log_id, seq)
+    if state["contested"]:
         raise LogContested("log has a contested seq; no mark moves until ruled")
-    marks = proven_marks(conn, log_id, genesis_pub, pins, sig_ok)   # before cheap_head runs
+    if head_hash in state["stored"]:        # Bulwark #2: a replay costs no verify
+        return {"status": "already-observed", "log_id": log_id, "seq": seq}
+    marks = MARK_VERIFIER(state["rows"], log_id, genesis_pub, pins, sig_ok)   # off the lock, before cheap_head
     claimed = _claimed_prev(blob)
     vmark = None
     if claimed != (0, hl.ZERO32):
@@ -313,12 +388,22 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
         raise MappingMismatch("legacy seq is not head_level tree_size")
     if new_mark.root.hex() != head_hash:
         raise MappingMismatch("legacy head_hash is not head_level root")
-    # ---- every check passed; decide, then write ----
+    # ---- every check passed; re-take the lock, re-check, decide, write ----
+    with open_conn() as conn:
+        fresh = _read_state(conn, log_id, seq)
+        if fresh["rows"] != state["rows"]:
+            raise MarksChanged("stored marks changed during verification; retry")
+        if fresh["contested"]:
+            raise LogContested("log has a contested seq; no mark moves until ruled")
+        return _decide_and_write(conn, fresh, marks, vmark, new_mark, level, ext, level_name,
+                                 log_id, seq, head_hash, genesis_pub, pins, sig_ok, now)
+
+
+def _decide_and_write(conn, fresh, marks, vmark, new_mark, level, ext, level_name,
+                      log_id, seq, head_hash, genesis_pub, pins, sig_ok, now):
     now = int(time.time()) if now is None else now
     latest = marks[-1] if marks else None
-    stored = [r[0] for r in conn.execute(
-        "SELECT head_hash FROM legacy_observed_heads WHERE log_id=? AND seq=? ORDER BY seen_at, head_hash",
-        (log_id, seq)).fetchall()]
+    stored = fresh["stored"]
     if head_hash in stored:
         return {"status": "already-observed", "log_id": log_id, "seq": seq}
     if stored:                              # Lodestar b5334563: fork evidence before StaleHead
@@ -329,12 +414,14 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
         raise StaleHead("head seq is below the latest proven mark (unstored seq)")
     if vmark != latest:
         raise NotFromLatestMark("head does not chain from the latest proven mark")
+    row = (new_mark.size, new_mark.root.hex(), PROOF_ROOT if vmark is None else PROOF_CHAIN,
+           level["blob"], level["genesis_sig"], json.dumps(hl.normalize_cosigns(level["cosigns"])),
+           json.dumps(ext))
     conn.execute("INSERT INTO legacy_observed_heads (log_id, seq, head_hash, seen_at) VALUES (?,?,?,?)",
                  (log_id, seq, head_hash, now))
     conn.execute(
         "INSERT INTO legacy_level_marks (log_id, tree_size, root, proof_kind, blob, genesis_sig,"
-        " cosigns, proof, set_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (log_id, new_mark.size, new_mark.root.hex(), PROOF_ROOT if vmark is None else PROOF_CHAIN,
-         level["blob"], level["genesis_sig"], json.dumps(hl.normalize_cosigns(level["cosigns"])),
-         json.dumps(ext), now))
+        " cosigns, proof, set_at) VALUES (?,?,?,?,?,?,?,?,?)", (log_id,) + row + (now,))
+    if MARK_VERIFIER is replay_marks:       # Bulwark #2: refresh the cache after the insert
+        _remember(log_id, genesis_pub, pins, sig_ok, fresh["rows"] + [row], list(marks) + [new_mark])
     return {"status": "observed", "log_id": log_id, "seq": seq, "level": level_name}

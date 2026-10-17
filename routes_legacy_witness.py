@@ -20,6 +20,7 @@ cap so one source cannot fill it for everyone.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -299,6 +300,13 @@ def legacy_log_witnessed(request: Request):
                           for r in contested]}
 
 
+@contextlib.contextmanager
+def _locked_conn():
+    with core._db_lock, core._db() as conn:
+        window_open.init_schema(conn)
+        yield conn
+
+
 @router.post("/api/v1/legacy-log/observe")
 async def legacy_log_observe(request: Request):
     src = ratesrc.source(request)
@@ -306,10 +314,8 @@ async def legacy_log_observe(request: Request):
     try:
         data = await request.json()
     except Exception:
-        charge_observe_scoped("malformed")
         raise HTTPException(status_code=400, detail="body is not JSON")
     if not isinstance(data, dict):
-        charge_observe_scoped("malformed")
         raise HTTPException(status_code=400, detail="body is not an object")
     signed = data.get("head")
     log_id = "missing"
@@ -317,7 +323,6 @@ async def legacy_log_observe(request: Request):
         lid = signed["head"].get("log_id")
         if isinstance(lid, str) and lid.strip():
             log_id = lid.strip().lower()
-    charge_observe_scoped(log_id)
 
     def verify():
         pin = pinned()
@@ -332,6 +337,14 @@ async def legacy_log_observe(request: Request):
             wiring.precheck_level(data.get("level"))
         except hl.Refused as e:
             raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        try:
+            wiring.precheck_signatures(signed, wset)
+        except lw.WitnessRefused as e:
+            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
+        # Bulwark 8078a11 #3: the per-log and global budgets are charged only
+        # once the typed pre-check passes, so junk from one source (charged
+        # to its own per-IP bucket above) cannot exhaust an honest head's.
+        charge_observe_scoped(log_id)
         try:
             vhead = wiring.verify_legacy(signed, wset, pinned_log, sig_ok=lw.checkvalid_ok)
         except lw.WitnessRefused as e:
@@ -349,13 +362,17 @@ async def legacy_log_observe(request: Request):
         try:
             pins = hl.load_pins(os.environ.get("CYBERNET_WITNESS_PINS", ""), genesis_pub or "",
                                 lw.checkvalid_ok, os.path.join(core._DB_DIR, "witness-pins.state.json"))
-            with core._db_lock, core._db() as conn:
-                window_open.init_schema(conn)
-                return wiring.observe(conn, vhead, data.get("level"), genesis_pub, pins, lw.checkvalid_ok)
+            # Bulwark 8078a11 #1: the lock is held only to read, then to
+            # re-check and write; every verify runs between, off the lock.
+            return wiring.observe_split(_locked_conn, vhead, data.get("level"), genesis_pub, pins,
+                                        lw.checkvalid_ok)
         except wiring.LevelNotBound as e:
             raise HTTPException(status_code=503, detail=str(e))
         except wiring.LogContested as e:
             raise HTTPException(status_code=409, detail=str(e))
+        except wiring.MarksChanged as e:
+            # marks moved while we verified off the lock: nothing written, retry
+            raise HTTPException(status_code=409, detail=f"MarksChanged: {e}")
         except hl.Refused as e:
             raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
 
