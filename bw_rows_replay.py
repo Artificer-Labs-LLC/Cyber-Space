@@ -28,6 +28,9 @@ R-C  Examiner's two rows (replace the old R-C1).
            binding before re-federating). Not executed.
      R-C3  lagging mirror that only ever saw A@T0 receives B + A->B@T1.
            EXPECTED-OPEN evidence row (REPORTED, not asserted).
+R-C1bGC  lazy GC (_name_registry_has_room) never deletes a frozen row: unrelated new
+     claim (gossip / route) leaves it byte-identical; foreign claim refused. R-C1bGCP: parseable
+     expired rows ARE pruned (positive control).
 R-D  One sender, N stale (replayed) rotation records per seat: count rotation-
      record Ed25519 verifies, binding verifies, max _db_lock hold, and rows written
      to name_bindings / name_rotations / name_conflicts.  ASSERT 0 rotation
@@ -329,6 +332,60 @@ CNT["rot"] = 0; HOLD.clear()
 out = gossip(bind(ks[8], name, T(seconds=1)), chain=chain)
 row("R-D4", True, CNT["rot"] == 0 and holder(name)[0] == pub(V),
     f"unanchored 8-hop self chain -> {out}; rotation verifies={CNT['rot']} max lock hold={max(HOLD)*1000:.0f}ms")
+
+# ---------------- R-C1bGC (Examiner 96dbe6a4, ART-37): lazy GC in _name_registry_has_room
+# must never delete a frozen (unparseable) row. Seed name N held by A with an unparseable
+# stamp, trigger an UNRELATED genuinely-new-name claim (which runs the GC), assert N's row
+# is byte-identical, then a foreign key X claims N on the same path: refused, holder A.
+# Variants: e = expires_at '2026-02-30T00:00:00Z' only (sorts below now, the live hole);
+#           b = issued_at AND expires_at unparseable; i = issued_at unparseable, expires_at
+#           parseable and PAST (frozen by _old_binding_beaten's definition, so GC keeps it).
+# Positive control R-C1bGCP: parseable expired rows (Z and +00:00 spellings) ARE pruned.
+GC_BAD_EXP = "2026-02-30T00:00:00Z"
+def fullrow(name):
+    with core._db_lock, core._db() as conn:
+        x = conn.execute("SELECT name, node_pubkey, issued_at, expires_at, signature "
+                         "FROM name_bindings WHERE name=?", (name,)).fetchone()
+    return tuple(x) if x else None
+def gc_seed(name, A, iss, exp):  # throwaway DB only: claim, then force the stored stamps
+    assert C.post("/api/v1/names/claim", data=bind(A, name, T(minutes=3))).status_code == 200
+    with core._db_lock, core._db() as conn:
+        conn.execute("UPDATE name_bindings SET issued_at=?, expires_at=? WHERE name=?", (iss, exp, name))
+    return fullrow(name)
+def via_path(via, b):
+    if via == "gossip":
+        return gossip(b)
+    return f"HTTP {C.post('/api/v1/names/claim', data=b).status_code}"
+GC_LANDED = ("inserted", "replaced", "HTTP 200")
+for tag, via in (("G", "gossip"), ("R", "route")):
+    for var, iss_fn, exp in (("e", lambda: T(minutes=3), GC_BAD_EXP),
+                             ("b", lambda: BAD, GC_BAD_EXP),
+                             ("i", lambda: BAD, T(days=1))):
+        name = f"rc1bgc-{var}-{via}"
+        A, X, K = key(), key(), key()
+        before = gc_seed(name, A, iss_fn(), exp)
+        o_new = via_path(via, bind(K, f"gc-unrel-{var}-{via}", T(seconds=0)))
+        mid = fullrow(name)
+        o_x = via_path(via, bind(X, name, T(seconds=0)))
+        after = fullrow(name)
+        ok = (o_new in GC_LANDED and mid == before and o_x not in GC_LANDED
+              and after == before)
+        row(f"R-C1bGC{tag}{var}", True, ok,
+            f"{via}: seed A iss={before[2]!r} exp={before[3]!r}; unrelated new claim -> {o_new}; "
+            f"row {'byte-identical' if mid == before else 'CHANGED/GONE: ' + repr(mid and mid[1:4])}; "
+            f"foreign X claim -> {o_x}; holder="
+            f"{'A' if after and after[1] == pub(A) else ('X' if after and after[1] == pub(X) else repr(after))}")
+for tag, via in (("G", "gossip"), ("R", "route")):
+    names = []
+    for sfx in ("Z", "+00:00"):
+        name = f"rc1bgcp-{via}-{'z' if sfx == 'Z' else 'p'}"
+        exp = (NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S") + sfx
+        gc_seed(name, key(), T(days=2), exp)
+        names.append(name)
+    o_new = via_path(via, bind(key(), f"gcp-unrel-{via}", T(seconds=0)))
+    left = [n for n in names if fullrow(n) is not None]
+    row(f"R-C1bGCP{tag}", True, o_new in GC_LANDED and not left,
+        f"{via}: 2 parseable expired rows (Z, +00:00); unrelated new claim -> {o_new}; survivors={left}")
 
 fails = [r for r, a, ok in RESULTS if a and not ok]
 print("---\nSUMMARY: %d asserted rows, %d failed%s" % (sum(1 for _, a, _ in RESULTS if a), len(fails),

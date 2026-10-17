@@ -2168,12 +2168,51 @@ def _name_registry_has_room(conn) -> bool:
     Genuinely-new names past NAME_REGISTRY_CAP are refused, while
     renewals and re-contests of known names always merge (the existence
     check sits before the gate, same family as the peers/channel_subs/
-    DM-thread roster caps). Lazy GC: expired rows are dead weight the
-    gossip send-half already skips and nothing ever deletes, so they are
-    pruned on the insert path before the count — otherwise expired rows
-    could wedge the registry forever. The <= string comparison matches
-    the rest of the gossip path's expiry semantics."""
-    conn.execute("DELETE FROM name_bindings WHERE expires_at <= ?", (_now(),))
+    DM-thread roster caps). Called only on the genuinely-new-name insert
+    of both paths (core.py ingest_gossiped_binding, routes_social_serve
+    names_claim), under _db_lock.
+
+    Lazy GC (BW-RC1bGC, ART-37 Examiner 96dbe6a4): expired rows are dead
+    weight the gossip send-half already skips, so they are pruned here
+    before the count -- otherwise expired rows could wedge the registry.
+    Expiry is CHRONOLOGICAL via _parse_claim_time, the same parser every
+    other registry gate uses, never a string comparison. A row is
+    deleted only if issued_at AND expires_at both PARSE and expires_at
+    is <= now. A row where either stamp does not parse is a BW-RC1B
+    frozen row:
+    refused for every key by _old_binding_beaten, and NEVER deleted
+    here. "Unparseable" is _old_binding_beaten's definition: issued_at OR
+    expires_at fails to parse (so a garbage-issued_at row with a past
+    parseable expiry stays frozen too, matching the claim gate and the
+    runbook count). The old `DELETE ... WHERE expires_at <= ?` compare
+    deleted e.g. '2026-02-30T00:00:00Z' on the next unrelated new-name
+    claim, after which any key could claim the name. Frozen rows are
+    cleared only by refused-bindings at window-open or the runbook.
+
+    Cost: one indexed range scan (idx_name_bindings_expires) for
+    candidates, then one parse per candidate and a DELETE by primary key
+    per expired row. The SQL bound is only a candidate SUPERSET, never
+    the decision: every parseable stamp is canonical fixed-width
+    YYYY-MM-DDTHH:MM:SS + (Z|+00:00), so a parseable row with
+    expires_at <= now sorts <= now rendered with the 'Z' suffix ('Z'
+    sorts above '+'). Candidates are bounded by the table size, which
+    the cap holds at NAME_REGISTRY_CAP for API-created rows. Frozen
+    rows that sort low are re-parsed on each new-name insert (cheap:
+    one regex + datetime per row) and still COUNT toward the cap."""
+    now_dt = datetime.now(timezone.utc)
+    bound = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    dead = []
+    for name, issued_at, expires_at in conn.execute(
+            "SELECT name, issued_at, expires_at FROM name_bindings"
+            " WHERE expires_at <= ?", (bound,)).fetchall():
+        try:
+            _parse_claim_time(issued_at)  # frozen iff EITHER stamp fails
+            if _parse_claim_time(expires_at) <= now_dt:
+                dead.append((name,))
+        except (ValueError, OverflowError):
+            continue  # unparseable: frozen (BW-RC1B), never GC'd
+    if dead:
+        conn.executemany("DELETE FROM name_bindings WHERE name=?", dead)
     n = conn.execute("SELECT COUNT(*) FROM name_bindings").fetchone()[0]
     return n < NAME_REGISTRY_CAP
 
