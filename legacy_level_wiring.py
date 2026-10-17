@@ -10,9 +10,12 @@ check has passed (Bulwark gate row):
   1. verify_legacy: signatures pre-check (cap, malformed, unpinned,
      duplicate witness; typed, 0 verifies), then lw.verify_head (one verify
      per witness). Runs in the route's verify phase, off the DB lock.
-  2. level encoding shape (MalformedLevel).
+  2. level encoding shape (MalformedLevel), incl. the extension transport
+     field: at most lw.MAX_EXTENSION skeletons under lw.MAX_EXTENSION_BYTES
+     (Villhaze a73a009e). The route runs this before step 1 as well, so a
+     capped or oversized body costs 0 hashes and 0 verifies.
   3. proven marks for the log are rebuilt from the mark table only, by
-     replaying the stored heads through hl.root_mark / hl.advance_mark, so
+     replaying the stored heads through hl.root_mark / hl.extend_mark, so
      every mark is an hl.VerifiedMark (Examiner row; Bulwark rule 3 and
      item 3). A broken chain is MarkNotRootProven, raised before the new
      head reaches cheap_head.
@@ -23,13 +26,19 @@ check has passed (Bulwark gate row):
   5. hl.verify_head (all typed refusals, incl. MalformedCosign and
      DuplicateCosign, before any write).
   6. mapping (Lodestar): legacy seq == tree_size, head_hash == root.
-  7. consistency (Bulwark rule 3): a non-root head carries an RFC 9162
-     consistency proof from its proven prev mark to its own root.
+  7. extension (Bulwark rule 3; Villhaze ART-42 7e9eb9b5 (b)): a legacy
+     head_hash is a hash-chain tip (entry_hash at seq), not an RFC 9162
+     root, so a non-root head carries the header skeletons prev+1..seq,
+     each linked by prev_hash back to its proven prev mark's tip and ending
+     at its own head_hash (hl.extend_mark / lw.verify_extension). The RFC
+     9162 path (hl.advance_mark) is not used for legacy logs.
   8. (checked first, before any replay) a contested log is refused.
-     A head below the latest mark is stale; replay
-     is a no-op; a second threshold head at a stored (log_id, seq) with
-     another head_hash is a fork: exactly one contested record, every mark
-     for the log removed, nothing stored for the second head (fork row).
+     Then, in this order (Lodestar b5334563, Villhaze 0ff5838c): a head at
+     a STORED (log_id, seq) with the stored head_hash is a no-op; with
+     another head_hash it is a fork, whatever the latest mark: exactly one
+     contested record, every mark for the log removed, nothing stored for
+     the second head. Only a head below the latest mark at an UNSTORED seq
+     is StaleHead.
   9. a new seq must chain from the LATEST proven mark (or be the root
      head of a log with no mark). Then: one observed row, one mark row.
 
@@ -46,9 +55,8 @@ import head_level as hl
 import legacy_witness as lw
 
 MAX_LEVEL_BLOB = max(len(t) for t in hl.TAGS.values()) + hl.BODY.size
-MAX_CONSISTENCY = 64
 PROOF_ROOT = "root"
-PROOF_CONSISTENCY = "consistency"
+PROOF_CHAIN = "chain"
 
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS legacy_observed_heads (
@@ -90,7 +98,7 @@ class MappingMismatch(hl.Refused):
     """Legacy (seq, head_hash) is not head_level's (tree_size, root)."""
 
 
-ConsistencyRefused = hl.ConsistencyRefused
+ExtensionRefused = hl.ExtensionRefused
 
 
 class MarkNotRootProven(hl.Refused):
@@ -102,7 +110,8 @@ class NotFromLatestMark(hl.Refused):
 
 
 class StaleHead(hl.Refused):
-    """Bulwark 8360b0c8 item 2: seq below the latest proven mark."""
+    """Bulwark 8360b0c8 item 2: seq below the latest proven mark, at a seq
+    with no stored head (a stored seq is a no-op or a fork)."""
 
 
 class LogContested(hl.Refused):
@@ -193,7 +202,7 @@ _MARK_CACHE: dict = {}
 def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
     """Every stored mark for the log as hl.VerifiedMark, replayed from the
     root: the lowest row through hl.root_mark, each later row through
-    hl.advance_mark from the one below it. Any refusal, or a replayed mark
+    hl.extend_mark (re-verifying its stored skeletons) from the one below it. Any refusal, or a replayed mark
     that differs from the stored (tree_size, root), refuses the whole set
     (MarkNotRootProven). Reads the mark table only."""
     rows = [tuple(r) for r in _mark_rows(conn, log_id)]
@@ -207,15 +216,15 @@ def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
         try:
             b = bytes.fromhex(blob)
             cs = json.loads(cosigns)
-            path = [bytes.fromhex(p) for p in json.loads(proof)]
+            ext = json.loads(proof)
             if prev is None:
-                if kind != PROOF_ROOT or path:
+                if kind != PROOF_ROOT or ext != []:
                     raise MarkNotRootProven("lowest stored mark is not a root-verified head")
                 _, m = hl.root_mark(b, gsig, genesis_pub, cs, pins, sig_ok)
             else:
-                if kind != PROOF_CONSISTENCY:
-                    raise MarkNotRootProven("stored mark above the root is not a consistency step")
-                _, m = hl.advance_mark(prev, b, gsig, genesis_pub, cs, pins, sig_ok, path)
+                if kind != PROOF_CHAIN:
+                    raise MarkNotRootProven("stored mark above the root is not a chain-extension step")
+                _, m = hl.extend_mark(prev, b, gsig, genesis_pub, cs, pins, sig_ok, ext)
         except MarkNotRootProven:
             raise
         except (hl.Refused, ValueError, TypeError, KeyError, AttributeError):
@@ -231,18 +240,29 @@ def proven_marks(conn, log_id: str, genesis_pub: str, pins, sig_ok) -> list:
 # ---- observe ------------------------------------------------------------
 
 def _level_shape(level):
-    if not isinstance(level, dict) or set(level) != {"blob", "genesis_sig", "cosigns", "consistency"}:
-        raise MalformedLevel("level must be {blob, genesis_sig, cosigns, consistency}")
-    blob, gsig, cons = level["blob"], level["genesis_sig"], level["consistency"]
+    if not isinstance(level, dict) or set(level) != {"blob", "genesis_sig", "cosigns", "extension"}:
+        raise MalformedLevel("level must be {blob, genesis_sig, cosigns, extension}")
+    blob, gsig, ext = level["blob"], level["genesis_sig"], level["extension"]
     if not isinstance(blob, str) or len(blob) > 2 * MAX_LEVEL_BLOB or not isinstance(gsig, str) \
-            or len(gsig) != 128 or not isinstance(cons, list) or len(cons) > MAX_CONSISTENCY \
-            or not all(isinstance(c, str) and len(c) == 64 for c in cons):
+            or len(gsig) != 128 or not isinstance(ext, list):
         raise MalformedLevel("level field shape")
+    if len(ext) > lw.MAX_EXTENSION:                       # Villhaze a73a009e: 256 per proof
+        raise MalformedLevel("extension over the per-proof skeleton cap")
+    if not all(isinstance(e, dict) for e in ext):
+        raise MalformedLevel("extension entries must be objects")
+    if len(json.dumps(ext).encode()) > lw.MAX_EXTENSION_BYTES:
+        raise MalformedLevel("extension over its byte cap")
     try:
         bytes.fromhex(gsig)
-        return bytes.fromhex(blob), [bytes.fromhex(c) for c in cons]
+        return bytes.fromhex(blob), ext
     except ValueError:
         raise MalformedLevel("level field is not hex") from None
+
+
+def precheck_level(level) -> None:
+    """The level transport shape and caps, run by the route before any
+    witness verify (0 hashes, 0 verifies on a refusal)."""
+    _level_shape(level)
 
 
 def _claimed_prev(blob: bytes):
@@ -269,7 +289,7 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
     h = vhead.head
     log_id, seq, head_hash = h["log_id"], h["seq"], h["head_hash"]
     init_schema(conn)
-    blob, path = _level_shape(level)
+    blob, ext = _level_shape(level)
     if not isinstance(genesis_pub, str) or len(genesis_pub) != 64 \
             or hl.log_id_of(genesis_pub).hex() != log_id:
         raise LevelNotBound("pinned log_id is not SHA-256 of the pinned Genesis key")
@@ -281,13 +301,14 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
     if claimed != (0, hl.ZERO32):
         vmark = next((m for m in marks if (m.size, m.root) == claimed), None)
     if vmark is None:                       # cheap_head: FirstContactRefused unless the root
+        hl.cheap_head(blob, hl.log_id_of(genesis_pub), None)    # FirstContactRefused first, no verify
+        if ext:
+            raise ExtensionRefused("a root head carries no chain extension")
         level_name, new_mark = hl.root_mark(blob, level["genesis_sig"], genesis_pub,
                                             level["cosigns"], pins, sig_ok)
-        if path:
-            raise ConsistencyRefused("a root head carries no consistency proof")
     else:
-        level_name, new_mark = hl.advance_mark(vmark, blob, level["genesis_sig"], genesis_pub,
-                                               level["cosigns"], pins, sig_ok, path)
+        level_name, new_mark = hl.extend_mark(vmark, blob, level["genesis_sig"], genesis_pub,
+                                              level["cosigns"], pins, sig_ok, ext)
     if new_mark.size != seq:
         raise MappingMismatch("legacy seq is not head_level tree_size")
     if new_mark.root.hex() != head_hash:
@@ -295,17 +316,17 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
     # ---- every check passed; decide, then write ----
     now = int(time.time()) if now is None else now
     latest = marks[-1] if marks else None
-    if latest is not None and seq < latest.size:
-        raise StaleHead("head seq is below the latest proven mark")
     stored = [r[0] for r in conn.execute(
         "SELECT head_hash FROM legacy_observed_heads WHERE log_id=? AND seq=? ORDER BY seen_at, head_hash",
         (log_id, seq)).fetchall()]
     if head_hash in stored:
         return {"status": "already-observed", "log_id": log_id, "seq": seq}
-    if stored:
+    if stored:                              # Lodestar b5334563: fork evidence before StaleHead
         _mark_contested(conn, log_id, seq, stored[0], head_hash, now)
         conn.execute("DELETE FROM legacy_level_marks WHERE log_id=?", (log_id,))
         return {"status": "contested", "log_id": log_id, "seq": seq}
+    if latest is not None and seq < latest.size:
+        raise StaleHead("head seq is below the latest proven mark (unstored seq)")
     if vmark != latest:
         raise NotFromLatestMark("head does not chain from the latest proven mark")
     conn.execute("INSERT INTO legacy_observed_heads (log_id, seq, head_hash, seen_at) VALUES (?,?,?,?)",
@@ -313,7 +334,7 @@ def observe(conn, vhead, level, genesis_pub, pins, sig_ok, now=None) -> dict:
     conn.execute(
         "INSERT INTO legacy_level_marks (log_id, tree_size, root, proof_kind, blob, genesis_sig,"
         " cosigns, proof, set_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (log_id, new_mark.size, new_mark.root.hex(), PROOF_ROOT if vmark is None else PROOF_CONSISTENCY,
+        (log_id, new_mark.size, new_mark.root.hex(), PROOF_ROOT if vmark is None else PROOF_CHAIN,
          level["blob"], level["genesis_sig"], json.dumps(hl.normalize_cosigns(level["cosigns"])),
-         json.dumps([p.hex() for p in path]), now))
+         json.dumps(ext), now))
     return {"status": "observed", "log_id": log_id, "seq": seq, "level": level_name}

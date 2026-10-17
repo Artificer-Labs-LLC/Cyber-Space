@@ -328,6 +328,10 @@ async def legacy_log_observe(request: Request):
             raise HTTPException(status_code=400, detail="head is for another log")
         # Pinned keys passed weak_reason at pin load; the request path runs
         # the typed signatures pre-check, then checkvalid once per witness.
+        try:                                # transport caps first: 0 hashes, 0 verifies
+            wiring.precheck_level(data.get("level"))
+        except hl.Refused as e:
+            raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}")
         try:
             vhead = wiring.verify_legacy(signed, wset, pinned_log, sig_ok=lw.checkvalid_ok)
         except lw.WitnessRefused as e:
@@ -336,7 +340,7 @@ async def legacy_log_observe(request: Request):
 
     def write():
         # ART-42 wiring cut: every head_level check (mark rebuilt from the
-        # root, cheap_head, cosigns, mapping, consistency, fork) runs in
+        # root, cheap_head, cosigns, mapping, chain extension, fork) runs in
         # legacy_level_wiring.observe before any row is written.
         vhead = data.get("_head")
         if vhead is None:

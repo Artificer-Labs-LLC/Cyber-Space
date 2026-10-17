@@ -94,17 +94,23 @@ class ConsistencyRefused(Refused):
     """No valid RFC 9162 consistency proof from the prev mark to this head."""
 
 
+class ExtensionRefused(Refused):
+    """Legacy chain extension (ART-42 7e9eb9b5 (b)): the header skeletons do
+    not carry the prev mark's tip to this head's root."""
+
+
 class VerifiedMark:
     """Opaque continuity mark (tree_size, root). Only root_mark() (a head
-    verified at the root: prev_size 0, prev_root ZERO32) and advance_mark()
-    (an earlier VerifiedMark plus a verified head and consistency proof)
-    build one. cheap_head/verify_head refuse anything else."""
+    verified at the root: prev_size 0, prev_root ZERO32), advance_mark()
+    (an earlier VerifiedMark plus a verified head and consistency proof) and
+    extend_mark() (an earlier VerifiedMark plus a verified head and legacy
+    chain extension) build one. cheap_head/verify_head refuse anything else."""
     __slots__ = ("_size", "_root")
     _token = object()
 
     def __init__(self, size, root, _t=None):
         if _t is not VerifiedMark._token:
-            raise UnverifiedMark("VerifiedMark comes from root_mark/advance_mark only")
+            raise UnverifiedMark("VerifiedMark comes from root_mark/advance_mark/extend_mark only")
         object.__setattr__(self, "_size", size)
         object.__setattr__(self, "_root", root)
 
@@ -325,6 +331,26 @@ def advance_mark(prev, blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, pr
     h = cheap_head(blob, log_id_of(genesis_pub), prev)
     if not verify_consistency(prev.size, h["tree_size"], prev.root, h["root"], proof):
         raise ConsistencyRefused("consistency proof from the prev mark does not verify")
+    return level, VerifiedMark(h["tree_size"], h["root"], VerifiedMark._token)
+
+
+def extend_mark(prev, blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, skeletons, ruling=RULING):
+    """Legacy logs (Villhaze ART-42 7e9eb9b5 (b)): their root is a hash-chain
+    tip (entry_hash at seq), not an RFC 9162 root, so a mark advances on the
+    header skeletons prev.size+1..tree_size, checked by
+    legacy_witness.verify_extension, instead of a consistency proof. An
+    earlier VerifiedMark, a head whose prev_* is that mark, and the
+    skeletons -> (level, VerifiedMark). The extension is checked (hashing
+    only) before any signature verify."""
+    import legacy_witness as lw
+    if type(prev) is not VerifiedMark:
+        raise UnverifiedMark("extend_mark needs a VerifiedMark")
+    h = cheap_head(blob, log_id_of(genesis_pub), prev)
+    ok, why = lw.verify_extension(skeletons, log_id_of(genesis_pub).hex(), prev.size, prev.root.hex(),
+                                  h["tree_size"], h["root"].hex())
+    if not ok:
+        raise ExtensionRefused(f"chain extension from the prev mark refused: {why}")
+    level, _ = verify_head(blob, genesis_sig, genesis_pub, cosigns, pins, sig_ok, mark=prev, ruling=ruling)
     return level, VerifiedMark(h["tree_size"], h["root"], VerifiedMark._token)
 
 

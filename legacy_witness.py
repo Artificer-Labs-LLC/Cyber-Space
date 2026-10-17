@@ -10,9 +10,12 @@ a witness set and log id that B pins in its own config.
 Entry (one per log position). The signed and hashed part is the HEADER:
 
     cyberspace-legacy-migration-log/v1
-    log_id=<64 hex>          # fixed at log creation, independent of any
-                             # signing key (Loom Gate 1 #2), so witnesses
-                             # can rotate or grow without a new log
+    log_id=<64 hex>          # fixed at log creation (Loom Gate 1 #2), so
+                             # witnesses can rotate or grow without a new
+                             # log. For THIS log (the genesis-era migration
+                             # log) it is sha256 of the Genesis key, and the
+                             # level wiring binds it so (Villhaze ART-42
+                             # 9ad9a692: a fact of this log, not a precedent)
     seq=<int>                # position, from 1, no gaps
     prev_hash=<64 hex|none>  # entry_hash of seq-1
     kind=<kind>
@@ -270,6 +273,11 @@ def _json_len(x) -> int:
 
 
 MAX_SKELETON_BYTES = _json_len(_worst_entry(False)) + 2   # + ", " list separator
+# Chain extension (Villhaze ART-42 7e9eb9b5 (b), a73a009e): a mark moves
+# m -> n on the header skeletons m+1..n, at most MAX_EXTENSION per proof,
+# carried in their own transport field under their own byte cap.
+MAX_EXTENSION = 256
+MAX_EXTENSION_BYTES = MAX_EXTENSION * MAX_SKELETON_BYTES + 2
 MAX_ISSUED_AT = 40
 MAX_HOP_ROW_BYTES = _json_len({"name": "\U0001F600" * MAX_NAME_LEN, "i": 10 ** 10 - 1,
                                "old": "f" * 64, "new": "f" * 64,
@@ -625,6 +633,60 @@ def verify_chain(entries: list, log_id: str) -> tuple:
                 return False, f"entry_hash mismatch at seq {i}"
         except (KeyError, TypeError):
             return False, f"malformed entry at seq {i}"
+    return True, prev
+
+
+def verify_extension(skeletons, log_id: str, m: int, tip_m: str, n: int, tip_n: str) -> tuple:
+    """(True, tip_n) when skeletons are exactly the header skeletons of seq
+    m+1..n of the log whose entry_hash at m is tip_m, ending at tip_n
+    (Villhaze ART-42 7e9eb9b5 (b); Examiner 23ae4b05 LW-2..LW-10).
+
+    Order: cap, exact span length and every skeleton's shape are checked
+    before any entry_hash call; then seq numbering, the link to the marked
+    tip, each prev_hash link, the agent back-links, and the tail.
+
+    Back-links (LW-7): a back-link that lands inside m+1..n is checked
+    exactly; one that points at or below the mark only needs 1 <= v <= m.
+    The exact check for those is the full-span _rules at identity
+    acceptance. Never raises on hostile input."""
+    if not isinstance(skeletons, list):
+        return False, "extension is not a list"
+    if type(m) is not int or type(n) is not int or m < 1 or n < m:
+        return False, "bad extension span"
+    if len(skeletons) > MAX_EXTENSION:
+        return False, "extension over the per-proof cap"
+    if len(skeletons) != n - m:
+        return False, "extension is not exactly the headers m+1..n"
+    for e in skeletons:
+        if not isinstance(e, dict) or set(e) != set(HEADER_FIELDS):
+            return False, "extension entry is not a header skeleton"
+        why = entry_shape_problem(e)
+        if why:
+            return False, f"malformed skeleton: {why}"
+    if not skeletons:
+        return (True, tip_n) if tip_m == tip_n else (False, "no extension but the tip moved")
+    if skeletons[0]["prev_hash"] != tip_m:
+        return False, "extension does not link to the marked tip"
+    prev, last_of = None, {}
+    for i, e in enumerate(skeletons, m + 1):
+        if e["seq"] != i:
+            return False, f"gap at seq {i}"
+        if prev is not None and e["prev_hash"] != prev:
+            return False, f"chain broken at seq {i}"
+        a, v = e["agent_id"], e["agent_prev_seq"]
+        if a is None:
+            if v is not None:
+                return False, f"agent back-link without an agent at seq {i}"
+        elif a in last_of:
+            if v != last_of[a]:
+                return False, f"agent back-link wrong at seq {i}"
+        elif v is not None and not 1 <= v <= m:
+            return False, f"agent back-link out of range at seq {i}"
+        if a is not None:
+            last_of[a] = i
+        prev = entry_hash(e, log_id)
+    if prev != tip_n:
+        return False, "extension does not end at head_hash"
     return True, prev
 
 
