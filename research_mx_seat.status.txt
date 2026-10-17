@@ -1,0 +1,8 @@
+MX-CLAIM        expected=REFUSE actual=REFUSE  -> OK (refused)  [HTTP 400; stored=False; {"detail":"Refused (weak key): mixed-order."}]
+MX-ROTATE-NEW   expected=REFUSE actual=REFUSE  -> OK (refused)  [HTTP 400; holder_is_mixed=False; {"detail":"Refused (weak key): mixed-order."}]
+MX-ROTATE-OLD   expected=REFUSE actual=REFUSE  -> OK (refused)  [HTTP 400; moved=False; {"detail":"Refused (weak key): mixed-order."}]
+MX-ANNOUNCE     expected=REFUSE actual=ACCEPT  -> GAP (accepted today)  [HTTP 200; peers row stored=True]
+MX-DIRSYNC      expected=REFUSE actual=ACCEPT  -> GAP (accepted today)  [announce(P) HTTP 200; delta HTTP 200 {"ok":true,"applied":0,"retired":1,"stale":0,"rejected":0}; A' row stored=True]
+
+SUMMARY MX-CLAIM=OK (refused); MX-ROTATE-NEW=OK (refused); MX-ROTATE-OLD=OK (refused); MX-ANNOUNCE=GAP (accepted today); MX-DIRSYNC=GAP (accepted today)
+MX-SEAT-G / MX-SEAT-R: owned by Lodestar, not run here.

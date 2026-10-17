@@ -56,6 +56,9 @@ TESTS=(
   "test_wok_ruling.py" "test_wok_steer.py" "test_wok_config.py" "test_wok_freeze.py" "test_wok_level.py" "test_wok_wiring.py"
   "test_legacy_migrate_stub.py"
   "test_witness_port.py"
+  # SODIUM-DIFF (Cipher, ART-42): golden verifier differential. research_mx_seat.py
+  # is NOT listed: it documents known gaps (see research_mx_seat.status.txt).
+  "test_sodium_diff.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
