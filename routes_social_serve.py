@@ -1267,6 +1267,19 @@ async def names_rotate(request: Request):
     # payload bytes are built there, never re-derived here).
     record = {"name": name, "old_pubkey": old_pubkey, "new_pubkey": new_pubkey,
               "issued_at": rotation_issued_at, "signature": rotation_signature}
+    # BW-REPLAY (r5 Lodestar BLOCK): look up the incumbent FIRST and
+    # refuse a record that does not strictly postdate the stored
+    # binding's issued_at — before any Ed25519 work.
+    with _db_lock, _db() as conn:
+        _pre = conn.execute("SELECT node_pubkey, issued_at FROM name_bindings WHERE name=?", (name,)).fetchone()
+    if _pre is None:
+        raise HTTPException(status_code=404, detail="No such name.")
+    try:
+        _stale = not (_parse_claim_time(rotation_issued_at) > _parse_claim_time(_pre[1]))  # BW-ROUTE
+    except (ValueError, OverflowError):
+        _stale = True
+    if _stale:
+        raise HTTPException(status_code=400, detail="Rotation record does not postdate the stored binding; replay refused.")
     reason = _rotation_verify_record(record)
     if reason is not None:
         raise HTTPException(status_code=400, detail=f"Rotation record refused: {reason}.")
@@ -1312,6 +1325,9 @@ async def names_rotate(request: Request):
         raise HTTPException(status_code=400, detail="The rotation's old key does not hold this name; only the current holder can designate a successor.")
     accepted_at = _now()
     with _db_lock, _db() as conn:
+        _now_row = conn.execute("SELECT node_pubkey, issued_at FROM name_bindings WHERE name=?", (name,)).fetchone()
+        if _now_row is None or tuple(_now_row) != tuple(_pre):
+            raise HTTPException(status_code=409, detail="Stored binding changed during rotation; retry.")
         conn.execute(
             "INSERT INTO name_bindings (name, node_pubkey, issued_at, expires_at, signature) "
             "VALUES (?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "

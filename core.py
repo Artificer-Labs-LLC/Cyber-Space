@@ -1302,8 +1302,23 @@ def _old_binding_beaten(old, binding, node_pubkey, now_dt):
                 and old["node_pubkey"].lower() == node_pubkey.lower())
 
 
+def _rotation_postdates_incumbent(record, stored_issued_at) -> bool:
+    """BW-REPLAY: True iff record.issued_at > stored binding issued_at,
+    both canonical. Fail-closed on any non-string/unparseable input."""
+    try:
+        if not isinstance(record, dict):
+            return False
+        r = record.get("issued_at")
+        if not isinstance(r, str) or not isinstance(stored_issued_at, str):
+            return False
+        return _parse_claim_time(r) > _parse_claim_time(stored_issued_at)  # BW-CMP
+    except (ValueError, OverflowError):
+        return False
+
+
 def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
-                                  binding_issued_at) -> bool:
+                                  binding_issued_at,
+                                  stored_issued_at=None) -> bool:
     """Primitive 4 (identity) — the gossip-merge twin of the rotate-accept
     route's authority rule (rule 4): the stored key's own signature IS the
     authority — a designated successor overrides the M-1 earlier-wins
@@ -1333,7 +1348,13 @@ def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
     # proof (the record's own fields are guarded by verify_rotation;
     # these caller-supplied ones were not).
     if any(not isinstance(_v, str) for _v in
-           (name, stored_pubkey, new_pubkey, binding_issued_at)):
+           (name, stored_pubkey, new_pubkey, binding_issued_at,
+            stored_issued_at)):
+        return False
+    # BW-REPLAY (r5 Lodestar BLOCK): strict, pre-verify. The record must
+    # postdate the incumbent binding it displaces, or a retired key's old
+    # record replays after recovery. Cheap compare before any Ed25519.
+    if not _rotation_postdates_incumbent(record, stored_issued_at):  # BW-SINGLE
         return False
     if _verify_rotation_record(record) is not None:
         return False
@@ -1353,7 +1374,8 @@ def _gossiped_rotation_designates(record, name, stored_pubkey, new_pubkey,
 
 def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
                                         new_pubkey,
-                                        binding_issued_at) -> bool:
+                                        binding_issued_at,
+                                        stored_issued_at=None) -> bool:
     """Primitive 4 (identity) — the multi-hop twin of
     _gossiped_rotation_designates: a chain of rotation records
     [a->b, b->c, ...] vouches the gossiped binding's key as the
@@ -1387,6 +1409,19 @@ def _gossiped_rotation_chain_designates(chain, name, stored_pubkey,
            (name, stored_pubkey, new_pubkey, binding_issued_at)):
         return False
     if len(chain) > _ROTATION_CHAIN_CAP:
+        return False
+    # BW-REPLAY: pre-verify structural pass — find the anchoring hop
+    # (old == stored key) with no Ed25519 work, and require that hop to
+    # postdate the incumbent binding (strict). No anchor, no verify.
+    _anchor = None
+    for rec in chain:
+        if not isinstance(rec, dict) or not isinstance(rec.get("old_pubkey"), str):
+            return False
+        if rec["old_pubkey"].strip().lower() == stored_pubkey.lower():
+            _anchor = rec
+    if _anchor is None:
+        return False
+    if not _rotation_postdates_incumbent(_anchor, stored_issued_at):  # BW-CHAIN
         return False
     prev_new = None
     anchored = False
@@ -2331,10 +2366,10 @@ def ingest_gossiped_binding(binding: dict) -> str:
                 _designated = (
                     _gossiped_rotation_chain_designates(
                         _chain, name, old["node_pubkey"], node_pubkey,
-                        issued_at)
+                        issued_at, old["issued_at"])
                     or _gossiped_rotation_designates(
                         _single, name, old["node_pubkey"], node_pubkey,
-                        issued_at))
+                        issued_at, old["issued_at"]))
                 if _designated:
                     _hops = _chain if isinstance(_chain, list) and _chain \
                         else [_single]
