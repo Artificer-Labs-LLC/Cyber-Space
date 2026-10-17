@@ -58,6 +58,14 @@ OBSERVE_GLOBAL = 1200
 # Bulwark v2 (ART-42): refusals only. Counted on the refusal path, never in
 # front of a verify, so it cannot block a head that verifies.
 OBSERVE_REFUSED_GLOBAL = 1200
+# Bulwark pre-verify brake (ART-42, after v2 Part 2): a per-source budget of
+# witness-signature verifies, charged BEFORE verify_legacy in units of one
+# checkvalid (the signatures the head carries, known once precheck_signatures
+# has passed). Per-log and global stay after verify (MED-3); only the
+# requester's own bucket is spent in front of the expensive step.
+CHECKVALID_COST_US = 225_000              # pure-Python fed/ed25519.checkvalid, measured (v2 README)
+OBSERVE_PREVERIFY_BUDGET_US = 10_800_000  # 10.8 s verify CPU per source per window
+OBSERVE_VERIFY_SIGS_PER_IP = OBSERVE_PREVERIFY_BUDGET_US // CHECKVALID_COST_US  # = 48
 IMPORT_PER_SOURCE = 60
 IMPORT_PER_LOG = 60
 IMPORT_GLOBAL = 600
@@ -92,6 +100,23 @@ def charge_witnessed(src: str) -> None:
 
 def charge_observe_source(src: str) -> None:
     core._check_rate(f"legacy-log:observe:{src}", limit=OBSERVE_PER_IP)
+
+
+def charge_observe_verify(src: str, n: int) -> None:
+    """Pre-verify brake: spend n verify units from src's bucket, all or none.
+    Raises 429 without spending when the bucket cannot take all n."""
+    bucket = f"legacy-log:observe:verify:{src}"
+    now = time.monotonic()
+    with core._db_lock:
+        core._prune_hits()
+        q = core._hits[bucket]
+        while q and now - q[0] > core.RATE_WINDOW:
+            q.popleft()
+        if len(q) + n > OBSERVE_VERIFY_SIGS_PER_IP:
+            raise HTTPException(
+                status_code=429,
+                detail=f"verify budget exceeded: {OBSERVE_VERIFY_SIGS_PER_IP} signature checks/{int(core.RATE_WINDOW)}s per source.")
+        q.extend([now] * n)
 
 
 def charge_observe_scoped(log_id: str) -> None:
@@ -370,6 +395,11 @@ async def legacy_log_observe(request: Request):
             wiring.precheck_signatures(signed, wset)
         except lw.WitnessRefused as e:
             raise refuse_observe(400, f"{type(e).__name__}: {e}")
+        # Bulwark pre-verify brake: the source's own verify budget is spent
+        # here, after the 0-verify pre-checks and before verify_legacy, so a
+        # bad-signature flood from one source costs at most
+        # OBSERVE_VERIFY_SIGS_PER_IP checkvalid calls per window.
+        charge_observe_verify(src, len(signed["signatures"]))
         # Bulwark v2 (ART-42, Examiner on MED-3): the per-log and global
         # budgets are NOT charged here. Junk and replays pay only their own
         # per-IP bucket (above) and the refused bucket; per-log/global are
