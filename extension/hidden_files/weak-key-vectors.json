@@ -1,5 +1,5 @@
 {
- "_source": "r6b oracle/r6b-mx-seat @ 0542c395: weak_key.admission_reason(key.lower()) == core._fetched_key_refused read seat (lowercase, no trim)",
+ "_source": "PROVISIONAL strict-case (Villhaze ART-37 a391b7df, applied to the name-binding read gate): weak_key.admission_reason(RAW key) at db15a900d06c9c54a4554a1d673cd72f34f9c609 (oracle/r7-nodekey-admission db15a900; weak_key.py == 32d8ecf4) -- no lowercasing, no trim. Supersedes the e9ba20f oracle admission_reason(key.lower()). NOT the node read seat: core._fetched_key_refused / _stored_key_weak still lowercase at 32d8ecf4 and db15a900. Provisional until O.R.A.C.L.E.'s node-key case-fix SHA lands. Generator: /workspace/controller-strict-case/gen_weak_key_vectors.py",
  "vectors": [
   {
    "case": "v2-honest_control-0",
@@ -344,17 +344,20 @@
   {
    "case": "w6-uppercase-honest",
    "pubkey": "5866666666666666666666666666666666666666666666666666666666666666",
-   "reason": null
+   "reason": null,
+   "note": "digit-only key: upper == lower, so this row never exercised case (kept for continuity)"
   },
   {
    "case": "w6-mixedcase-honest",
    "pubkey": "5866666666666666666666666666666666666666666666666666666666666666",
-   "reason": null
+   "reason": null,
+   "note": "digit-only key: upper == lower, so this row never exercised case (kept for continuity)"
   },
   {
    "case": "w6-uppercase-weak-identity",
    "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
-   "reason": "small-order"
+   "reason": "small-order",
+   "note": "digit-only key: upper == lower, so this row never exercised case (kept for continuity)"
   },
   {
    "case": "w6-63-char",
@@ -409,6 +412,66 @@
   {
    "case": "w6-nonhex-g",
    "pubkey": "g866666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "sc-upper-honest-1",
+   "pubkey": "C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
+   "reason": "format"
+  },
+  {
+   "case": "sc-mixedcase-honest-1",
+   "pubkey": "c9a3f86AaE465F0E56513864510F3997561Fa2c9e85Ea21Dc2292309f3cD6022",
+   "reason": "format"
+  },
+  {
+   "case": "sc-firstchar-upper-honest-1",
+   "pubkey": "C9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+   "reason": "format"
+  },
+  {
+   "case": "sc-upper-honest-6",
+   "pubkey": "8A468F1C43C09E50968DB16FC67C234BC05B8592B05DDE57C2AA751E74724B98",
+   "reason": "format"
+  },
+  {
+   "case": "sc-mixedcase-honest-6",
+   "pubkey": "8A468F1C43c09E50968Db16Fc67C234Bc05B8592b05DdE57c2aA751E74724B98",
+   "reason": "format"
+  },
+  {
+   "case": "sc-twin-lower-honest-1",
+   "pubkey": "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+   "reason": null
+  },
+  {
+   "case": "sc-twin-upper-honest-1",
+   "pubkey": "C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
+   "reason": "format"
+  },
+  {
+   "case": "sc-twin-lower-honest-6",
+   "pubkey": "8a468f1c43c09e50968db16fc67c234bc05b8592b05dde57c2aa751e74724b98",
+   "reason": null
+  },
+  {
+   "case": "sc-twin-upper-honest-6",
+   "pubkey": "8A468F1C43C09E50968DB16FC67C234BC05B8592B05DDE57C2AA751E74724B98",
+   "reason": "format"
+  },
+  {
+   "case": "sc-upper-mixed-order-0",
+   "pubkey": "16030E0FF1D6226B8AD6FF918B288668C1C3E5E45269487F85479BB4A9FB11AF",
+   "reason": "format"
+  },
+  {
+   "case": "sc-upper-small-order-3",
+   "pubkey": "26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC05",
+   "reason": "format"
+  },
+  {
+   "case": "sc-upper-leading-space-honest-1",
+   "pubkey": " C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
    "reason": "format"
   }
  ]

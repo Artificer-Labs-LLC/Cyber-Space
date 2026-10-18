@@ -969,12 +969,13 @@ function weakKeyReason(pubHex) {
   return null;
 }
 
-// W6 read-seat guard (ART-37 a0e74278, r6b 0542c395 core._fetched_key_refused):
-// lowercase only (no trim), then exactly 64 lowercase hex, then weakKeyReason.
-// "format" covers whitespace, wrong length and non-hex; a legacy uppercase
-// honest key still resolves (strict no-lowercase refusal is ingest-only).
+// W6 read-seat guard, strict case (ART-37 a391b7df applied to this gate;
+// PROVISIONAL until O.R.A.C.L.E.'s node-key case fix lands): the RAW key,
+// never lowercased or trimmed, must be exactly 64 lowercase hex, then
+// weakKeyReason. "format" covers uppercase / mixed case, whitespace, wrong
+// length and non-hex. (Was lowercase-then-check, e9ba20f.)
 function fetchedKeyReason(pubHex) {
-  const k = typeof pubHex === "string" ? pubHex.toLowerCase() : "";
+  const k = typeof pubHex === "string" ? pubHex : "";
   if (!/^[0-9a-f]{64}$/.test(k)) return "format";
   return weakKeyReason(k);
 }
@@ -999,7 +1000,9 @@ async function verifyNameBinding(binding, label, nowMs = Date.now(), subtle) {
   const sig = binding.signature.trim().toLowerCase();
   if (name !== String(label).toLowerCase())
     throw new Error(`${BINDING_REFUSED}binding is for ${truncateEcho(name, 64)}, not ${truncateEcho(label, 64)}`);
-  const keyReason = fetchedKeyReason(pub);
+  // Strict case: the gate sees the RAW fetched key, so an uppercase or
+  // mixed-case spelling is refused as format; past it, pub === node_pubkey.
+  const keyReason = fetchedKeyReason(binding.node_pubkey);
   if (keyReason === "format") throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 hex chars (weak-key: format)`);
   if (!/^[0-9a-f]{128}$/.test(sig)) throw new Error(`${BINDING_REFUSED}signature is not 128 hex chars`);
   const issued = parseClaimTime(binding.issued_at, "issued_at");

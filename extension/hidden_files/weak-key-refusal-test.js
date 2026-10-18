@@ -1,6 +1,7 @@
 // Weak-key refusal harness (ART-20). Two parts:
-// 1. Parity: resolver.js weakKeyReason() returns the same reason as the
-//    node read seat (r6b 0542c395: weak_key.admission_reason(key.lower())) for every row of weak-key-vectors.json.
+// 1. Parity: resolver.js fetchedKeyReason() returns the same reason as
+//    weak_key.admission_reason(RAW key) (db15a900; strict case, PROVISIONAL --
+//    see the vectors' _source) for every row of weak-key-vectors.json.
 // 2. Forgery: a binding under the identity key (01 00..00) with signature
 //    R = identity, S = 0 is refused by verifyNameBinding before WebCrypto
 //    is consulted. Also reports whether raw WebCrypto alone accepts it.
@@ -44,9 +45,34 @@ const check = (label, cond, detail) => { console.log(`${cond ? "PASS" : "FAIL"} 
     try { await ctx.verifyNameBinding({ ...binding, node_pubkey: k }, "forged", now); m = "ACCEPTED"; } catch (e) { m = e.message; }
     check(`${lbl} node_pubkey refused before verify (no trim)`, /weak-key: format/.test(m), m);
   }
-  let u = "";
-  try { await ctx.verifyNameBinding({ ...binding, node_pubkey: H.toUpperCase() }, "forged", now); u = "ACCEPTED"; } catch (e) { u = e.message; }
-  check("uppercase honest key passes the key gate (fails only at signature)", /signature does not verify|could not be checked/.test(u), u);
+  // Strict case (a391b7df, provisional). The old row here used H, which is
+  // digit-only (H.toUpperCase() === H), so it never exercised case. Case-twin
+  // row on a real key with a-f letters and a REAL signature over the
+  // lowercase payload: the lowercase spelling verifies; the uppercase and
+  // mixed-case spellings of the same key are refused as format before
+  // WebCrypto (spy counts calls), although the signature would verify.
+  let kp, pubHex = "";
+  do {
+    kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    pubHex = Buffer.from(await crypto.subtle.exportKey("raw", kp.publicKey)).toString("hex");
+  } while (!/[a-f]/.test(pubHex));
+  const tb = { name: "casetwin", node_pubkey: pubHex, issued_at: binding.issued_at, expires_at: binding.expires_at };
+  const tsig = Buffer.from(await crypto.subtle.sign({ name: "Ed25519" }, kp.privateKey,
+    new TextEncoder().encode(`name-claim|casetwin|${pubHex}|${tb.issued_at}|${tb.expires_at}`))).toString("hex");
+  let lo = "";
+  try { const r = await ctx.verifyNameBinding({ ...tb, signature: tsig }, "casetwin", now); lo = r.pub; } catch (e) { lo = e.message; }
+  check("case-twin: lowercase spelling with a real signature verifies", lo === pubHex, lo);
+  const mixed = pubHex.split("").map((c, i) => (i % 2 ? c.toUpperCase() : c)).join("");
+  for (const [lbl, k] of [["uppercase", pubHex.toUpperCase()], ["mixed-case", mixed]]) {
+    if (k === pubHex) continue;
+    const calls = { n: 0 };
+    const spy = { importKey: async (...a) => { calls.n++; return crypto.subtle.importKey(...a); },
+      verify: async (...a) => { calls.n++; return crypto.subtle.verify(...a); } };
+    let m = "";
+    try { await ctx.verifyNameBinding({ ...tb, node_pubkey: k, signature: tsig }, "casetwin", now, spy); m = "ACCEPTED"; } catch (e) { m = e.message; }
+    check(`case-twin: ${lbl} spelling of the same key refused as format, 0 WebCrypto calls`,
+      /weak-key: format/.test(m) && calls.n === 0, `msg=${m} calls=${calls.n}`);
+  }
   console.log(failures ? `${failures} FAILED` : "ALL PASS");
   process.exit(failures ? 1 : 0);
 })();
