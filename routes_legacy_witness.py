@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import time
+import weakref
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -183,6 +184,17 @@ class WeakPinnedWitness(ValueError):
 _PIN_CACHE: dict = {}
 
 
+# BW-PV3 seam: the observe and import routes accept a witness set only if
+# _load_pin admitted it (witness_key_admitted on every key, mixed-order
+# refused via window_open.weak_reason). Identity membership: a set built any
+# other way (lw.WitnessSet / load_witness_set directly) is not in here.
+_ADMITTED_SETS = weakref.WeakSet()
+
+
+def admitted_set(wset) -> bool:
+    return wset in _ADMITTED_SETS
+
+
 def _load_pin(raw: str, log_id: str, threshold):
     key = (raw, log_id, threshold)
     if key not in _PIN_CACHE:
@@ -191,6 +203,7 @@ def _load_pin(raw: str, log_id: str, threshold):
             for pub in wset.pubs:
                 if lw.witness_key_admitted(pub):
                     raise WeakPinnedWitness(pub)
+            _ADMITTED_SETS.add(wset)
             _PIN_CACHE[key] = (log_id, wset)
         except (TypeError, ValueError):
             _PIN_CACHE[key] = None
@@ -383,6 +396,8 @@ async def legacy_log_observe(request: Request):
         if pin is None:
             raise HTTPException(status_code=503, detail="legacy observe is not pinned on this node")
         pinned_log, wset = pin
+        if not admitted_set(wset):         # BW-PV3: only a _load_pin-admitted set
+            raise HTTPException(status_code=503, detail="witness set did not pass pin admission")
         if log_id != pinned_log:
             raise refuse_observe(400, "head is for another log")
         # Pinned keys passed weak_reason at pin load; the request path runs
@@ -479,6 +494,8 @@ async def import_legacy(request: Request):
         if pin is None:
             raise HTTPException(status_code=503, detail="legacy import is not pinned on this node")
         pinned_log, wset = pin
+        if not admitted_set(wset):         # BW-PV3: only a _load_pin-admitted set
+            raise HTTPException(status_code=503, detail="witness set did not pass pin admission")
         if log_id in ("missing", "malformed") or log_id != pinned_log:
             raise HTTPException(status_code=400, detail="log_id is not the log this node pins")
         name = data.get("name")

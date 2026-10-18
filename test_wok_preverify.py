@@ -191,6 +191,133 @@ MUT += [
       mock.patch.object(lw, "eligible_witnesses", lambda pubs: _ANY)]),
 ]
 
+# ======================= BW-PV3 seam (dependency row) =======================
+def row_pv3_seam():
+    # BW-PV2's per-copy membership check reads the set only via _load_pin: a
+    # set built bypassing it (here: honest keys, lw.WitnessSet directly) is
+    # refused 503 before any verify or charge, and nothing is stored.
+    fresh(); sa, la = g["root_head"](A, 4); ip = "203.0.113.60"
+    bypass = (g["LOG"], WitnessSet(2, WP))
+    with mock.patch.object(rlw, "pinned", lambda: bypass):
+        code, d = route(ip, sa, la)
+    row_pv3_seam.last = dict(code=code, detail=d, verifies=CV[0], charged=charged(ip), stored=stored())
+    return code == 503 and "pin admission" in d and CV[0] == 0 and charged(ip) == 0 and stored() == 0
+ROWS.append(("BW-PV3-SEAM set built bypassing _load_pin", row_pv3_seam))
+MUT.append(("M-BYPASSPIN admitted_set -> True", row_pv3_seam,
+            [mock.patch.object(rlw, "admitted_set", lambda w: True)]))
+
+# ======================= BW-PV3 MIX-PIN / MIX-FILE (Cipher v2 vectors) =======================
+import json as _json, struct as _struct, nacl.bindings as _nb
+from nacl.signing import VerifyKey
+import hop_certs as _hc, head_level as _hl
+VEC_PATH = os.path.join(HERE, "vectors", "r6b-weak-key-vectors-v2.json")   # copy of Cipher's v2
+VEC_SHA = "011ca9426f280344a8ae906180a66e52365ce8f20e1cb9b21239a96a152be5c1"  # NOT v1 f101825a
+_vb = open(VEC_PATH, "rb").read()
+assert hashlib.sha256(_vb).hexdigest() == VEC_SHA, "vector file is not Cipher's v2"
+VEC = _json.loads(_vb)
+assert VEC["_mixed_torsion_orders"] == [2, 4, 8]
+for _c, _n in VEC["_counts"].items():
+    assert isinstance(VEC[_c], list) and len(VEC[_c]) == _n, _c
+MIXED = VEC["mixed_order"]
+assert len(MIXED) == 14 and sorted({v["torsion_order"] for v in MIXED}) == [2, 4, 8]
+
+def _neg(P): return ((-P[0]) % _ed._Q, P[1])
+def _torsion_ok(v):
+    """A' = [k]B + T with T of exactly torsion_order (checks Cipher's labels)."""
+    Ap = _ed._decodepoint_strict(bytes.fromhex(v["hex"]))
+    T = _ed._edwards(Ap, _neg(_ed._scalarmult(_ed._BPOINT, v["k"])))
+    o = next(n for n in (1, 2, 4, 8) if _ed._scalarmult(T, n) == _ed._IDENT)
+    return o == v["torsion_order"]
+def split_sig(v, msg):
+    """Cosig under the mixed key A' (secret k): h % ord == 0 so fed checkvalid
+    (unreduced h) accepts, (h mod L) % ord != 0 so libsodium rejects."""
+    Ap = bytes.fromhex(v["hex"]); o = v["torsion_order"]
+    for r in range(1, 4000):
+        R = _ed._encodepoint(_ed._scalarmult(_ed._BPOINT, r))
+        h = int.from_bytes(_ed._H(R + Ap + msg), "little")
+        if h % o == 0 and (h % _ed._L) % o != 0:
+            return R + ((r + h * v["k"]) % _ed._L).to_bytes(32, "little")
+    raise AssertionError("no split nonce")
+def _sodium_ok(sig, msg, pk):
+    try: _nb.crypto_sign_open(sig + msg, pk); return True
+    except Exception: return False
+
+def row_mix_pin():
+    # Every v2 mixed-order key, pinned beside two honest witnesses, is refused
+    # at _load_pin with WeakPinnedWitness; the set is never admitted.
+    raised = []
+    class Spy(rlw.WeakPinnedWitness):
+        def __init__(self, *a): raised.append(a[0] if a else None); super().__init__(*a)
+    per = {2: [0, 0], 4: [0, 0], 8: [0, 0]}; demo = {}
+    with mock.patch.object(rlw, "WeakPinnedWitness", Spy):
+        for v in MIXED:
+            assert _torsion_ok(v), v["hex"]
+            rlw._PIN_CACHE.clear(); del raised[:]
+            raw = ",".join([v["hex"], WP[0], WP[1]])
+            pin = rlw._load_pin(raw, g["LOG"], "2")
+            ok = pin is None and raised == [v["hex"]]
+            per[v["torsion_order"]][0] += ok; per[v["torsion_order"]][1] += 1
+            o = v["torsion_order"]
+            if not ok and o not in demo:
+                # the mutant admitted it: show what the admitted set lets in.
+                demo[o] = _mix_demo(v, raw)
+    rlw._PIN_CACHE.clear()
+    row_mix_pin.last = dict(refused_per_order={o: f"{a}/{n}" for o, (a, n) in per.items()},
+                            **({"mutant_admitted_demo": demo} if demo else {}))
+    return all(a == n for a, n in per.values())
+
+def _mix_demo(v, raw):
+    fresh(); sa, la = g["root_head"](A, 4)
+    W = WitnessSet(2, [v["hex"], WP[0], WP[1]]); h = dict(sa["head"], witness_set=W.id); m = lw.head_bytes(h)
+    sg = split_sig(v, m); pk = bytes.fromhex(v["hex"])
+    fed, sod = bool(_cv(sg, m, pk)), _sodium_ok(sg, m, pk)
+    signed = {"head": h, "signatures": [{"witness": v["hex"], "sig": sg.hex()}, {"witness": WP[0], "sig": good_sig(0, h)}]}
+    env = dict(os.environ); os.environ["CYBERNET_GENESIS_WITNESSES"] = raw
+    try:
+        rlw._PIN_CACHE.clear(); code, d = route("203.0.113.70", signed, la)
+    finally:
+        os.environ.clear(); os.environ.update(env); rlw._PIN_CACHE.clear()
+    return dict(fed_checkvalid=fed, sodium=sod, observe=(code, d), stored=stored())
+
+# MIX-FILE: the cosign pin-file path (head_level.parse_pins -> _key_ok ->
+# hop_certs.key_weak -> _weak_uncached). Test-only signers via the override.
+_PS = [g["SigningKey"](hashlib.sha256(b"pv3-pin-signer-%d" % i).digest()) for i in range(2)]
+_PSIG = tuple(k.verify_key.encode().hex() for k in _PS)
+_PGEN = g["SigningKey"](hashlib.sha256(b"pv3-pin-genesis").digest()).verify_key.encode().hex()
+_HON = g["SigningKey"](hashlib.sha256(b"pv3-pin-honest").digest()).verify_key.encode().hex()
+def _pinfile(keys):
+    body = _hl.PIN_MAGIC + _hl.log_id_of(_PGEN) + _struct.pack(">QQ", 3, 1_700_000_000) + bytes([1])
+    body += b"\x01" * 32 + bytes([1, len(keys)])
+    for k in sorted(keys): body += bytes.fromhex(k) + _struct.pack(">QQ", 0, 10**9)
+    return body + bytes([2]) + b"".join(bytes([i]) + k.sign(body).signature for i, k in enumerate(_PS))
+PCALLS = [0]
+def _psig_ok(pub, msg, sig):
+    PCALLS[0] += 1
+    try: VerifyKey(bytes.fromhex(pub)).verify(msg, bytes.fromhex(sig)); return True
+    except Exception: return False
+def row_mix_file():
+    # Every v2 mixed-order key in a signed pin file is refused at parse
+    # ("weak key in pin file"), cold cache, 0 pin-signature verifies.
+    assert set(_hl.parse_pins(_pinfile([_HON]), _PGEN, _psig_ok, _PSIG, 2)["keys"]) == {_HON}   # control parses
+    per = {2: [0, 0], 4: [0, 0], 8: [0, 0]}
+    for v in MIXED:
+        _hc._KEY_OK.clear(); PCALLS[0] = 0; why = None
+        try: _hl.parse_pins(_pinfile([_HON, v["hex"]]), _PGEN, _psig_ok, _PSIG, 2)
+        except _hl.Refused as e: why = str(e)
+        ok = why == "weak key in pin file" and PCALLS[0] == 0
+        per[v["torsion_order"]][0] += ok; per[v["torsion_order"]][1] += 1
+    _hc._KEY_OK.clear()
+    row_mix_file.last = dict(refused_per_order={o: f"{a}/{n}" for o, (a, n) in per.items()})
+    return all(a == n for a, n in per.values())
+
+def _nomixset(pub_hex): return None
+ROWS += [("BW-PV3-MIX-PIN 14 v2 mixed-order keys refused at _load_pin (WeakPinnedWitness)", row_mix_pin),
+         ("BW-PV3-MIX-FILE 14 v2 mixed-order keys refused in the pin file (cold key_weak cache)", row_mix_file)]
+MUT += [("M-NOMIXSET legacy_witness.witness_key_admitted -> None", row_mix_pin,
+         [mock.patch.object(lw, "witness_key_admitted", _nomixset)]),
+        ("M-NOKEYWEAK hop_certs._weak_uncached -> None (cache cleared per vector)", row_mix_file,
+         [mock.patch.object(_hc, "_weak_uncached", lambda pub_hex: None)])]
+
 T0 = time.time(); R_ = []
 bounded, RowTimeout = g["bounded"], g["RowTimeout"]
 def run(fn):
