@@ -1,6 +1,6 @@
 // Weak-key refusal harness (ART-20). Two parts:
 // 1. Parity: resolver.js weakKeyReason() returns the same reason as the
-//    node's window_open.weak_reason for every row of weak-key-vectors.json.
+//    node read seat (r6b 0542c395: weak_key.admission_reason(key.lower())) for every row of weak-key-vectors.json.
 // 2. Forgery: a binding under the identity key (01 00..00) with signature
 //    R = identity, S = 0 is refused by verifyNameBinding before WebCrypto
 //    is consulted. Also reports whether raw WebCrypto alone accepts it.
@@ -16,7 +16,7 @@ let failures = 0;
 const check = (label, cond, detail) => { console.log(`${cond ? "PASS" : "FAIL"} ${label}${cond ? "" : " — " + detail}`); if (!cond) failures++; };
 (async () => {
   for (const v of V) {
-    const got = ctx.weakKeyReason(v.pubkey);
+    const got = ctx.fetchedKeyReason(v.pubkey);
     check(`parity ${v.case}`, got === v.reason, `js=${got} node=${v.reason}`);
   }
   const idKey = "01" + "00".repeat(31);
@@ -38,6 +38,15 @@ const check = (label, cond, detail) => { console.log(`${cond ? "PASS" : "FAIL"} 
   let z = "";
   try { await ctx.verifyNameBinding({ ...binding, node_pubkey: "00".repeat(32) }, "forged", now); z = "ACCEPTED"; } catch (e) { z = e.message; }
   check("all-zero node_pubkey refused as weak", /weak key \(small-order\)/.test(z), z);
+  const H = "5866666666666666666666666666666666666666666666666666666666666666";
+  for (const [lbl, k] of [["spaced", " " + H], ["63-char", H.slice(0, 63)], ["65-char", H + "6"]]) {
+    let m = "";
+    try { await ctx.verifyNameBinding({ ...binding, node_pubkey: k }, "forged", now); m = "ACCEPTED"; } catch (e) { m = e.message; }
+    check(`${lbl} node_pubkey refused before verify (no trim)`, /weak-key: format/.test(m), m);
+  }
+  let u = "";
+  try { await ctx.verifyNameBinding({ ...binding, node_pubkey: H.toUpperCase() }, "forged", now); u = "ACCEPTED"; } catch (e) { u = e.message; }
+  check("uppercase honest key passes the key gate (fails only at signature)", /signature does not verify|could not be checked/.test(u), u);
   console.log(failures ? `${failures} FAILED` : "ALL PASS");
   process.exit(failures ? 1 : 0);
 })();

@@ -969,6 +969,16 @@ function weakKeyReason(pubHex) {
   return null;
 }
 
+// W6 read-seat guard (ART-37 a0e74278, r6b 0542c395 core._fetched_key_refused):
+// lowercase only (no trim), then exactly 64 lowercase hex, then weakKeyReason.
+// "format" covers whitespace, wrong length and non-hex; a legacy uppercase
+// honest key still resolves (strict no-lowercase refusal is ingest-only).
+function fetchedKeyReason(pubHex) {
+  const k = typeof pubHex === "string" ? pubHex.toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(k)) return "format";
+  return weakKeyReason(k);
+}
+
 function nameClaimPayload(name, pub, issuedAt, expiresAt) {
   return new TextEncoder().encode(`name-claim|${name}|${pub.toLowerCase()}|${issuedAt}|${expiresAt}`);
 }
@@ -984,18 +994,20 @@ async function verifyNameBinding(binding, label, nowMs = Date.now(), subtle) {
   }
   // Normalize identically to the mirror / verify_name.py (strip + lowercase).
   const name = binding.name.trim().toLowerCase();
-  const pub = binding.node_pubkey.trim().toLowerCase();
+  // node_pubkey: lowercase, never trim (W6). Whitespace or wrong length is refused.
+  const pub = binding.node_pubkey.toLowerCase();
   const sig = binding.signature.trim().toLowerCase();
   if (name !== String(label).toLowerCase())
     throw new Error(`${BINDING_REFUSED}binding is for ${truncateEcho(name, 64)}, not ${truncateEcho(label, 64)}`);
-  if (!/^[0-9a-f]{64}$/.test(pub)) throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 hex chars`);
+  const keyReason = fetchedKeyReason(pub);
+  if (keyReason === "format") throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 hex chars (weak-key: format)`);
   if (!/^[0-9a-f]{128}$/.test(sig)) throw new Error(`${BINDING_REFUSED}signature is not 128 hex chars`);
   const issued = parseClaimTime(binding.issued_at, "issued_at");
   const expires = parseClaimTime(binding.expires_at, "expires_at");
   if (!(issued < expires)) throw new Error(`${BINDING_REFUSED}issued_at is not before expires_at`);
   if (nowMs < issued) throw new Error(`${BINDING_REFUSED}binding is not yet issued`);
   if (nowMs >= expires) throw new Error(`${BINDING_REFUSED}binding has expired`);
-  const weak = weakKeyReason(pub);
+  const weak = keyReason;
   if (weak) throw new Error(`${BINDING_REFUSED}node_pubkey is a weak key (${weak})`);
   const sub = subtle || (globalThis.crypto && globalThis.crypto.subtle);
   if (!sub) throw new Error(`${BINDING_REFUSED}this browser cannot verify Ed25519 signatures`);

@@ -1,75 +1,415 @@
 {
- "source": "generated from window_open.weak_reason at /workspace/wop 34a9a7d, 2026-10-17, by Controller",
+ "_source": "r6b oracle/r6b-mx-seat @ 0542c395: weak_key.admission_reason(key.lower()) == core._fetched_key_refused read seat (lowercase, no trim)",
  "vectors": [
   {
-   "case": "honest",
-   "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b",
+   "case": "v2-honest_control-0",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666",
    "reason": null
   },
   {
-   "case": "all-zero",
-   "pubkey": "0000000000000000000000000000000000000000000000000000000000000000",
-   "reason": "small-order"
+   "case": "v2-honest_control-1",
+   "pubkey": "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+   "reason": null
   },
   {
-   "case": "identity",
-   "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
-   "reason": "small-order"
+   "case": "v2-honest_control-2",
+   "pubkey": "d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712",
+   "reason": null
   },
   {
-   "case": "identity-sign-bit",
-   "pubkey": "0100000000000000000000000000000000000000000000000000000000000080",
-   "reason": "non-canonical"
+   "case": "v2-honest_control-3",
+   "pubkey": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b1",
+   "reason": null
   },
   {
-   "case": "y-equals-p",
-   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-   "reason": "non-canonical"
+   "case": "v2-honest_control-4",
+   "pubkey": "93c9449be4e3975f799a691f11d3bdab8ac6348ba2afbdfb9310fdb6b32ebdd7",
+   "reason": null
   },
   {
-   "case": "y-p-plus-1",
-   "pubkey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-   "reason": "non-canonical"
+   "case": "v2-honest_control-5",
+   "pubkey": "58666666666666666666666666666666666666666666666666666666666666e6",
+   "reason": null
   },
   {
-   "case": "minus-one",
-   "pubkey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
-   "reason": "small-order"
+   "case": "v2-honest_control-6",
+   "pubkey": "8a468f1c43c09e50968db16fc67c234bc05b8592b05dde57c2aa751e74724b98",
+   "reason": null
   },
   {
-   "case": "order-8-torsion",
-   "pubkey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
-   "reason": "small-order"
-  },
-  {
-   "case": "mixed-order",
-   "pubkey": "77c061890d4fbfa164fe73790450e7e3f61c04aed15409ca8e8982b6ae2cc84f",
+   "case": "v2-mixed_order-0",
+   "pubkey": "16030e0ff1d6226b8ad6ff918b288668c1c3e5e45269487f85479bb4a9fb11af",
    "reason": "mixed-order"
   },
   {
-   "case": "not-on-curve",
+   "case": "v2-mixed_order-1",
+   "pubkey": "d7fcf1f00e29dd947529006e74d779973e3c1a1bad96b7807ab8644b5604ee50",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-2",
+   "pubkey": "16b981d0b88cdf3ab9fa87190822fe4905b475efda3aec7c34abfa92c19320f4",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-3",
+   "pubkey": "044d0167ea7810519b870b745e059f3139ed92f1d92218d5f5db09bf23287c1a",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-4",
+   "pubkey": "e9b2fe981587efae6478f48ba1fa60cec6126d0e26dde72a0a24f640dcd783e5",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-5",
+   "pubkey": "d7467e2f477320c5460578e6f7dd01b6fa4b8a1025c51383cb54056d3e6cdf0b",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-6",
+   "pubkey": "359dbf604a3b3bedc20d5408b9d4770fbe52c922979b3178d02ab8d41c9c3a4e",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-7",
+   "pubkey": "18b82b91389917fd0761f8dc46fa9d561fd9b9862c58cc8cb93d5f82062efd74",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-8",
+   "pubkey": "d547d46ec766e802f89e0723b90562a9e0264679d3a7337346c2a07df9d1028b",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-9",
+   "pubkey": "6086e74f42e0b829b06d5d4e7a59193ec8be2ffe86b53a9316c32e1493022287",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-10",
+   "pubkey": "3e167a1bcd2e9545112f0427b724bbadf10e6c42219a26bb4956bd5706854ee3",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-11",
+   "pubkey": "afe985e432d16abaeed0fbd848db44520ef193bdde65d944b6a942a8f97ab11c",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-12",
+   "pubkey": "8d7918b0bd1f47d64f92a2b185a6e6c13741d001794ac56ce93cd1eb6cfddd78",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-mixed_order-13",
+   "pubkey": "5a36bb641b1c68a0866596e0ee2c42547539cb745d5042046cef02494cd14228",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v2-off_curve-0",
    "pubkey": "0200000000000000000000000000000000000000000000000000000000000000",
    "reason": "non-canonical"
   },
   {
-   "case": "short",
+   "case": "v2-small_order_canonical-0",
+   "pubkey": "0000000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-1",
+   "pubkey": "0000000000000000000000000000000000000000000000000000000000000080",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-2",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-3",
+   "pubkey": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-4",
+   "pubkey": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-5",
+   "pubkey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-6",
+   "pubkey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_canonical-7",
+   "pubkey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "small-order"
+  },
+  {
+   "case": "v2-small_order_noncanonical-0",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000080",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-small_order_noncanonical-1",
+   "pubkey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-small_order_noncanonical-2",
+   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-small_order_noncanonical-3",
+   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-small_order_noncanonical-4",
+   "pubkey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-0",
+   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-1",
+   "pubkey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-2",
+   "pubkey": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-3",
+   "pubkey": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-4",
+   "pubkey": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-5",
+   "pubkey": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-6",
+   "pubkey": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-7",
+   "pubkey": "f4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-8",
+   "pubkey": "f5ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-9",
+   "pubkey": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-10",
+   "pubkey": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-11",
+   "pubkey": "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-12",
+   "pubkey": "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-13",
+   "pubkey": "faffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-14",
+   "pubkey": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-15",
+   "pubkey": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-16",
+   "pubkey": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-17",
+   "pubkey": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v2-y_ge_p-18",
+   "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v1-honest",
+   "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b",
+   "reason": null
+  },
+  {
+   "case": "v1-all-zero",
+   "pubkey": "0000000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "v1-identity",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "v1-identity-sign-bit",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000080",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v1-y-equals-p",
+   "pubkey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v1-y-p-plus-1",
+   "pubkey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v1-minus-one",
+   "pubkey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+   "reason": "small-order"
+  },
+  {
+   "case": "v1-order-8-torsion",
+   "pubkey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+   "reason": "small-order"
+  },
+  {
+   "case": "v1-mixed-order",
+   "pubkey": "77c061890d4fbfa164fe73790450e7e3f61c04aed15409ca8e8982b6ae2cc84f",
+   "reason": "mixed-order"
+  },
+  {
+   "case": "v1-not-on-curve",
+   "pubkey": "0200000000000000000000000000000000000000000000000000000000000000",
+   "reason": "non-canonical"
+  },
+  {
+   "case": "v1-short",
    "pubkey": "00000000000000000000000000000000000000000000000000000000000000",
-   "reason": "bad-length"
+   "reason": "format"
   },
   {
-   "case": "long",
+   "case": "v1-long",
    "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b00",
-   "reason": "bad-length"
+   "reason": "format"
   },
   {
-   "case": "not-hex",
+   "case": "v1-not-hex",
    "pubkey": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-   "reason": "not-hex"
+   "reason": "format"
   },
   {
-   "case": "odd-hex",
+   "case": "v1-odd-hex",
    "pubkey": "000000000000000000000000000000000000000000000000000000000000000",
-   "reason": "not-hex"
+   "reason": "format"
+  },
+  {
+   "case": "w6-uppercase-honest",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666",
+   "reason": null
+  },
+  {
+   "case": "w6-mixedcase-honest",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666",
+   "reason": null
+  },
+  {
+   "case": "w6-uppercase-weak-identity",
+   "pubkey": "0100000000000000000000000000000000000000000000000000000000000000",
+   "reason": "small-order"
+  },
+  {
+   "case": "w6-63-char",
+   "pubkey": "586666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "w6-65-char",
+   "pubkey": "58666666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "w6-leading-space",
+   "pubkey": " 5866666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "w6-trailing-space",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666 ",
+   "reason": "format"
+  },
+  {
+   "case": "w6-embedded-space",
+   "pubkey": "58666666666666666666666666666666 66666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "w6-spaced-pairs",
+   "pubkey": "58 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66",
+   "reason": "format"
+  },
+  {
+   "case": "w6-tab",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666\t",
+   "reason": "format"
+  },
+  {
+   "case": "w6-newline",
+   "pubkey": "5866666666666666666666666666666666666666666666666666666666666666\n",
+   "reason": "format"
+  },
+  {
+   "case": "w6-empty",
+   "pubkey": "",
+   "reason": "format"
+  },
+  {
+   "case": "w6-128-char",
+   "pubkey": "58666666666666666666666666666666666666666666666666666666666666665866666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
+  },
+  {
+   "case": "w6-nonhex-g",
+   "pubkey": "g866666666666666666666666666666666666666666666666666666666666666",
+   "reason": "format"
   }
  ]
 }
