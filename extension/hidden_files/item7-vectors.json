@@ -1,0 +1,1188 @@
+{
+"source": "Cipher diff2.py; speccheck https://github.com/novifinancial/ed25519-speccheck/blob/65519336fda78a3d016e947df6d82848aca0c9da/cases.json",
+"vectors": [
+{
+"name": "honest",
+"class": "control",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "550db33d45639840c313392f9d5381b9c3f500f007cacde2554c827398034c6b791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": true,
+"cvred": true,
+"nacl": true
+},
+"precheck_pass": true
+},
+{
+"name": "honest wrong msg",
+"class": "control",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "78",
+"sig": "550db33d45639840c313392f9d5381b9c3f500f007cacde2554c827398034c6b791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "S+L (malleated)",
+"class": "S >= L (cf. speccheck 6)",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "550db33d45639840c313392f9d5381b9c3f500f007cacde2554c827398034c6b66ee93f85d38315ba96b567799d76ecee769000018587bf0e4128da00d143f1e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "S=0xff..",
+"class": "S >> L (cf. speccheck 7)",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "550db33d45639840c313392f9d5381b9c3f500f007cacde2554c827398034c6bffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[0] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "0000000000000000000000000000000000000000000000000000000000000000",
+"msg": "6369706865722d64696666",
+"sig": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[0] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "0000000000000000000000000000000000000000000000000000000000000000791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[1] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "0000000000000000000000000000000000000000000000000000000000000080",
+"msg": "6369706865722d64696666",
+"sig": "00000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[1] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "0000000000000000000000000000000000000000000000000000000000000080791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[2] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "0100000000000000000000000000000000000000000000000000000000000000",
+"msg": "6369706865722d64696666",
+"sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[2] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "0100000000000000000000000000000000000000000000000000000000000000791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[3] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+"msg": "6369706865722d64696666",
+"sig": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc050000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[3] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[4] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+"msg": "6369706865722d64696666",
+"sig": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc850000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[4] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[5] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+"msg": "6369706865722d64696666",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[5] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[6] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+"msg": "6369706865722d64696666",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[6] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_canonical[7] pk,R=pk,S=0",
+"class": "r6b small_order_canonical as A",
+"pk": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_canonical[7] as R, honest pk",
+"class": "r6b small_order_canonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_noncanonical[0] pk,R=pk,S=0",
+"class": "r6b small_order_noncanonical as A",
+"pk": "0100000000000000000000000000000000000000000000000000000000000080",
+"msg": "6369706865722d64696666",
+"sig": "01000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_noncanonical[0] as R, honest pk",
+"class": "r6b small_order_noncanonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "0100000000000000000000000000000000000000000000000000000000000080791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_noncanonical[1] pk,R=pk,S=0",
+"class": "r6b small_order_noncanonical as A",
+"pk": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"msg": "6369706865722d64696666",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_noncanonical[1] as R, honest pk",
+"class": "r6b small_order_noncanonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_noncanonical[2] pk,R=pk,S=0",
+"class": "r6b small_order_noncanonical as A",
+"pk": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_noncanonical[2] as R, honest pk",
+"class": "r6b small_order_noncanonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_noncanonical[3] pk,R=pk,S=0",
+"class": "r6b small_order_noncanonical as A",
+"pk": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_noncanonical[3] as R, honest pk",
+"class": "r6b small_order_noncanonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "small_order_noncanonical[4] pk,R=pk,S=0",
+"class": "r6b small_order_noncanonical as A",
+"pk": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "small_order_noncanonical[4] as R, honest pk",
+"class": "r6b small_order_noncanonical as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[0] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[0] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[1] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[1] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[2] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[2] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[3] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[3] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[4] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[4] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[5] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[5] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[6] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[6] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[7] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[7] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[8] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f5ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f5ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[8] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f5ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[9] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[9] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[10] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[10] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[11] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[11] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[12] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[12] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[13] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "faffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "faffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[13] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "faffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[14] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[14] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[15] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[15] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[16] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[16] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[17] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[17] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "y_ge_p[18] pk,R=pk,S=0",
+"class": "r6b y_ge_p as A",
+"pk": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+"msg": "6369706865722d64696666",
+"sig": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "y_ge_p[18] as R, honest pk",
+"class": "r6b y_ge_p as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "off_curve[0] pk,R=pk,S=0",
+"class": "r6b off_curve as A",
+"pk": "0200000000000000000000000000000000000000000000000000000000000000",
+"msg": "6369706865722d64696666",
+"sig": "02000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "off_curve[0] as R, honest pk",
+"class": "r6b off_curve as R",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d64696666",
+"sig": "0200000000000000000000000000000000000000000000000000000000000000791a9e9b43d51e03d3ce5ed4badd8fb9e769000018587bf0e4128da00d143f0e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "mixed-order A, h%8==0",
+"class": "mixed A, prime R (speccheck 4/5 family)",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "6369706865722d646966662334",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b14345d5f67b7354da3f26a4d9a620069f2106c46a8409b91cead3485c07feae00",
+"expect": {
+"cv": true,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "mixed-order A, h%8!=0",
+"class": "mixed A, prime R (speccheck 4/5 family)",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "6369706865722d646966662331",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b167137612c3be49425ebc4ef851bd7d5dadebfdc5f6547dcdc502f5629fbb1202",
+"expect": {
+"cv": false,
+"cvred": true,
+"nacl": true
+},
+"precheck_pass": false
+},
+{
+"name": "announce envelope by A' (cv-only)",
+"class": "mixed A on fed/envelope.py:72",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "6665642f30000000006acfc00e000a66656465726174696f6e1933a7a1d13686ff5720d4db1dd747e209edff7e35c18593fd435fe4e7f44c05",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b1816d33ecedf1a5d0f1ad8fc58cc499a0234c3655da78a1eb2dd06b8ca053ee0f",
+"expect": {
+"cv": true,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "announce envelope by A' (so-only)",
+"class": "mixed A on fed/envelope.py:72",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "6665642f30000000006acfc011000a66656465726174696f6e1933a7a1d13686ff5720d4db1dd747e209edff7e35c18593fd435fe4e7f44c05",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b1b33c5bb763be846ae7d06c75ea971acc68f41270ad9b744f637cff2005485e0b",
+"expect": {
+"cv": false,
+"cvred": true,
+"nacl": true
+},
+"precheck_pass": false
+},
+{
+"name": "dir-sync delta by A' (cv-only)",
+"class": "mixed A on federation.py:331",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "7b226361706162696c6974696573223a5b5d2c2267656e65736973223a66616c73652c226e616d65223a226d7836222c226e6574776f726b223a2263796265726e6574222c226e6f64655f707562223a2264303736393839313838323165323865653630323434646564323637396237366630643961646335366461363239353133303136666632623963363836613662222c226e6f64655f75726c223a22222c22726574697265223a66616c73652c22736571223a312c2276657273696f6e223a22302e312e30227d",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b183cc6bb95d8af16e6149259c8b9da9a91c03f0b8ede64ec4180cdfd1aa71b600",
+"expect": {
+"cv": true,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "dir-sync delta by A' (so-only)",
+"class": "mixed A on federation.py:331",
+"pk": "d07698918821e28ee60244ded2679b76f0d9adc56da629513016ff2b9c686a6b",
+"msg": "7b226361706162696c6974696573223a5b5d2c2267656e65736973223a66616c73652c226e616d65223a226d783333222c226e6574776f726b223a2263796265726e6574222c226e6f64655f707562223a2264303736393839313838323165323865653630323434646564323637396237366630643961646335366461363239353133303136666632623963363836613662222c226e6f64655f75726c223a22222c22726574697265223a66616c73652c22736571223a312c2276657273696f6e223a22302e312e30227d",
+"sig": "b862409fb5c4c4123df2abf7462b88f041ad36dd6864ce872fd5472be363c5b19e361721c18da3da17d0ad3b1ba4f07f5ebeda855d6303f6c680f45ecf7ae80f",
+"expect": {
+"cv": false,
+"cvred": true,
+"nacl": true
+},
+"precheck_pass": false
+},
+{
+"name": "torsion R=rB+T8, prime A, h%8!=0",
+"class": "prime A, mixed R (speccheck 1/4 family, R side)",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d646966662f746f7273696f6e522f30",
+"sig": "528b312e93bc0c3705c89c20dcd85600e229ad3d6872b1c656d3873fbe62e6e27e3c68ffe6aa134c3641fc172b66432548dba268cb2e5970bcaae883dc48e002",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "torsion R=rB+T8, prime A, h%8==0",
+"class": "prime A, mixed R (speccheck 1/4 family, R side)",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d646966662f746f7273696f6e522f33",
+"sig": "528b312e93bc0c3705c89c20dcd85600e229ad3d6872b1c656d3873fbe62e6e2775f187a665c1cebd0be6b27e442ac3434c32b26beabc4de49178028a11d5106",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "torsion R=rB+T4, prime A",
+"class": "prime A, mixed R (order-4 torsion)",
+"pk": "dceaba3264ee6795e61c44eb5faba773fbaf23612a6c4bdbad54e33a32c1b1de",
+"msg": "6369706865722d646966662f746f7273696f6e5234",
+"sig": "41484b65289d937d0b38db193f65bcf3aa3f81193d6cf9c75679b215a986e30a6bca9a4937e8c4e70fe9705e9510e32a0618695c7edc4259d5a9b12af4d53600",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "speccheck[0]",
+"class": "Chalkias 0: S=0, small A, small R",
+"pk": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+"msg": "8c93255d71dcab10e8f379c26200f3c7bd5f09d9bc3068d3ef4edeb4853022b6",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a0000000000000000000000000000000000000000000000000000000000000000",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[1]",
+"class": "Chalkias 1: small A, mixed R",
+"pk": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+"msg": "9bd9f44f4dcc75bd531b56b2cd280b0bb38fc1cd6d1230e14861d861de092e79",
+"sig": "f7badec5b8abeaf699583992219b7b223f1df3fbbea919844e3f7c554a43dd43a5bb704786be79fc476f91d3f3f89b03984d8068dcf1bb7dfc6637b45450ac04",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[2]",
+"class": "Chalkias 2: mixed A, small R",
+"pk": "f7badec5b8abeaf699583992219b7b223f1df3fbbea919844e3f7c554a43dd43",
+"msg": "aebf3f2601a0c8c5d39cc7d8911642f740b78168218da8471772b35f9d35b9ab",
+"sig": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa8c4bd45aecaca5b24fb97bc10ac27ac8751a7dfe1baff8b953ec9f5833ca260e",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[3]",
+"class": "Chalkias 3: mixed A, mixed R (passes unless full-order checked)",
+"pk": "cdb267ce40c5cd45306fa5d2f29731459387dbf9eb933b7bd5aed9a765b88d4d",
+"msg": "9bd9f44f4dcc75bd531b56b2cd280b0bb38fc1cd6d1230e14861d861de092e79",
+"sig": "9046a64750444938de19f227bb80485e92b83fdb4b6506c160484c016cc1852f87909e14428a7a1d62e9f22f3d3ad7802db02eb2e688b6c52fcd6648a98bd009",
+"expect": {
+"cv": false,
+"cvred": true,
+"nacl": true
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[4]",
+"class": "Chalkias 4: mixed A, mixed R (cofactored only)",
+"pk": "cdb267ce40c5cd45306fa5d2f29731459387dbf9eb933b7bd5aed9a765b88d4d",
+"msg": "e47d62c63f830dc7a6851a0b1f33ae4bb2f507fb6cffec4011eaccd55b53f56c",
+"sig": "160a1cb0dc9c0258cd0a7d23e94d8fa878bcb1925f2c64246b2dee1796bed5125ec6bc982a269b723e0668e540911a9a6a58921d6925e434ab10aa7940551a09",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[5]",
+"class": "Chalkias 5: mixed A, L-order R, pre-reduced 8h",
+"pk": "cdb267ce40c5cd45306fa5d2f29731459387dbf9eb933b7bd5aed9a765b88d4d",
+"msg": "e47d62c63f830dc7a6851a0b1f33ae4bb2f507fb6cffec4011eaccd55b53f56c",
+"sig": "21122a84e0b5fca4052f5b1235c80a537878b38f3142356b2c2384ebad4668b7e40bc836dac0f71076f9abe3a53f9c03c1ceeeddb658d0030494ace586687405",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[6]",
+"class": "Chalkias 6: S > L",
+"pk": "442aad9f089ad9e14647b1ef9099a1ff4798d78589e66f28eca69c11f582a623",
+"msg": "85e241a07d148b41e47d62c63f830dc7a6851a0b1f33ae4bb2f507fb6cffec40",
+"sig": "e96f66be976d82e60150baecff9906684aebb1ef181f67a7189ac78ea23b6c0e547f7690a0e2ddcd04d87dbc3490dc19b3b3052f7ff0538cb68afb369ba3a514",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "speccheck[7]",
+"class": "Chalkias 7: S >> L",
+"pk": "442aad9f089ad9e14647b1ef9099a1ff4798d78589e66f28eca69c11f582a623",
+"msg": "85e241a07d148b41e47d62c63f830dc7a6851a0b1f33ae4bb2f507fb6cffec40",
+"sig": "8ce5b96c8f26d0ab6c47958c9e68b937104cd36e13c33566acd2fe8d38aa19427e71f98a473474f2f13f06f97c20d58cc3f54b8bd0d272f42b695dd7e89a8c22",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": true
+},
+{
+"name": "speccheck[8]",
+"class": "Chalkias 8: mixed A, non-canonical small R, reduced for hash",
+"pk": "f7badec5b8abeaf699583992219b7b223f1df3fbbea919844e3f7c554a43dd43",
+"msg": "9bedc267423725d473888631ebf45988bad3db83851ee85c85e241a07d148b41",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff03be9678ac102edcd92b0210bb34d7428d12ffc5df5f37e359941266a4e35f0f",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[9]",
+"class": "Chalkias 9: mixed A, non-canonical small R, not reduced for hash",
+"pk": "f7badec5b8abeaf699583992219b7b223f1df3fbbea919844e3f7c554a43dd43",
+"msg": "9bedc267423725d473888631ebf45988bad3db83851ee85c85e241a07d148b41",
+"sig": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffca8c5b64cd208982aa38d4936621a4775aa233aa0505711d8fdcfdaa943d4908",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[10]",
+"class": "Chalkias 10: non-canonical small A, reduced for hash",
+"pk": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"msg": "e96b7021eb39c1a163b6da4e3093dcd3f21387da4cc4572be588fafae23c155b",
+"sig": "a9d55260f765261eb9b84e106f665e00b867287a761990d7135963ee0a7d59dca5bb704786be79fc476f91d3f3f89b03984d8068dcf1bb7dfc6637b45450ac04",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+},
+{
+"name": "speccheck[11]",
+"class": "Chalkias 11: non-canonical small A, not reduced for hash",
+"pk": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+"msg": "39a591f5321bbe07fd5a23dc2f39d025d74526615746727ceefd6e82ae65c06f",
+"sig": "a9d55260f765261eb9b84e106f665e00b867287a761990d7135963ee0a7d59dca5bb704786be79fc476f91d3f3f89b03984d8068dcf1bb7dfc6637b45450ac04",
+"expect": {
+"cv": false,
+"cvred": false,
+"nacl": false
+},
+"precheck_pass": false
+}
+]
+}
