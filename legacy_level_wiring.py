@@ -78,6 +78,7 @@ import time
 
 import head_level as hl
 import legacy_witness as lw
+from fed import ed25519 as _ed
 
 MAX_LEVEL_BLOB = max(len(t) for t in hl.TAGS.values()) + hl.BODY.size
 PROOF_ROOT = "root"
@@ -194,8 +195,42 @@ class DuplicateWitness(lw.WitnessRefused):
     """Two signatures entries for one (lowercased) witness."""
 
 
+class WeakWitnessSig(lw.WitnessRefused):
+    """BW-PV2: a signature or witness key that no strict verifier accepts:
+    S >= L, R or A non-canonical, R or A small-order. Refused before the
+    pre-verify charge, with 0 verifies (decode + 3 doublings, no scalar mult)."""
+
+
+def witness_dedupe_key(w: str, sig: str):
+    """BW-PV2: the one place the per-witness dedupe key is chosen. Keyed on
+    the witness key ONLY (chair-confirmed): a second, distinct signature
+    from a witness already in the request is refused, not verified."""
+    return w
+
+
+def strict_encoding_reason(w: str, sig: str) -> str | None:
+    """BW-PV2 cheap strictness precheck, reusing fed.ed25519's own strict
+    helpers (no re-implementation). None when (A, R, S) can reach a verify."""
+    if lw.HEX128_RE.fullmatch(sig) is None:     # same shape checkvalid_ok demands
+        return "sig must be 128 lowercase hex chars"
+    raw = bytes.fromhex(sig)
+    if int.from_bytes(raw[32:], "little") >= _ed._L:
+        return "S >= L"
+    for name, enc in (("R", raw[:32]), ("A", bytes.fromhex(w))):
+        try:
+            P = _ed._decodepoint_strict(enc)
+        except ValueError:
+            return f"{name} non-canonical"
+        if _ed._is_small_order(P):
+            return f"{name} small-order"
+    return None
+
+
 def precheck_signatures(signed, wset) -> None:
-    """Typed refusals before lw.verify_head runs: 0 verifies, 0 key checks."""
+    """Typed refusals before lw.verify_head runs: 0 verifies, 0 key checks.
+    BW-PV2 order per entry: shape, witness-set membership, key-only dedupe,
+    strict encoding of (A, R, S). The route charges the per-source verify
+    budget only after this returns."""
     if not isinstance(signed, dict) or not isinstance(signed.get("head"), dict) \
             or not isinstance(signed.get("signatures"), list):
         raise lw.WitnessRefused("malformed head")
@@ -216,9 +251,14 @@ def precheck_signatures(signed, wset) -> None:
             raise MalformedWitnessSig("witness pub must be 64 hex chars")
         if w not in pubs:
             raise UnpinnedWitness("signature from a witness this node does not pin")
+        pub = w
+        w = witness_dedupe_key(pub, e["sig"])     # BW-PV2: key-only (chair); swap point
         if w in seen:
             raise DuplicateWitness("at most one signature per witness")
         seen.add(w)
+        why = strict_encoding_reason(pub, e["sig"])
+        if why is not None:
+            raise WeakWitnessSig(f"witness signature refused before verify: {why}")
 
 
 class VerifiedLegacyHead:
