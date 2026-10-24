@@ -15,6 +15,7 @@ TESTS=(
   "test_ed25519_strict.py"
   "test_r7_item7_hmodl.py"
   "test_r7_item7_hq_gates.py"
+  "test_r7_item7_noncanon_decode.py"
   "resolver/test_answer_aaaa.py"
   "resolver/test_answer_mirror.py"
   "resolver/test_client.py"
