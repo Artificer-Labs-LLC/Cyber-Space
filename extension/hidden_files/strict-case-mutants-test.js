@@ -1,10 +1,10 @@
 // Strict-case mutant harness (ART-37 a391b7df applied to the extension's
-// name-binding read gate; PROVISIONAL). Each mutant is a textual edit of
+// name-binding read gate, ruled 52f465cd; refusal code non-canonical-key). Each mutant is a textual edit of
 // resolver.js loaded into a fresh vm; the edit's target must be found exactly
 // once (a mutant that does not apply fails the run, never a silent no-op).
 // Rows: every weak-key-vectors.json row via fetchedKeyReason, plus a case-twin
 // via verifyNameBinding with a real WebCrypto signature (lowercase verifies,
-// uppercase / mixed case refused as format with 0 WebCrypto calls).
+// uppercase / mixed case refused as non-canonical-key with 0 WebCrypto calls).
 // The unmutated resolver must pass every row; every mutant must fail >= 1 row.
 // Usage: node hidden_files/strict-case-mutants-test.js
 const fs = require("fs"), path = require("path"), vm = require("vm");
@@ -13,11 +13,13 @@ const SRC = fs.readFileSync(path.join(EXT, "resolver.js"), "utf8");
 const V = JSON.parse(fs.readFileSync(path.join(__dirname, "weak-key-vectors.json"), "utf8")).vectors;
 const GATE = 'const k = typeof pubHex === "string" ? pubHex : "";';
 const CALL = "const keyReason = fetchedKeyReason(binding.node_pubkey);";
-const RE = 'if (!/^[0-9a-f]{64}$/.test(k)) return "format";';
+const RE = 'if (!/^[0-9a-f]{64}$/.test(k)) return "non-canonical-key";';
 const MUTANTS = {
   "M-FKR-LOWER": [GATE, 'const k = typeof pubHex === "string" ? pubHex.toLowerCase() : "";'],
   "M-VNB-LOWER": [CALL, "const keyReason = fetchedKeyReason(pub);"],
-  "M-FKR-RE-CI": [RE, 'if (!/^[0-9a-f]{64}$/i.test(k)) return "format";'],
+  "M-FKR-RE-CI": [RE, 'if (!/^[0-9a-f]{64}$/i.test(k)) return "non-canonical-key";'],
+  "M-CODE-FORMAT": [RE, 'if (!/^[0-9a-f]{64}$/.test(k)) return "format";'],
+  "M-VNB-CODE": ['if (keyReason === "non-canonical-key") throw', 'if (keyReason === "format") throw'],
   "M-FKR-NORMALIZE": [GATE, 'const k = typeof pubHex === "string" ? pubHex.trim().toLowerCase() : "";'],
 };
 function load(src) {
@@ -37,7 +39,7 @@ async function rows(ctx, twin) {
     const spy = { importKey: async (...a) => { calls.n++; return crypto.subtle.importKey(...a); },
       verify: async (...a) => { calls.n++; return crypto.subtle.verify(...a); } };
     const m = await ctx.verifyNameBinding({ ...twin.b, node_pubkey: k }, "casetwin", now, spy).then(() => "ACCEPTED", (e) => e.message);
-    if (!(/weak-key: format/.test(m) && calls.n === 0)) { fail++; failed.push(`${lbl}(${m.slice(0, 40)})`); }
+    if (!(/weak-key: non-canonical-key/.test(m) && calls.n === 0)) { fail++; failed.push(`${lbl}(${m.slice(0, 40)})`); }
   }
   return { fail, failed };
 }

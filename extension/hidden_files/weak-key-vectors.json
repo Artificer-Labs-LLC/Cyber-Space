@@ -1,5 +1,5 @@
 {
- "_source": "PROVISIONAL strict-case (Villhaze ART-37 a391b7df, applied to the name-binding read gate): weak_key.admission_reason(RAW key) at db15a900d06c9c54a4554a1d673cd72f34f9c609 (oracle/r7-nodekey-admission db15a900; weak_key.py == 32d8ecf4) -- no lowercasing, no trim. Supersedes the e9ba20f oracle admission_reason(key.lower()). NOT the node read seat: core._fetched_key_refused / _stored_key_weak still lowercase at 32d8ecf4 and db15a900. Provisional until O.R.A.C.L.E.'s node-key case-fix SHA lands. Generator: /workspace/controller-strict-case/gen_weak_key_vectors.py",
+ "_source": "Strict-case (Villhaze ART-37 a391b7df; name-key read seats ruled 52f465cd 2a; refusal code non-canonical-key per 52f465cd 2b, renamed from format): weak_key.admission_reason(RAW key) at db15a900d06c9c54a4554a1d673cd72f34f9c609 (oracle/r7-nodekey-admission db15a900; weak_key.py == 32d8ecf4) -- no lowercasing, no trim. Supersedes the e9ba20f oracle admission_reason(key.lower()). NOT the node read seat: core._fetched_key_refused / _stored_key_weak still lowercase at 32d8ecf4 and db15a900. Provisional until O.R.A.C.L.E.'s node-key case-fix SHA lands. Generator: /workspace/controller-strict-case/gen_weak_key_vectors.py Reason non-canonical-key = weak_key.admission_reason \"format\" (strict ^[0-9a-f]{64}$ guard on the RAW key). NOTE: node admission_reason itself still returns \"format\"; the node car renames/maps it.",
  "vectors": [
   {
    "case": "v2-honest_control-0",
@@ -324,22 +324,22 @@
   {
    "case": "v1-short",
    "pubkey": "00000000000000000000000000000000000000000000000000000000000000",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "v1-long",
    "pubkey": "06277ec272621e47fba846ebc0ebe2ce555db6c71c65d666cdf67828eef5b93b00",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "v1-not-hex",
    "pubkey": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "v1-odd-hex",
    "pubkey": "000000000000000000000000000000000000000000000000000000000000000",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-uppercase-honest",
@@ -362,82 +362,82 @@
   {
    "case": "w6-63-char",
    "pubkey": "586666666666666666666666666666666666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-65-char",
    "pubkey": "58666666666666666666666666666666666666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-leading-space",
    "pubkey": " 5866666666666666666666666666666666666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-trailing-space",
    "pubkey": "5866666666666666666666666666666666666666666666666666666666666666 ",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-embedded-space",
    "pubkey": "58666666666666666666666666666666 66666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-spaced-pairs",
    "pubkey": "58 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66 66",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-tab",
    "pubkey": "5866666666666666666666666666666666666666666666666666666666666666\t",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-newline",
    "pubkey": "5866666666666666666666666666666666666666666666666666666666666666\n",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-empty",
    "pubkey": "",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-128-char",
    "pubkey": "58666666666666666666666666666666666666666666666666666666666666665866666666666666666666666666666666666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "w6-nonhex-g",
    "pubkey": "g866666666666666666666666666666666666666666666666666666666666666",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-upper-honest-1",
    "pubkey": "C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-mixedcase-honest-1",
    "pubkey": "c9a3f86AaE465F0E56513864510F3997561Fa2c9e85Ea21Dc2292309f3cD6022",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-firstchar-upper-honest-1",
    "pubkey": "C9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-upper-honest-6",
    "pubkey": "8A468F1C43C09E50968DB16FC67C234BC05B8592B05DDE57C2AA751E74724B98",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-mixedcase-honest-6",
    "pubkey": "8A468F1C43c09E50968Db16Fc67C234Bc05B8592b05DdE57c2aA751E74724B98",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-twin-lower-honest-1",
@@ -447,7 +447,7 @@
   {
    "case": "sc-twin-upper-honest-1",
    "pubkey": "C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-twin-lower-honest-6",
@@ -457,22 +457,22 @@
   {
    "case": "sc-twin-upper-honest-6",
    "pubkey": "8A468F1C43C09E50968DB16FC67C234BC05B8592B05DDE57C2AA751E74724B98",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-upper-mixed-order-0",
    "pubkey": "16030E0FF1D6226B8AD6FF918B288668C1C3E5E45269487F85479BB4A9FB11AF",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-upper-small-order-3",
    "pubkey": "26E8958FC2B227B045C3F489F2EF98F0D5DFAC05D3C63339B13802886D53FC05",
-   "reason": "format"
+   "reason": "non-canonical-key"
   },
   {
    "case": "sc-upper-leading-space-honest-1",
    "pubkey": " C9A3F86AAE465F0E56513864510F3997561FA2C9E85EA21DC2292309F3CD6022",
-   "reason": "format"
+   "reason": "non-canonical-key"
   }
  ]
 }

@@ -969,14 +969,15 @@ function weakKeyReason(pubHex) {
   return null;
 }
 
-// W6 read-seat guard, strict case (ART-37 a391b7df applied to this gate;
-// PROVISIONAL until O.R.A.C.L.E.'s node-key case fix lands): the RAW key,
-// never lowercased or trimmed, must be exactly 64 lowercase hex, then
-// weakKeyReason. "format" covers uppercase / mixed case, whitespace, wrong
-// length and non-hex. (Was lowercase-then-check, e9ba20f.)
+// W6 read-seat guard, strict case (ART-37 a391b7df; name-key read seats ruled
+// in 52f465cd): the RAW key, never lowercased or trimmed, must be exactly 64
+// lowercase hex, then weakKeyReason. The single refusal code at every seat is
+// "non-canonical-key" (52f465cd 2b; renamed from "format"): it covers
+// uppercase / mixed case, whitespace, wrong length and non-hex.
+// (Was lowercase-then-check, e9ba20f.)
 function fetchedKeyReason(pubHex) {
   const k = typeof pubHex === "string" ? pubHex : "";
-  if (!/^[0-9a-f]{64}$/.test(k)) return "format";
+  if (!/^[0-9a-f]{64}$/.test(k)) return "non-canonical-key";
   return weakKeyReason(k);
 }
 
@@ -1001,9 +1002,9 @@ async function verifyNameBinding(binding, label, nowMs = Date.now(), subtle) {
   if (name !== String(label).toLowerCase())
     throw new Error(`${BINDING_REFUSED}binding is for ${truncateEcho(name, 64)}, not ${truncateEcho(label, 64)}`);
   // Strict case: the gate sees the RAW fetched key, so an uppercase or
-  // mixed-case spelling is refused as format; past it, pub === node_pubkey.
+  // mixed-case spelling is refused as non-canonical-key; past it, pub === node_pubkey.
   const keyReason = fetchedKeyReason(binding.node_pubkey);
-  if (keyReason === "format") throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 hex chars (weak-key: format)`);
+  if (keyReason === "non-canonical-key") throw new Error(`${BINDING_REFUSED}node_pubkey is not 64 lowercase hex chars (weak-key: non-canonical-key)`);
   if (!/^[0-9a-f]{128}$/.test(sig)) throw new Error(`${BINDING_REFUSED}signature is not 128 hex chars`);
   const issued = parseClaimTime(binding.issued_at, "issued_at");
   const expires = parseClaimTime(binding.expires_at, "expires_at");
