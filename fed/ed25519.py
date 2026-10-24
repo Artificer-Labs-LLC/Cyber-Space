@@ -72,9 +72,26 @@ def _bit(h: bytes, i: int) -> int:
     return (h[i // 8] >> (i % 8)) & 1
 
 
+def _check_seed(sk: bytes) -> bytes:
+    # Direct library seat gate, twin of envelope's argument gates
+    # (5c5f16c): a non-bytes or non-32-byte seed escaped as TypeError
+    # from hashlib/concat — or worse, silently derived/signed, since
+    # _H hashes any length (an empty or 31-byte seed produced a key
+    # no 32-byte-seed holder can reproduce). Refuse as ValueError.
+    if not isinstance(sk, bytes) or len(sk) != _B // 8:
+        raise ValueError("secret seed must be 32 bytes")
+    return sk
+
+
+def _check_key(name: str, value: bytes) -> bytes:
+    if not isinstance(value, bytes) or len(value) != _B // 8:
+        raise ValueError(f"{name} must be 32 bytes")
+    return value
+
+
 def publickey(sk: bytes) -> bytes:
     """Derive the 32-byte public key from a 32-byte secret seed."""
-    h = _H(sk)
+    h = _H(_check_seed(sk))
     a = 2 ** (_B - 2) + sum(2**i * _bit(h, i) for i in range(3, _B - 2))
     return _encodepoint(_scalarmult(_BPOINT, a))
 
@@ -93,6 +110,10 @@ def _decodepoint(s: bytes):
 
 def sign(m: bytes, sk: bytes, pk: bytes) -> bytes:
     """Sign message bytes; returns the 64-byte signature."""
+    if not isinstance(m, bytes):
+        raise ValueError("message must be bytes")
+    _check_seed(sk)
+    _check_key("public key", pk)
     h = _H(sk)
     a = 2 ** (_B - 2) + sum(2**i * _bit(h, i) for i in range(3, _B - 2))
     r = int.from_bytes(_H(h[_B // 8:] + m), "little")
@@ -113,3 +134,4 @@ def checkvalid(s: bytes, m: bytes, pk: bytes) -> bool:
         return _scalarmult(_BPOINT, S) == _edwards(R, _scalarmult(A, h))
     except Exception:
         return False
+
