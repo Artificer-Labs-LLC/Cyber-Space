@@ -122,16 +122,62 @@ def sign(m: bytes, sk: bytes, pk: bytes) -> bytes:
     return _encodepoint(R) + _encodeint(S)
 
 
+_IDENT = (0, 1)
+
+
+def _decodepoint_strict(s: bytes):
+    """Canonical-only point decode (RFC 8032 5.1.3, strict): the encoded y
+    must be < p, x = 0 with the sign bit set is refused, the point must be
+    on the curve, and re-encoding must reproduce the input bytes exactly."""
+    if len(s) != _B // 8:
+        raise ValueError("bad point length")
+    y = int.from_bytes(s, "little") & ((1 << 255) - 1)
+    if y >= _Q:
+        raise ValueError("non-canonical y")
+    sign = s[31] >> 7
+    x = _xrecover(y) % _Q
+    if x == 0 and sign:
+        raise ValueError("non-canonical x sign")
+    if x & 1 != sign:
+        x = (_Q - x) % _Q
+    P = (x, y)
+    if (-x * x + y * y - 1 - _D * x * x * y * y) % _Q != 0:
+        raise ValueError("point not on curve")
+    if _encodepoint(P) != bytes(s):
+        raise ValueError("non-canonical encoding")
+    return P
+
+
+def _is_small_order(P) -> bool:
+    """True when 8*P is the identity (P lies in the 8-torsion subgroup)."""
+    Q = P
+    for _ in range(3):
+        Q = _edwards(Q, Q)
+    return Q == _IDENT
+
+
 def checkvalid(s: bytes, m: bytes, pk: bytes) -> bool:
-    """Verify a signature. Returns False instead of raising on any failure."""
+    """Verify a signature. Returns False instead of raising on any failure.
+
+    Strict, each step failing closed, in order:
+      1. pk and R must be canonical encodings (y < p, decode/re-encode
+         round-trips byte-for-byte);
+      2. S < L (RFC 8032 5.1.7);
+      3. neither A nor R may be small-order (8*P == identity);
+      4. the cofactorless verification equation, unchanged.
+    """
     try:
         if len(s) != _B // 4 or len(pk) != _B // 8:
             return False
-        R = _decodepoint(s[:_B // 8])
-        A = _decodepoint(pk)
+        R = _decodepoint_strict(s[:_B // 8])
+        A = _decodepoint_strict(pk)
         S = int.from_bytes(s[_B // 8:_B // 4], "little")
+        if S >= _L:
+            return False
+        if _is_small_order(A) or _is_small_order(R):
+            return False
         h = int.from_bytes(_H(_encodepoint(R) + pk + m), "little")
-        return _scalarmult(_BPOINT, S) == _edwards(R, _scalarmult(A, h))
+        return _scalarmult(_BPOINT, S) == _edwards(R, _scalarmult(A, h % _L))
     except Exception:
         return False
 
